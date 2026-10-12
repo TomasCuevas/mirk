@@ -22,6 +22,12 @@ Thumbs.db
 .env
 .env.local
 
+# --- Native pdfium library ----------------------------------------------
+# `oct-scan` counts pages with pdfium (see spike/parser/FINDINGS.md for the measured
+# comparison). The library is ~8 MB of platform-specific binary, so it is fetched
+# rather than committed:  scripts/fetch-pdfium.sh
+vendor/pdfium/
+
 # --- R12 spike artifacts -------------------------------------------------
 # The spike harness sources (runner.mjs, server.mjs, public/*.html|*.js)
 # and its measured results (FINDINGS.md, results.json, results.raw.jsonl)
@@ -33,3 +39,13 @@ Thumbs.db
 spike/r12/vendor/
 spike/r12/public/pdf/
 spike/r12/logs/
+
+# --- T6 parser spike artifacts -------------------------------------------
+# The harness sources (main.rs, run.py, Cargo.toml), the measured results
+# (results.json, FINDINGS.md) and the pdfium licence notice ARE committed as
+# evidence. The following are regenerable or heavy:
+#
+#   vendor/   ~8 MB libpdfium.so, restored from bblanchon/pdfium-binaries
+#   target/   cargo build output
+spike/parser/vendor/
+spike/parser/target/

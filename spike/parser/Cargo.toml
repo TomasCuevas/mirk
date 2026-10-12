@@ -1,0 +1,15 @@
+[package]
+name = "parser-spike"
+version = "0.0.1"
+edition = "2021"
+publish = false
+description = "Throwaway harness comparing pdfium and lopdf on real documents (T6 parser decision)"
+
+# Deliberately NOT a workspace member: this is a measurement rig, not product code. It must not be
+# able to affect the workspace's dependency graph, and it will be deleted once the decision is made.
+# The empty `[workspace]` table is what keeps cargo from adopting it into the parent workspace.
+[workspace]
+
+[dependencies]
+lopdf = "0.36"
+pdfium-render = "0.8"
