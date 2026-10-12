@@ -419,6 +419,7 @@ layer, range streaming), content-bound render cost, and the unproven `willReadFr
 | T0 | **Done** | `66f299a` | Independent repository, default branch `main`, GPL-3.0, README, `.gitignore`. PDF symlinks and vendored pdf.js correctly excluded (`git status --ignored` confirmed). |
 | — | Phase 1 started | — | Working branch `feat/phase-1-core` created from `main`. |
 | T4 | **Done** | `b34ec4f` | Cargo workspace, 4 crates, 1391 lines of Rust across 39 tracked files. `cargo build --workspace` and 25 tests pass, clippy `--all-targets -D warnings` clean, frontend builds, app launches and exits with no process left. See "Phase 1 — what T4 established" below. |
+| T11 | **Done** | `2b8e9da` | Portable POSIX file identity. Reusable `#[cfg(unix)]` module so macOS inherits it; `st_dev`/`st_ino` primary; streamed SHA-256 fallback when either id is zero. 32 tests pass (was 25), clippy clean. Hard links proven to share an identity, and the stub test was replaced rather than deleted. |
 
 ## Phase 1 — what T4 established
 
@@ -452,10 +453,14 @@ Three things landed as enforced invariants rather than comments:
 **Deferred, not skipped**: `oct-platform` returns empty from `progress_providers()` until T9, and
 `oct-store` is a documented placeholder until T5. Both say so in code.
 
-**Process note**: T4 was implemented inline rather than delegated. Subagent delegation broke
-mid-session — creating the repository changed the session's Git identity, and the delegation layer
-now refuses with *"Writer session Git authority changed before admission"* while
-`session_worktree_register` reports *"Session Git identity changed; cannot register a worktree"*.
-A Pi session restart is required to restore delegation. Until then, remaining Phase 1 tasks are
-implemented inline, which is workable but far more context-expensive, so they should be kept small
-and committed one work unit at a time.
+**Process note — RESOLVED**: T4 was implemented inline because subagent delegation broke
+mid-session: creating the repository changed the session's Git identity, and the delegation layer
+rejected writes with *"Writer session Git authority changed before admission"* while
+`session_worktree_register` reported *"Session Git identity changed; cannot register a worktree"*.
+Restarting Pi restored it, and T11 was then delivered by a delegated worker and independently
+verified by the parent. The lesson is cheap and worth keeping: **creating or moving a repository
+mid-session invalidates the session's Git binding, and only a restart repairs it.**
+
+**Delegation is the default again.** Phase 1 tasks go to a worker with a tight brief and an
+explicit list of allowed edit surfaces, and the parent verifies the result before committing
+rather than trusting the report.
