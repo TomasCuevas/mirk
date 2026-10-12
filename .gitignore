@@ -1,0 +1,35 @@
+# Rust build output
+target/
+**/target/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Tauri generated output
+gen/
+**/gen/schemas/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Local environment
+.env
+.env.local
+
+# --- R12 spike artifacts -------------------------------------------------
+# The spike harness sources (runner.mjs, server.mjs, public/*.html|*.js)
+# and its measured results (FINDINGS.md, results.json, results.raw.jsonl)
+# ARE committed as evidence. The following are regenerable or user-specific:
+#
+#   vendor/      ~44 MB of pdf.js, restored with `npm pack pdfjs-dist`
+#   public/pdf/  symlinks into the maintainer's personal Documents tree
+#   logs/        browser profiles and per-run scratch
+spike/r12/vendor/
+spike/r12/public/pdf/
+spike/r12/logs/

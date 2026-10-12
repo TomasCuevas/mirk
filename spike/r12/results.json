@@ -1,0 +1,2255 @@
+{
+  "spike": "r12",
+  "question": "Is pdf.js rendering performance on WebKitGTK 2.52.6 good enough to be the rendering foundation of a Tauri PDF reader on Linux? (Chrome 155 as reference, not decision-maker)",
+  "generatedAt": "2026-10-12T13:09:30.066Z",
+  "machine": {
+    "os": "Ubuntu 24.04.5 LTS, GNOME 46, Wayland session with XWayland",
+    "cpuCores": 12,
+    "memoryNote": "14 GB total",
+    "session": {
+      "DISPLAY": ":0",
+      "WAYLAND_DISPLAY": "wayland-0",
+      "XDG_SESSION_TYPE": "wayland"
+    }
+  },
+  "engines": {
+    "webkitgtk": {
+      "engine": "WebKitGTK 4.1 (libwebkit2gtk-4.1-0) 2.52.6-0ubuntu0.24.04.1",
+      "harness": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser"
+    },
+    "chrome": {
+      "engine": "Google Chrome 155.0.8059.39",
+      "harness": "/usr/bin/google-chrome"
+    }
+  },
+  "primaryPdf": {
+    "servedAs": "learning-patterns.pdf",
+    "realPath": "/home/tomas-cuevas/Documents/Mega/Libros/Programación/Learning Patterns - Lydia Hallie and Addy Osmani.pdf",
+    "pages": 436,
+    "bytes": 142801554,
+    "note": "symlinked into public/pdf, never copied; range-served over http://127.0.0.1"
+  },
+  "secondaryPdf": {
+    "servedAs": "cracking-the-coding-interview.pdf",
+    "realPath": "/home/tomas-cuevas/Documents/Mega/Libros/Programación/Cracking the Coding Interview.pdf",
+    "pages": 708,
+    "bytes": 64112405
+  },
+  "pdfjs": {
+    "version": "6.4.299",
+    "dist": "npm pdfjs-dist",
+    "vendoredAt": "vendor/pdfjs-dist",
+    "builds": {
+      "modern": "build/pdf.mjs",
+      "legacy": "legacy/build/pdf.mjs"
+    }
+  },
+  "method": {
+    "transport": "HTTP on 127.0.0.1, never file://",
+    "selfMeasuringPage": "public/index.html + public/measure.js POST /result",
+    "sequential": "engines run one at a time, browser killed after every run",
+    "pdfDelivery": "the page fetches the whole PDF into an ArrayBuffer and passes it to getDocument({data}), so render cost is isolated from network/streaming behaviour; fetchMs is reported separately because it is part of first-page latency",
+    "renderSize": {
+      "targetWidthCssPx": 900,
+      "scale": 1.4706,
+      "page1BaseViewport": {
+        "width": 612,
+        "height": 792
+      },
+      "dprAppliedToCanvas": false,
+      "defaultPathContextAttributes": {
+        "desynchronized": false,
+        "willReadFrequently": true
+      },
+      "explicitPathContextAttributes": {
+        "desynchronized": false,
+        "willReadFrequently": false
+      }
+    },
+    "renderPaths": "headline = pdf.js 'default' path (page.render({canvas})), which is what the stock pdf.js viewer does; explicit-context probe re-renders pages with a harness-owned getContext('2d') context",
+    "timeoutPerRunMs": 120000,
+    "smoke": false,
+    "rawEvidence": "results.raw.jsonl (append-only, every run including the harness self-test), logs/"
+  },
+  "runs": [
+    {
+      "runId": "chrome-primary-2026-10-12T13-05-06-612Z",
+      "engine": "chrome",
+      "pdf": "learning-patterns.pdf",
+      "build": "modern",
+      "launch": {
+        "cmd": "/usr/bin/google-chrome",
+        "args": [
+          "--user-data-dir=/home/tomas-cuevas/Workspace/Proyectos/oct/spike/r12/logs/chrome-profile-chrome-primary-2026-10-12T13-05-06-612Z",
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--window-size=1280,900",
+          "--window-position=20,20",
+          "http://127.0.0.1:8123/index.html?engine=chrome&run=chrome-primary-2026-10-12T13-05-06-612Z&pdf=learning-patterns.pdf&build=modern&seq=20&probe=5"
+        ],
+        "display": "windowed (real Chrome, no --headless)",
+        "env": {
+          "RUN_TIMEOUT_MS": "120000",
+          "SHELL": "/usr/bin/fish",
+          "SESSION_MANAGER": "local/tomas-cuevas-laptop:@/tmp/.ICE-unix/2735,unix/tomas-cuevas-laptop:/tmp/.ICE-unix/2735",
+          "QT_ACCESSIBILITY": "1",
+          "GHOSTTY_BIN_DIR": "/usr/bin",
+          "COLORTERM": "truecolor",
+          "PI_CODING_AGENT": "true",
+          "HERDR_PANE_ID": "w5:p1",
+          "XDG_MENU_PREFIX": "gnome-",
+          "TERM_PROGRAM_VERSION": "1.3.1",
+          "GNOME_DESKTOP_SESSION_ID": "this-is-deprecated",
+          "AI_AGENT": "pi",
+          "GNOME_SHELL_SESSION_MODE": "ubuntu",
+          "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
+          "PI_REASONING_LEVEL": "high",
+          "MEMORY_PRESSURE_WRITE": "c29tZSAyMDAwMDAgMjAwMDAwMAA=",
+          "PI_SESSION_FILE": "/home/tomas-cuevas/.pi/agent/gentle-agents/sessions/2026-10-12T12-55-09-449Z_01a1302e-6588-755b-b69d-1c5f83fd1b53.jsonl",
+          "XMODIFIERS": "@im=ibus",
+          "HOMEBREW_PREFIX": "/home/linuxbrew/.linuxbrew",
+          "DESKTOP_SESSION": "ubuntu",
+          "GTK_MODULES": "gail:atk-bridge",
+          "PWD": "/home/tomas-cuevas/Workspace/Proyectos/oct/spike/r12",
+          "LOGNAME": "tomas-cuevas",
+          "XDG_SESSION_DESKTOP": "ubuntu",
+          "XDG_SESSION_TYPE": "wayland",
+          "GENTLE_PI_AGENTS_OWNED_IPC": "1791809709192-3twq8my3caf",
+          "SYSTEMD_EXEC_PID": "3334",
+          "XAUTHORITY": "/run/user/1000/.mutter-Xwaylandauth.W2B4W3",
+          "GHOSTTY_SHELL_FEATURES": "cursor:blink,path,title",
+          "HOME": "/home/tomas-cuevas",
+          "USERNAME": "tomas-cuevas",
+          "LANG": "en_US.UTF-8",
+          "XDG_CURRENT_DESKTOP": "ubuntu:GNOME",
+          "MEMORY_PRESSURE_WATCH": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.mitchellh.ghostty.service/memory.pressure",
+          "WAYLAND_DISPLAY": "wayland-0",
+          "PI_PROVIDER": "opencode-go",
+          "QTWEBENGINE_DICTIONARIES_PATH": "/usr/share/hunspell-bdic/",
+          "MANAGERPID": "2497",
+          "INFOPATH": "/home/linuxbrew/.linuxbrew/share/info:/home/linuxbrew/.linuxbrew/share/info:/home/linuxbrew/.linuxbrew/share/info:",
+          "PI_MODEL": "deepseek-v4.1-flash",
+          "GNOME_SETUP_DISPLAY": ":1",
+          "GHOSTTY_RESOURCES_DIR": "/usr/share/ghostty",
+          "XDG_SESSION_CLASS": "user",
+          "TERMINFO": "/usr/share/terminfo",
+          "TERM": "xterm-256color",
+          "USER": "tomas-cuevas",
+          "HOMEBREW_CELLAR": "/home/linuxbrew/.linuxbrew/Cellar",
+          "PI_SESSION_ID": "01a1302e-6588-755b-b69d-1c5f83fd1b53",
+          "DISPLAY": ":0",
+          "SHLVL": "3",
+          "GSM_SKIP_SSH_AGENT_WORKAROUND": "true",
+          "QT_IM_MODULE": "ibus",
+          "HOMEBREW_REPOSITORY": "/home/linuxbrew/.linuxbrew/Homebrew",
+          "PRETTY_DISABLE_TOOLS": "read,bash,ls,find,grep",
+          "XDG_RUNTIME_DIR": "/run/user/1000",
+          "GENTLE_PI_REVIEW_RELAY_CONTRACT": "gentle-pi.review-relay/v1",
+          "GENTLE_PI_AGENTS_PARENT_PERMISSION_FD": "3",
+          "HERDR_ENV": "1",
+          "XDG_DATA_DIRS": "/home/tomas-cuevas/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share/:/usr/share/:/var/lib/snapd/desktop",
+          "PATH": "/home/tomas-cuevas/.pi/agent/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/tomas-cuevas/.local/bin:/home/tomas-cuevas/.opencode/bin:/home/tomas-cuevas/.nvm/versions/node/v22.20.0/bin:/home/tomas-cuevas/.sdkman/candidates/java/current/bin:/home/tomas-cuevas/go/bin:/home/tomas-cuevas/.bun/bin:/home/tomas-cuevas/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+          "HERDR_TAB_ID": "w5:t1",
+          "GENTLE_PI_AGENTS_CHILD": "1",
+          "GDMSESSION": "ubuntu",
+          "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+          "HERDR_SOCKET_PATH": "/home/tomas-cuevas/.config/herdr/herdr.sock",
+          "HERDR_WORKSPACE_ID": "w5",
+          "OLDPWD": "/home/tomas-cuevas",
+          "TERM_PROGRAM": "ghostty",
+          "_": "/usr/bin/timeout"
+        }
+      },
+      "startedAt": "2026-10-12T13:05:06.630Z",
+      "runnerElapsedMs": 43789,
+      "timeoutMs": 120000,
+      "outcome": "ok",
+      "killedProcessGroup": true,
+      "logFile": "logs/chrome-primary-2026-10-12T13-05-06-612Z.log",
+      "serverStats": {
+        "startedAt": "2026-10-12T13:05:06.620Z",
+        "files": {
+          "public/index.html": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 1411
+          },
+          "public/measure.js": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 18762
+          },
+          "public/pdf/learning-patterns.pdf": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 142801554
+          },
+          "vendor/pdfjs-dist/build/pdf.mjs": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 860818
+          },
+          "vendor/pdfjs-dist/build/pdf.worker.mjs": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 2229713
+          },
+          "vendor/pdfjs-dist/wasm/qcms_bg.wasm": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 96589
+          }
+        }
+      },
+      "result": {
+        "status": "ok",
+        "engine": "chrome",
+        "run": "chrome-primary-2026-10-12T13-05-06-612Z",
+        "build": "modern",
+        "pdf": "learning-patterns.pdf",
+        "mode": "full",
+        "seqPagesRequested": 20,
+        "startedAt": "2026-10-12T13:05:13.571Z",
+        "navigationToScriptStartMs": 1066.6,
+        "featureSupport": {
+          "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "platform": "Linux x86_64",
+          "hardwareConcurrency": 12,
+          "devicePixelRatio": 1,
+          "hasFloat16Array": true,
+          "hasPromiseWithResolvers": true,
+          "hasStructuredClone": true,
+          "hasOffscreenCanvas": true,
+          "hasImageDecoder": true,
+          "hasCreateImageBitmap": true,
+          "hasWebAssembly": true,
+          "webAssemblyProbe": {
+            "typeofWebAssembly": "object",
+            "validateEmptyModule": true,
+            "instantiateEmptyModule": true
+          },
+          "jsHeapLimitBytes": 4395630592
+        },
+        "http": {
+          "status": 200,
+          "contentType": "application/pdf",
+          "contentLength": 142801554,
+          "acceptRanges": "bytes",
+          "contentEncoding": null
+        },
+        "bytesFetched": 142801554,
+        "fetchDoneMs": 3227.3,
+        "fetchMs": 2123.1,
+        "pdfjsVersion": "6.4.299",
+        "pdfjsBuild": "d0991a0d5",
+        "importMs": 112.4,
+        "assetUrls": {
+          "workerSrc": "/vendor/build/pdf.worker.mjs",
+          "cMapUrl": "/vendor/cmaps/",
+          "standardFontDataUrl": "/vendor/standard_fonts/",
+          "wasmUrl": "/vendor/wasm/",
+          "iccUrl": "/vendor/iccs/"
+        },
+        "docLoadMs": 276.3,
+        "docReadyAtMs": 3630.2,
+        "numPages": 436,
+        "fingerprints": [
+          "710b12d43867c3c301f310d3f3ad58ab",
+          null
+        ],
+        "worker": {
+          "workerSrc": "/vendor/build/pdf.worker.mjs",
+          "globalWorkerOptionsWorkerPort": "null",
+          "loadingTaskHasWorker": true,
+          "pdfWorkerClass": "PDFWorker",
+          "portConstructor": "Worker",
+          "dedicatedWorker": true,
+          "fakeWorker": false,
+          "workerType": "dedicated-worker",
+          "workerCtorCalls": [
+            {
+              "at": 3358.9,
+              "url": "/vendor/build/pdf.worker.mjs",
+              "type": "module"
+            }
+          ],
+          "workerErrorEvents": [],
+          "workerDestroyed": false,
+          "note": "pdf.js v6 keeps the PDFWorker on loadingTask._worker; the dedicated-worker port is the Worker object, a fake worker uses LoopbackPort. pdf.js parses in the worker but rasterizes on the main thread."
+        },
+        "render": {
+          "targetWidthCssPx": 900,
+          "scale": 1.4706,
+          "page1BaseViewport": {
+            "width": 612,
+            "height": 792
+          },
+          "dprAppliedToCanvas": false,
+          "defaultPathContextAttributes": {
+            "alpha": false,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": false,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": true
+          },
+          "explicitPathContextAttributes": {
+            "alpha": true,
+            "colorSpace": "srgb",
+            "colorType": "unorm8",
+            "desynchronized": false,
+            "toneMapping": {
+              "mode": "standard"
+            },
+            "willReadFrequently": false
+          }
+        },
+        "firstPage": {
+          "page": 1,
+          "mode": "default",
+          "note": "first-page",
+          "getPageMs": 0,
+          "renderMs": 4003.7,
+          "totalMs": 4003.8,
+          "rafMs": 18.2,
+          "paintedAtMs": 7662.3,
+          "canvasWidth": 900,
+          "canvasHeight": 1164,
+          "definition": "navigationStart -> page 1 rendered AND two rAFs elapsed (canvas visibly composited). rafMs is reported separately because rAF can be throttled in an unfocused window.",
+          "navigationToFirstVisibleMs": 7662.3,
+          "navigationToRenderCompleteMs": 6403.1,
+          "fetchPlusDocLoadMs": 2399.4,
+          "renderOnlyMs": 4003.7
+        },
+        "phases": {
+          "sequentialTotalMs": 19372.7,
+          "randomAccessMs": 140.5
+        },
+        "sequential": {
+          "count": 20,
+          "totalMs": 19372.7,
+          "meanTotalMs": 968.63,
+          "medianTotalMs": 139.6,
+          "minTotalMs": 13.6,
+          "maxTotalMs": 5356,
+          "meanRenderOnlyMs": 968.03,
+          "maxRenderOnlyMs": 5355.6,
+          "meanRafMs": 22.5,
+          "meanGetPageMs": 0.54,
+          "throughputPagesPerSecond": 1.03,
+          "pages": [
+            {
+              "page": 1,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0,
+              "renderMs": 2681.9,
+              "totalMs": 2682,
+              "rafMs": 6.4,
+              "paintedAtMs": 10351.8,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 2,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.4,
+              "renderMs": 5355.6,
+              "totalMs": 5356,
+              "rafMs": 20.6,
+              "paintedAtMs": 15728.6,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 3,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 198.3,
+              "totalMs": 199.4,
+              "rafMs": 17.1,
+              "paintedAtMs": 15945.3,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 4,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.6,
+              "renderMs": 135.6,
+              "totalMs": 136.2,
+              "rafMs": 13.6,
+              "paintedAtMs": 16095.1,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 5,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.4,
+              "renderMs": 4739.3,
+              "totalMs": 4739.8,
+              "rafMs": 22.3,
+              "paintedAtMs": 20857.2,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 6,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 4720,
+              "totalMs": 4721,
+              "rafMs": 24.2,
+              "paintedAtMs": 25602.8,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 7,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.4,
+              "renderMs": 18.1,
+              "totalMs": 18.5,
+              "rafMs": 31.7,
+              "paintedAtMs": 25653.1,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 8,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.6,
+              "renderMs": 32.8,
+              "totalMs": 33.6,
+              "rafMs": 33,
+              "paintedAtMs": 25719.7,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 9,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1.4,
+              "renderMs": 16.4,
+              "totalMs": 18,
+              "rafMs": 32,
+              "paintedAtMs": 25769.7,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 10,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.3,
+              "renderMs": 48.2,
+              "totalMs": 48.6,
+              "rafMs": 17.7,
+              "paintedAtMs": 25836.1,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 11,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1.1,
+              "renderMs": 27.5,
+              "totalMs": 28.7,
+              "rafMs": 37.6,
+              "paintedAtMs": 25902.8,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 12,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.4,
+              "renderMs": 130.9,
+              "totalMs": 131.3,
+              "rafMs": 18.5,
+              "paintedAtMs": 26052.6,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 13,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.4,
+              "renderMs": 223.3,
+              "totalMs": 223.7,
+              "rafMs": 9.4,
+              "paintedAtMs": 26285.7,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 14,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.4,
+              "renderMs": 311.6,
+              "totalMs": 312,
+              "rafMs": 21.1,
+              "paintedAtMs": 26618.8,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 15,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.3,
+              "renderMs": 139.2,
+              "totalMs": 139.6,
+              "rafMs": 10.3,
+              "paintedAtMs": 26768.7,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 16,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 246.6,
+              "totalMs": 247.6,
+              "rafMs": 18.1,
+              "paintedAtMs": 27035.1,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 17,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.3,
+              "renderMs": 282.6,
+              "totalMs": 283,
+              "rafMs": 16.8,
+              "paintedAtMs": 27334.9,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 18,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.3,
+              "renderMs": 21.7,
+              "totalMs": 22,
+              "rafMs": 32.1,
+              "paintedAtMs": 27389,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 19,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.2,
+              "renderMs": 13.3,
+              "totalMs": 13.6,
+              "rafMs": 35.4,
+              "paintedAtMs": 27438,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 20,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0.3,
+              "renderMs": 17.8,
+              "totalMs": 18.1,
+              "rafMs": 32,
+              "paintedAtMs": 27488.1,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            }
+          ],
+          "phaseStartMs": 10351.8,
+          "firstPageMs": 2682,
+          "lastPageMs": 18.1
+        },
+        "randomAccess": {
+          "midPageNumber": 218,
+          "definition": "getPage(N) + full render + two rAFs, after the sequential phase (page cache warm)",
+          "jumps": [
+            {
+              "page": 218,
+              "mode": "default",
+              "note": "mid_N_over_2",
+              "getPageMs": 0.7,
+              "renderMs": 139.8,
+              "totalMs": 140.5,
+              "rafMs": 5.9,
+              "paintedAtMs": 27635.2,
+              "canvasWidth": 900,
+              "canvasHeight": 1164,
+              "name": "mid_N_over_2"
+            },
+            {
+              "page": 109,
+              "mode": "default",
+              "note": "quarter",
+              "getPageMs": 0.6,
+              "renderMs": 134,
+              "totalMs": 134.7,
+              "rafMs": 30.2,
+              "paintedAtMs": 27800.9,
+              "canvasWidth": 900,
+              "canvasHeight": 1164,
+              "name": "quarter"
+            },
+            {
+              "page": 327,
+              "mode": "default",
+              "note": "three_quarter",
+              "getPageMs": 0.7,
+              "renderMs": 18.2,
+              "totalMs": 18.9,
+              "rafMs": 31.3,
+              "paintedAtMs": 27851.6,
+              "canvasWidth": 900,
+              "canvasHeight": 1164,
+              "name": "three_quarter"
+            }
+          ],
+          "midDocumentMs": 140.5
+        },
+        "explicitContextProbe": {
+          "count": 5,
+          "totalMs": 9889.8,
+          "meanTotalMs": 1977.96,
+          "medianTotalMs": 1618.9,
+          "minTotalMs": 101.9,
+          "maxTotalMs": 4203.9,
+          "meanRenderOnlyMs": 1977.92,
+          "maxRenderOnlyMs": 4203.8,
+          "meanRafMs": 13.28,
+          "meanGetPageMs": 0.02,
+          "throughputPagesPerSecond": 0.51,
+          "pages": [
+            {
+              "page": 1,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 1618.9,
+              "totalMs": 1618.9,
+              "rafMs": 12.1,
+              "paintedAtMs": 29483.1,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 2,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 4203.8,
+              "totalMs": 4203.9,
+              "rafMs": 8.8,
+              "paintedAtMs": 33695.9,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 3,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 118.3,
+              "totalMs": 118.3,
+              "rafMs": 14.3,
+              "paintedAtMs": 33828.7,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 4,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0.1,
+              "renderMs": 101.8,
+              "totalMs": 101.9,
+              "rafMs": 14.7,
+              "paintedAtMs": 33945.3,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 5,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 3846.8,
+              "totalMs": 3846.8,
+              "rafMs": 16.5,
+              "paintedAtMs": 37808.6,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            }
+          ]
+        },
+        "finishedAt": "2026-10-12T13:05:50.303Z",
+        "navigationToFinishMs": 37809.9,
+        "errors": [],
+        "errorCount": 0,
+        "consoleLines": [],
+        "pageLog": [
+          "3227.4ms fetched 142801554 bytes in 2123.1 ms",
+          "3348.8ms pdf.js 6.4.299 (modern) imported in 112.4 ms",
+          "3630.2ms getDocument ok: 436 pages in 276.3 ms",
+          "3633.0ms worker: dedicated-worker (port=Worker, Worker ctor calls=1, worker errors=0)",
+          "7662.6ms first page visible at 7662.3 ms (render 4003.7 ms)",
+          "20857.3ms sequential 5/20 (last total 4739.8 ms, render 4739.3 ms)",
+          "25836.2ms sequential 10/20 (last total 48.6 ms, render 48.2 ms)",
+          "26768.7ms sequential 15/20 (last total 139.6 ms, render 139.2 ms)",
+          "27488.1ms sequential 20/20 (last total 18.1 ms, render 17.8 ms)",
+          "27635.3ms random mid_N_over_2 (page 218) total 140.5 ms",
+          "27801.0ms random quarter (page 109) total 134.7 ms",
+          "27851.7ms random three_quarter (page 327) total 18.9 ms",
+          "37809.5ms explicit-context probe mean 1977.96 ms",
+          "37810.0ms POSTing result status=ok"
+        ],
+        "wallClockTotalMs": 37810
+      }
+    },
+    {
+      "runId": "webkitgtk-primary-2026-10-12T13-02-03-503Z",
+      "engine": "webkitgtk",
+      "pdf": "learning-patterns.pdf",
+      "build": "modern",
+      "launch": {
+        "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser",
+        "args": [
+          "http://127.0.0.1:8123/index.html?engine=webkitgtk&run=webkitgtk-primary-2026-10-12T13-02-03-503Z&pdf=learning-patterns.pdf&build=modern&seq=20&probe=5"
+        ],
+        "display": "windowed (MiniBrowser, GTK3; same WebKitGTK 4.1 engine Tauri uses)",
+        "env": {
+          "RUN_TIMEOUT_MS": "120000",
+          "SHELL": "/usr/bin/fish",
+          "SESSION_MANAGER": "local/tomas-cuevas-laptop:@/tmp/.ICE-unix/2735,unix/tomas-cuevas-laptop:/tmp/.ICE-unix/2735",
+          "QT_ACCESSIBILITY": "1",
+          "GHOSTTY_BIN_DIR": "/usr/bin",
+          "COLORTERM": "truecolor",
+          "PI_CODING_AGENT": "true",
+          "HERDR_PANE_ID": "w5:p1",
+          "XDG_MENU_PREFIX": "gnome-",
+          "TERM_PROGRAM_VERSION": "1.3.1",
+          "GNOME_DESKTOP_SESSION_ID": "this-is-deprecated",
+          "AI_AGENT": "pi",
+          "GNOME_SHELL_SESSION_MODE": "ubuntu",
+          "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
+          "PI_REASONING_LEVEL": "high",
+          "MEMORY_PRESSURE_WRITE": "c29tZSAyMDAwMDAgMjAwMDAwMAA=",
+          "PI_SESSION_FILE": "/home/tomas-cuevas/.pi/agent/gentle-agents/sessions/2026-10-12T12-55-09-449Z_01a1302e-6588-755b-b69d-1c5f83fd1b53.jsonl",
+          "XMODIFIERS": "@im=ibus",
+          "HOMEBREW_PREFIX": "/home/linuxbrew/.linuxbrew",
+          "DESKTOP_SESSION": "ubuntu",
+          "GTK_MODULES": "gail:atk-bridge",
+          "PWD": "/home/tomas-cuevas/Workspace/Proyectos/oct/spike/r12",
+          "LOGNAME": "tomas-cuevas",
+          "XDG_SESSION_DESKTOP": "ubuntu",
+          "XDG_SESSION_TYPE": "wayland",
+          "GENTLE_PI_AGENTS_OWNED_IPC": "1791809709192-3twq8my3caf",
+          "SYSTEMD_EXEC_PID": "3334",
+          "XAUTHORITY": "/run/user/1000/.mutter-Xwaylandauth.W2B4W3",
+          "GHOSTTY_SHELL_FEATURES": "cursor:blink,path,title",
+          "HOME": "/home/tomas-cuevas",
+          "USERNAME": "tomas-cuevas",
+          "LANG": "en_US.UTF-8",
+          "XDG_CURRENT_DESKTOP": "ubuntu:GNOME",
+          "MEMORY_PRESSURE_WATCH": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.mitchellh.ghostty.service/memory.pressure",
+          "WAYLAND_DISPLAY": "wayland-0",
+          "PI_PROVIDER": "opencode-go",
+          "QTWEBENGINE_DICTIONARIES_PATH": "/usr/share/hunspell-bdic/",
+          "MANAGERPID": "2497",
+          "INFOPATH": "/home/linuxbrew/.linuxbrew/share/info:/home/linuxbrew/.linuxbrew/share/info:/home/linuxbrew/.linuxbrew/share/info:",
+          "PI_MODEL": "deepseek-v4.1-flash",
+          "GNOME_SETUP_DISPLAY": ":1",
+          "GHOSTTY_RESOURCES_DIR": "/usr/share/ghostty",
+          "XDG_SESSION_CLASS": "user",
+          "TERMINFO": "/usr/share/terminfo",
+          "TERM": "xterm-256color",
+          "USER": "tomas-cuevas",
+          "HOMEBREW_CELLAR": "/home/linuxbrew/.linuxbrew/Cellar",
+          "PI_SESSION_ID": "01a1302e-6588-755b-b69d-1c5f83fd1b53",
+          "DISPLAY": ":0",
+          "SHLVL": "3",
+          "GSM_SKIP_SSH_AGENT_WORKAROUND": "true",
+          "QT_IM_MODULE": "ibus",
+          "HOMEBREW_REPOSITORY": "/home/linuxbrew/.linuxbrew/Homebrew",
+          "PRETTY_DISABLE_TOOLS": "read,bash,ls,find,grep",
+          "XDG_RUNTIME_DIR": "/run/user/1000",
+          "GENTLE_PI_REVIEW_RELAY_CONTRACT": "gentle-pi.review-relay/v1",
+          "GENTLE_PI_AGENTS_PARENT_PERMISSION_FD": "3",
+          "HERDR_ENV": "1",
+          "XDG_DATA_DIRS": "/home/tomas-cuevas/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share/:/usr/share/:/var/lib/snapd/desktop",
+          "PATH": "/home/tomas-cuevas/.pi/agent/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/tomas-cuevas/.local/bin:/home/tomas-cuevas/.opencode/bin:/home/tomas-cuevas/.nvm/versions/node/v22.20.0/bin:/home/tomas-cuevas/.sdkman/candidates/java/current/bin:/home/tomas-cuevas/go/bin:/home/tomas-cuevas/.bun/bin:/home/tomas-cuevas/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+          "HERDR_TAB_ID": "w5:t1",
+          "GENTLE_PI_AGENTS_CHILD": "1",
+          "GDMSESSION": "ubuntu",
+          "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+          "HERDR_SOCKET_PATH": "/home/tomas-cuevas/.config/herdr/herdr.sock",
+          "HERDR_WORKSPACE_ID": "w5",
+          "OLDPWD": "/home/tomas-cuevas",
+          "TERM_PROGRAM": "ghostty",
+          "_": "/usr/bin/timeout",
+          "XDG_DATA_HOME": "/home/tomas-cuevas/Workspace/Proyectos/oct/spike/r12/logs/xdg-webkitgtk-primary-2026-10-12T13-02-03-503Z/data",
+          "XDG_CACHE_HOME": "/home/tomas-cuevas/Workspace/Proyectos/oct/spike/r12/logs/xdg-webkitgtk-primary-2026-10-12T13-02-03-503Z/cache"
+        }
+      },
+      "startedAt": "2026-10-12T13:02:03.507Z",
+      "runnerElapsedMs": 32898,
+      "timeoutMs": 120000,
+      "outcome": "ok",
+      "killedProcessGroup": true,
+      "logFile": "logs/webkitgtk-primary-2026-10-12T13-02-03-503Z.log",
+      "serverStats": {
+        "startedAt": "2026-10-12T13:02:03.505Z",
+        "files": {
+          "public/index.html": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 1411
+          },
+          "public/measure.js": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 18376
+          },
+          "public/pdf/learning-patterns.pdf": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 142801554
+          },
+          "vendor/pdfjs-dist/build/pdf.mjs": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 860818
+          },
+          "vendor/pdfjs-dist/build/pdf.worker.mjs": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 2229713
+          },
+          "vendor/pdfjs-dist/wasm/qcms_bg.wasm": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 96589
+          }
+        }
+      },
+      "result": {
+        "status": "ok",
+        "engine": "webkitgtk",
+        "run": "webkitgtk-primary-2026-10-12T13-02-03-503Z",
+        "build": "modern",
+        "pdf": "learning-patterns.pdf",
+        "mode": "full",
+        "seqPagesRequested": 20,
+        "startedAt": "2026-10-12T13:02:04.400Z",
+        "navigationToScriptStartMs": 33,
+        "featureSupport": {
+          "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+          "platform": "Linux x86_64",
+          "hardwareConcurrency": 8,
+          "devicePixelRatio": 1,
+          "hasFloat16Array": true,
+          "hasPromiseWithResolvers": true,
+          "hasStructuredClone": true,
+          "hasOffscreenCanvas": true,
+          "hasImageDecoder": false,
+          "hasCreateImageBitmap": true,
+          "hasWebAssembly": false,
+          "webAssemblyProbe": {
+            "typeofWebAssembly": "object"
+          },
+          "jsHeapLimitBytes": null
+        },
+        "http": {
+          "status": 200,
+          "contentType": "application/pdf",
+          "contentLength": 142801554,
+          "acceptRanges": "bytes",
+          "contentEncoding": null
+        },
+        "bytesFetched": 142801554,
+        "fetchDoneMs": 1897,
+        "fetchMs": 1861,
+        "pdfjsVersion": "6.4.299",
+        "pdfjsBuild": "d0991a0d5",
+        "importMs": 43,
+        "assetUrls": {
+          "workerSrc": "/vendor/build/pdf.worker.mjs",
+          "cMapUrl": "/vendor/cmaps/",
+          "standardFontDataUrl": "/vendor/standard_fonts/",
+          "wasmUrl": "/vendor/wasm/",
+          "iccUrl": "/vendor/iccs/"
+        },
+        "docLoadMs": 121,
+        "docReadyAtMs": 2062,
+        "numPages": 436,
+        "fingerprints": [
+          "710b12d43867c3c301f310d3f3ad58ab",
+          null
+        ],
+        "worker": {
+          "workerSrc": "/vendor/build/pdf.worker.mjs",
+          "globalWorkerOptionsWorkerPort": "null",
+          "loadingTaskHasWorker": true,
+          "pdfWorkerClass": "PDFWorker",
+          "portConstructor": "Worker",
+          "dedicatedWorker": false,
+          "fakeWorker": false,
+          "workerType": "unknown",
+          "workerCtorCalls": [
+            {
+              "at": 1942,
+              "url": "/vendor/build/pdf.worker.mjs",
+              "type": "module"
+            }
+          ],
+          "workerErrorEvents": [],
+          "workerDestroyed": false,
+          "note": "pdf.js v6 keeps the PDFWorker on loadingTask._worker; dedicated worker => MessagePort, fake worker => LoopbackPort. pdf.js parses in the worker but rasterizes on the main thread."
+        },
+        "render": {
+          "targetWidthCssPx": 900,
+          "scale": 1.4706,
+          "page1BaseViewport": {
+            "width": 612,
+            "height": 792
+          },
+          "dprAppliedToCanvas": false,
+          "defaultPathContextAttributes": {
+            "desynchronized": false,
+            "willReadFrequently": true
+          },
+          "explicitPathContextAttributes": {
+            "desynchronized": false,
+            "willReadFrequently": false
+          }
+        },
+        "firstPage": {
+          "page": 1,
+          "mode": "default",
+          "note": "first-page",
+          "getPageMs": 0,
+          "renderMs": 2827,
+          "totalMs": 2827,
+          "rafMs": 61,
+          "paintedAtMs": 4953,
+          "canvasWidth": 900,
+          "canvasHeight": 1164,
+          "definition": "navigationStart -> page 1 rendered AND two rAFs elapsed (canvas visibly composited). rafMs is reported separately because rAF can be throttled in an unfocused window.",
+          "navigationToFirstVisibleMs": 4953,
+          "navigationToRenderCompleteMs": 4809,
+          "fetchPlusDocLoadMs": 1982,
+          "renderOnlyMs": 2827
+        },
+        "phases": {
+          "sequentialTotalMs": 16552,
+          "randomAccessMs": 165
+        },
+        "sequential": {
+          "count": 20,
+          "totalMs": 16552,
+          "meanTotalMs": 827.6,
+          "medianTotalMs": 167,
+          "minTotalMs": 21,
+          "maxTotalMs": 4379,
+          "meanRenderOnlyMs": 825.1,
+          "maxRenderOnlyMs": 4377,
+          "meanRafMs": 24.7,
+          "meanGetPageMs": 1.6,
+          "throughputPagesPerSecond": 1.21,
+          "pages": [
+            {
+              "page": 1,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0,
+              "renderMs": 2662,
+              "totalMs": 2663,
+              "rafMs": 67,
+              "paintedAtMs": 7684,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 2,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 3786,
+              "totalMs": 3788,
+              "rafMs": 58,
+              "paintedAtMs": 11530,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 3,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 2,
+              "renderMs": 429,
+              "totalMs": 432,
+              "rafMs": 18,
+              "paintedAtMs": 11980,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 4,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 165,
+              "totalMs": 167,
+              "rafMs": 16,
+              "paintedAtMs": 12163,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 5,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 4377,
+              "totalMs": 4379,
+              "rafMs": 51,
+              "paintedAtMs": 16593,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 6,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 5,
+              "renderMs": 3433,
+              "totalMs": 3439,
+              "rafMs": 6,
+              "paintedAtMs": 20039,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 7,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 2,
+              "renderMs": 18,
+              "totalMs": 21,
+              "rafMs": 46,
+              "paintedAtMs": 20106,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 8,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 214,
+              "totalMs": 216,
+              "rafMs": 17,
+              "paintedAtMs": 20339,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 9,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 2,
+              "renderMs": 20,
+              "totalMs": 23,
+              "rafMs": 27,
+              "paintedAtMs": 20389,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 10,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 2,
+              "renderMs": 55,
+              "totalMs": 58,
+              "rafMs": 25,
+              "paintedAtMs": 20472,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 11,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 4,
+              "renderMs": 33,
+              "totalMs": 38,
+              "rafMs": 28,
+              "paintedAtMs": 20539,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 12,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 133,
+              "totalMs": 135,
+              "rafMs": 14,
+              "paintedAtMs": 20689,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 13,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 149,
+              "totalMs": 150,
+              "rafMs": 16,
+              "paintedAtMs": 20855,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 14,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 280,
+              "totalMs": 282,
+              "rafMs": 18,
+              "paintedAtMs": 21155,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 15,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0,
+              "renderMs": 110,
+              "totalMs": 111,
+              "rafMs": 5,
+              "paintedAtMs": 21271,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 16,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 7,
+              "renderMs": 220,
+              "totalMs": 228,
+              "rafMs": 5,
+              "paintedAtMs": 21505,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 17,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0,
+              "renderMs": 279,
+              "totalMs": 280,
+              "rafMs": 3,
+              "paintedAtMs": 21788,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 18,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 25,
+              "totalMs": 26,
+              "rafMs": 24,
+              "paintedAtMs": 21838,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 19,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0,
+              "renderMs": 63,
+              "totalMs": 64,
+              "rafMs": 19,
+              "paintedAtMs": 21921,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 20,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0,
+              "renderMs": 51,
+              "totalMs": 52,
+              "rafMs": 31,
+              "paintedAtMs": 22004,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            }
+          ],
+          "phaseStartMs": 7684,
+          "firstPageMs": 2663,
+          "lastPageMs": 52
+        },
+        "randomAccess": {
+          "midPageNumber": 218,
+          "definition": "getPage(N) + full render + two rAFs, after the sequential phase (page cache warm)",
+          "jumps": [
+            {
+              "page": 218,
+              "mode": "default",
+              "note": "mid_N_over_2",
+              "getPageMs": 3,
+              "renderMs": 161,
+              "totalMs": 165,
+              "rafMs": 17,
+              "paintedAtMs": 22187,
+              "canvasWidth": 900,
+              "canvasHeight": 1164,
+              "name": "mid_N_over_2"
+            },
+            {
+              "page": 109,
+              "mode": "default",
+              "note": "quarter",
+              "getPageMs": 4,
+              "renderMs": 120,
+              "totalMs": 125,
+              "rafMs": 24,
+              "paintedAtMs": 22337,
+              "canvasWidth": 900,
+              "canvasHeight": 1164,
+              "name": "quarter"
+            },
+            {
+              "page": 327,
+              "mode": "default",
+              "note": "three_quarter",
+              "getPageMs": 2,
+              "renderMs": 21,
+              "totalMs": 25,
+              "rafMs": 24,
+              "paintedAtMs": 22387,
+              "canvasWidth": 900,
+              "canvasHeight": 1164,
+              "name": "three_quarter"
+            }
+          ],
+          "midDocumentMs": 165
+        },
+        "explicitContextProbe": {
+          "count": 5,
+          "totalMs": 9271,
+          "meanTotalMs": 1854.2,
+          "medianTotalMs": 2146,
+          "minTotalMs": 98,
+          "maxTotalMs": 3529,
+          "meanRenderOnlyMs": 1854.2,
+          "maxRenderOnlyMs": 3529,
+          "meanRafMs": 37,
+          "meanGetPageMs": 0,
+          "throughputPagesPerSecond": 0.54,
+          "pages": [
+            {
+              "page": 1,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 2146,
+              "totalMs": 2146,
+              "rafMs": 51,
+              "paintedAtMs": 24585,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 2,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 3529,
+              "totalMs": 3529,
+              "rafMs": 34,
+              "paintedAtMs": 28149,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 3,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 251,
+              "totalMs": 251,
+              "rafMs": 15,
+              "paintedAtMs": 28415,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 4,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 98,
+              "totalMs": 98,
+              "rafMs": 35,
+              "paintedAtMs": 28548,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            },
+            {
+              "page": 5,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 3247,
+              "totalMs": 3247,
+              "rafMs": 50,
+              "paintedAtMs": 31845,
+              "canvasWidth": 900,
+              "canvasHeight": 1164
+            }
+          ]
+        },
+        "finishedAt": "2026-10-12T13:02:36.211Z",
+        "navigationToFinishMs": 31846,
+        "errors": [
+          {
+            "type": "worker",
+            "at": 2062,
+            "message": "pdf.js is NOT using a dedicated worker (port=Worker, ctorCalls=[{\"at\":1942,\"url\":\"/vendor/build/pdf.worker.mjs\",\"type\":\"module\"}]) for /vendor/build/pdf.worker.mjs",
+            "name": "Error",
+            "stack": "main@http://127.0.0.1:8123/measure.js:342:18"
+          }
+        ],
+        "errorCount": 1,
+        "consoleLines": [],
+        "pageLog": [
+          "1897.0ms fetched 142801554 bytes in 1861 ms",
+          "1941.0ms pdf.js 6.4.299 (modern) imported in 43 ms",
+          "2062.0ms getDocument ok: 436 pages in 121 ms",
+          "2062.0ms ERROR worker: pdf.js is NOT using a dedicated worker (port=Worker, ctorCalls=[{\"at\":1942,\"url\":\"/vendor/build/pdf.worker.mjs\",\"type\":\"module\"}]) for /vendor/build/pdf.worker.mjs",
+          "2063.0ms worker: unknown (port=Worker, Worker ctor calls=1)",
+          "4954.0ms first page visible at 4953 ms (render 2827 ms)",
+          "16593.0ms sequential 5/20 (last total 4379 ms, render 4377 ms)",
+          "20472.0ms sequential 10/20 (last total 58 ms, render 55 ms)",
+          "21271.0ms sequential 15/20 (last total 111 ms, render 110 ms)",
+          "22004.0ms sequential 20/20 (last total 52 ms, render 51 ms)",
+          "22188.0ms random mid_N_over_2 (page 218) total 165 ms",
+          "22337.0ms random quarter (page 109) total 125 ms",
+          "22387.0ms random three_quarter (page 327) total 25 ms",
+          "31846.0ms explicit-context probe mean 1854.2 ms",
+          "31846.0ms POSTing result status=ok"
+        ],
+        "wallClockTotalMs": 31846
+      }
+    },
+    {
+      "runId": "webkitgtk-secondary-2026-10-12T13-06-52-800Z",
+      "engine": "webkitgtk",
+      "pdf": "cracking-the-coding-interview.pdf",
+      "build": "modern",
+      "launch": {
+        "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser",
+        "args": [
+          "http://127.0.0.1:8123/index.html?engine=webkitgtk&run=webkitgtk-secondary-2026-10-12T13-06-52-800Z&pdf=cracking-the-coding-interview.pdf&build=modern&seq=20&probe=5"
+        ],
+        "display": "windowed (MiniBrowser, GTK3; same WebKitGTK 4.1 engine Tauri uses)",
+        "env": {
+          "RUN_TIMEOUT_MS": "120000",
+          "SHELL": "/usr/bin/fish",
+          "SESSION_MANAGER": "local/tomas-cuevas-laptop:@/tmp/.ICE-unix/2735,unix/tomas-cuevas-laptop:/tmp/.ICE-unix/2735",
+          "QT_ACCESSIBILITY": "1",
+          "GHOSTTY_BIN_DIR": "/usr/bin",
+          "COLORTERM": "truecolor",
+          "PI_CODING_AGENT": "true",
+          "HERDR_PANE_ID": "w5:p1",
+          "XDG_MENU_PREFIX": "gnome-",
+          "TERM_PROGRAM_VERSION": "1.3.1",
+          "GNOME_DESKTOP_SESSION_ID": "this-is-deprecated",
+          "AI_AGENT": "pi",
+          "GNOME_SHELL_SESSION_MODE": "ubuntu",
+          "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
+          "PI_REASONING_LEVEL": "high",
+          "MEMORY_PRESSURE_WRITE": "c29tZSAyMDAwMDAgMjAwMDAwMAA=",
+          "PI_SESSION_FILE": "/home/tomas-cuevas/.pi/agent/gentle-agents/sessions/2026-10-12T12-55-09-449Z_01a1302e-6588-755b-b69d-1c5f83fd1b53.jsonl",
+          "XMODIFIERS": "@im=ibus",
+          "HOMEBREW_PREFIX": "/home/linuxbrew/.linuxbrew",
+          "DESKTOP_SESSION": "ubuntu",
+          "GTK_MODULES": "gail:atk-bridge",
+          "PWD": "/home/tomas-cuevas/Workspace/Proyectos/oct/spike/r12",
+          "LOGNAME": "tomas-cuevas",
+          "XDG_SESSION_DESKTOP": "ubuntu",
+          "XDG_SESSION_TYPE": "wayland",
+          "GENTLE_PI_AGENTS_OWNED_IPC": "1791809709192-3twq8my3caf",
+          "SYSTEMD_EXEC_PID": "3334",
+          "XAUTHORITY": "/run/user/1000/.mutter-Xwaylandauth.W2B4W3",
+          "GHOSTTY_SHELL_FEATURES": "cursor:blink,path,title",
+          "HOME": "/home/tomas-cuevas",
+          "USERNAME": "tomas-cuevas",
+          "LANG": "en_US.UTF-8",
+          "XDG_CURRENT_DESKTOP": "ubuntu:GNOME",
+          "MEMORY_PRESSURE_WATCH": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.mitchellh.ghostty.service/memory.pressure",
+          "WAYLAND_DISPLAY": "wayland-0",
+          "PI_PROVIDER": "opencode-go",
+          "QTWEBENGINE_DICTIONARIES_PATH": "/usr/share/hunspell-bdic/",
+          "MANAGERPID": "2497",
+          "INFOPATH": "/home/linuxbrew/.linuxbrew/share/info:/home/linuxbrew/.linuxbrew/share/info:/home/linuxbrew/.linuxbrew/share/info:",
+          "PI_MODEL": "deepseek-v4.1-flash",
+          "GNOME_SETUP_DISPLAY": ":1",
+          "GHOSTTY_RESOURCES_DIR": "/usr/share/ghostty",
+          "XDG_SESSION_CLASS": "user",
+          "TERMINFO": "/usr/share/terminfo",
+          "TERM": "xterm-256color",
+          "USER": "tomas-cuevas",
+          "HOMEBREW_CELLAR": "/home/linuxbrew/.linuxbrew/Cellar",
+          "PI_SESSION_ID": "01a1302e-6588-755b-b69d-1c5f83fd1b53",
+          "DISPLAY": ":0",
+          "SHLVL": "3",
+          "GSM_SKIP_SSH_AGENT_WORKAROUND": "true",
+          "QT_IM_MODULE": "ibus",
+          "HOMEBREW_REPOSITORY": "/home/linuxbrew/.linuxbrew/Homebrew",
+          "PRETTY_DISABLE_TOOLS": "read,bash,ls,find,grep",
+          "XDG_RUNTIME_DIR": "/run/user/1000",
+          "GENTLE_PI_REVIEW_RELAY_CONTRACT": "gentle-pi.review-relay/v1",
+          "GENTLE_PI_AGENTS_PARENT_PERMISSION_FD": "3",
+          "HERDR_ENV": "1",
+          "XDG_DATA_DIRS": "/home/tomas-cuevas/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share/:/usr/share/:/var/lib/snapd/desktop",
+          "PATH": "/home/tomas-cuevas/.pi/agent/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/tomas-cuevas/.local/bin:/home/tomas-cuevas/.opencode/bin:/home/tomas-cuevas/.nvm/versions/node/v22.20.0/bin:/home/tomas-cuevas/.sdkman/candidates/java/current/bin:/home/tomas-cuevas/go/bin:/home/tomas-cuevas/.bun/bin:/home/tomas-cuevas/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+          "HERDR_TAB_ID": "w5:t1",
+          "GENTLE_PI_AGENTS_CHILD": "1",
+          "GDMSESSION": "ubuntu",
+          "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+          "HERDR_SOCKET_PATH": "/home/tomas-cuevas/.config/herdr/herdr.sock",
+          "HERDR_WORKSPACE_ID": "w5",
+          "OLDPWD": "/home/tomas-cuevas",
+          "TERM_PROGRAM": "ghostty",
+          "_": "/usr/bin/timeout",
+          "XDG_DATA_HOME": "/home/tomas-cuevas/Workspace/Proyectos/oct/spike/r12/logs/xdg-webkitgtk-secondary-2026-10-12T13-06-52-800Z/data",
+          "XDG_CACHE_HOME": "/home/tomas-cuevas/Workspace/Proyectos/oct/spike/r12/logs/xdg-webkitgtk-secondary-2026-10-12T13-06-52-800Z/cache"
+        }
+      },
+      "startedAt": "2026-10-12T13:06:52.803Z",
+      "runnerElapsedMs": 6037,
+      "timeoutMs": 120000,
+      "outcome": "ok",
+      "killedProcessGroup": true,
+      "logFile": "logs/webkitgtk-secondary-2026-10-12T13-06-52-800Z.log",
+      "serverStats": {
+        "startedAt": "2026-10-12T13:06:52.801Z",
+        "files": {
+          "public/index.html": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 1411
+          },
+          "public/measure.js": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 18762
+          },
+          "public/pdf/cracking-the-coding-interview.pdf": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 64112405
+          },
+          "vendor/pdfjs-dist/build/pdf.mjs": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 860818
+          },
+          "vendor/pdfjs-dist/build/pdf.worker.mjs": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 2229713
+          },
+          "vendor/pdfjs-dist/wasm/qcms_bg.wasm": {
+            "requests": 1,
+            "rangedRequests": 0,
+            "bytesServed": 96589
+          }
+        }
+      },
+      "result": {
+        "status": "ok",
+        "engine": "webkitgtk",
+        "run": "webkitgtk-secondary-2026-10-12T13-06-52-800Z",
+        "build": "modern",
+        "pdf": "cracking-the-coding-interview.pdf",
+        "mode": "full",
+        "seqPagesRequested": 20,
+        "startedAt": "2026-10-12T13:06:53.742Z",
+        "navigationToScriptStartMs": 31,
+        "featureSupport": {
+          "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+          "platform": "Linux x86_64",
+          "hardwareConcurrency": 8,
+          "devicePixelRatio": 1,
+          "hasFloat16Array": true,
+          "hasPromiseWithResolvers": true,
+          "hasStructuredClone": true,
+          "hasOffscreenCanvas": true,
+          "hasImageDecoder": false,
+          "hasCreateImageBitmap": true,
+          "hasWebAssembly": true,
+          "webAssemblyProbe": {
+            "typeofWebAssembly": "object",
+            "validateEmptyModule": true,
+            "instantiateEmptyModule": true
+          },
+          "jsHeapLimitBytes": null
+        },
+        "http": {
+          "status": 200,
+          "contentType": "application/pdf",
+          "contentLength": 64112405,
+          "acceptRanges": "bytes",
+          "contentEncoding": null
+        },
+        "bytesFetched": 64112405,
+        "fetchDoneMs": 527,
+        "fetchMs": 489,
+        "pdfjsVersion": "6.4.299",
+        "pdfjsBuild": "d0991a0d5",
+        "importMs": 43,
+        "assetUrls": {
+          "workerSrc": "/vendor/build/pdf.worker.mjs",
+          "cMapUrl": "/vendor/cmaps/",
+          "standardFontDataUrl": "/vendor/standard_fonts/",
+          "wasmUrl": "/vendor/wasm/",
+          "iccUrl": "/vendor/iccs/"
+        },
+        "docLoadMs": 123,
+        "docReadyAtMs": 694,
+        "numPages": 708,
+        "fingerprints": [
+          "207af6c56b96447249a5a2e66cd641dd",
+          null
+        ],
+        "worker": {
+          "workerSrc": "/vendor/build/pdf.worker.mjs",
+          "globalWorkerOptionsWorkerPort": "null",
+          "loadingTaskHasWorker": true,
+          "pdfWorkerClass": "PDFWorker",
+          "portConstructor": "Worker",
+          "dedicatedWorker": true,
+          "fakeWorker": false,
+          "workerType": "dedicated-worker",
+          "workerCtorCalls": [
+            {
+              "at": 573,
+              "url": "/vendor/build/pdf.worker.mjs",
+              "type": "module"
+            }
+          ],
+          "workerErrorEvents": [],
+          "workerDestroyed": false,
+          "note": "pdf.js v6 keeps the PDFWorker on loadingTask._worker; the dedicated-worker port is the Worker object, a fake worker uses LoopbackPort. pdf.js parses in the worker but rasterizes on the main thread."
+        },
+        "render": {
+          "targetWidthCssPx": 900,
+          "scale": 1.8029,
+          "page1BaseViewport": {
+            "width": 499.2,
+            "height": 706.56
+          },
+          "dprAppliedToCanvas": false,
+          "defaultPathContextAttributes": {
+            "desynchronized": false,
+            "willReadFrequently": true
+          },
+          "explicitPathContextAttributes": {
+            "desynchronized": false,
+            "willReadFrequently": false
+          }
+        },
+        "firstPage": {
+          "page": 1,
+          "mode": "default",
+          "note": "first-page",
+          "getPageMs": 0,
+          "renderMs": 366,
+          "totalMs": 366,
+          "rafMs": 22,
+          "paintedAtMs": 1086,
+          "canvasWidth": 900,
+          "canvasHeight": 1273,
+          "definition": "navigationStart -> page 1 rendered AND two rAFs elapsed (canvas visibly composited). rafMs is reported separately because rAF can be throttled in an unfocused window.",
+          "navigationToFirstVisibleMs": 1086,
+          "navigationToRenderCompleteMs": 978,
+          "fetchPlusDocLoadMs": 612,
+          "renderOnlyMs": 366
+        },
+        "phases": {
+          "sequentialTotalMs": 2326,
+          "randomAccessMs": 122
+        },
+        "sequential": {
+          "count": 20,
+          "totalMs": 2326,
+          "meanTotalMs": 116.3,
+          "medianTotalMs": 116,
+          "minTotalMs": 70,
+          "maxTotalMs": 173,
+          "meanRenderOnlyMs": 114,
+          "maxRenderOnlyMs": 171,
+          "meanRafMs": 21.65,
+          "meanGetPageMs": 2.1,
+          "throughputPagesPerSecond": 8.6,
+          "pages": [
+            {
+              "page": 1,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 0,
+              "renderMs": 171,
+              "totalMs": 173,
+              "rafMs": 26,
+              "paintedAtMs": 1286,
+              "canvasWidth": 900,
+              "canvasHeight": 1273
+            },
+            {
+              "page": 2,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 2,
+              "renderMs": 85,
+              "totalMs": 87,
+              "rafMs": 30,
+              "paintedAtMs": 1403,
+              "canvasWidth": 878,
+              "canvasHeight": 1256
+            },
+            {
+              "page": 3,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 2,
+              "renderMs": 89,
+              "totalMs": 91,
+              "rafMs": 25,
+              "paintedAtMs": 1519,
+              "canvasWidth": 880,
+              "canvasHeight": 1252
+            },
+            {
+              "page": 4,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 2,
+              "renderMs": 91,
+              "totalMs": 93,
+              "rafMs": 24,
+              "paintedAtMs": 1636,
+              "canvasWidth": 881,
+              "canvasHeight": 1252
+            },
+            {
+              "page": 5,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 2,
+              "renderMs": 68,
+              "totalMs": 70,
+              "rafMs": 30,
+              "paintedAtMs": 1736,
+              "canvasWidth": 878,
+              "canvasHeight": 1250
+            },
+            {
+              "page": 6,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 4,
+              "renderMs": 81,
+              "totalMs": 85,
+              "rafMs": 31,
+              "paintedAtMs": 1852,
+              "canvasWidth": 891,
+              "canvasHeight": 1260
+            },
+            {
+              "page": 7,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 130,
+              "totalMs": 131,
+              "rafMs": 19,
+              "paintedAtMs": 2002,
+              "canvasWidth": 890,
+              "canvasHeight": 1268
+            },
+            {
+              "page": 8,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 133,
+              "totalMs": 134,
+              "rafMs": 16,
+              "paintedAtMs": 2152,
+              "canvasWidth": 875,
+              "canvasHeight": 1255
+            },
+            {
+              "page": 9,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 163,
+              "totalMs": 164,
+              "rafMs": 19,
+              "paintedAtMs": 2335,
+              "canvasWidth": 885,
+              "canvasHeight": 1256
+            },
+            {
+              "page": 10,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 122,
+              "totalMs": 123,
+              "rafMs": 10,
+              "paintedAtMs": 2468,
+              "canvasWidth": 883,
+              "canvasHeight": 1261
+            },
+            {
+              "page": 11,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 7,
+              "renderMs": 128,
+              "totalMs": 135,
+              "rafMs": 14,
+              "paintedAtMs": 2618,
+              "canvasWidth": 875,
+              "canvasHeight": 1248
+            },
+            {
+              "page": 12,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 114,
+              "totalMs": 116,
+              "rafMs": 17,
+              "paintedAtMs": 2751,
+              "canvasWidth": 875,
+              "canvasHeight": 1255
+            },
+            {
+              "page": 13,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 124,
+              "totalMs": 126,
+              "rafMs": 24,
+              "paintedAtMs": 2901,
+              "canvasWidth": 875,
+              "canvasHeight": 1248
+            },
+            {
+              "page": 14,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 100,
+              "totalMs": 101,
+              "rafMs": 16,
+              "paintedAtMs": 3018,
+              "canvasWidth": 893,
+              "canvasHeight": 1269
+            },
+            {
+              "page": 15,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 1,
+              "renderMs": 106,
+              "totalMs": 107,
+              "rafMs": 26,
+              "paintedAtMs": 3151,
+              "canvasWidth": 875,
+              "canvasHeight": 1255
+            },
+            {
+              "page": 16,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 5,
+              "renderMs": 103,
+              "totalMs": 108,
+              "rafMs": 24,
+              "paintedAtMs": 3284,
+              "canvasWidth": 883,
+              "canvasHeight": 1261
+            },
+            {
+              "page": 17,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 3,
+              "renderMs": 129,
+              "totalMs": 132,
+              "rafMs": 18,
+              "paintedAtMs": 3434,
+              "canvasWidth": 875,
+              "canvasHeight": 1248
+            },
+            {
+              "page": 18,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 3,
+              "renderMs": 106,
+              "totalMs": 109,
+              "rafMs": 24,
+              "paintedAtMs": 3567,
+              "canvasWidth": 886,
+              "canvasHeight": 1263
+            },
+            {
+              "page": 19,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 2,
+              "renderMs": 107,
+              "totalMs": 109,
+              "rafMs": 23,
+              "paintedAtMs": 3701,
+              "canvasWidth": 875,
+              "canvasHeight": 1248
+            },
+            {
+              "page": 20,
+              "mode": "default",
+              "note": "sequential",
+              "getPageMs": 2,
+              "renderMs": 130,
+              "totalMs": 132,
+              "rafMs": 17,
+              "paintedAtMs": 3850,
+              "canvasWidth": 891,
+              "canvasHeight": 1267
+            }
+          ],
+          "phaseStartMs": 1286,
+          "firstPageMs": 173,
+          "lastPageMs": 132
+        },
+        "randomAccess": {
+          "midPageNumber": 354,
+          "definition": "getPage(N) + full render + two rAFs, after the sequential phase (page cache warm)",
+          "jumps": [
+            {
+              "page": 354,
+              "mode": "default",
+              "note": "mid_N_over_2",
+              "getPageMs": 4,
+              "renderMs": 118,
+              "totalMs": 122,
+              "rafMs": 10,
+              "paintedAtMs": 3984,
+              "canvasWidth": 878,
+              "canvasHeight": 1250,
+              "name": "mid_N_over_2"
+            },
+            {
+              "page": 177,
+              "mode": "default",
+              "note": "quarter",
+              "getPageMs": 6,
+              "renderMs": 116,
+              "totalMs": 123,
+              "rafMs": 26,
+              "paintedAtMs": 4133,
+              "canvasWidth": 887,
+              "canvasHeight": 1259,
+              "name": "quarter"
+            },
+            {
+              "page": 531,
+              "mode": "default",
+              "note": "three_quarter",
+              "getPageMs": 4,
+              "renderMs": 110,
+              "totalMs": 114,
+              "rafMs": 19,
+              "paintedAtMs": 4267,
+              "canvasWidth": 885,
+              "canvasHeight": 1256,
+              "name": "three_quarter"
+            }
+          ],
+          "midDocumentMs": 122
+        },
+        "explicitContextProbe": {
+          "count": 5,
+          "totalMs": 337,
+          "meanTotalMs": 67.4,
+          "medianTotalMs": 53,
+          "minTotalMs": 51,
+          "maxTotalMs": 125,
+          "meanRenderOnlyMs": 67.2,
+          "maxRenderOnlyMs": 125,
+          "meanRafMs": 32.2,
+          "meanGetPageMs": 0,
+          "throughputPagesPerSecond": 14.84,
+          "pages": [
+            {
+              "page": 1,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 125,
+              "totalMs": 125,
+              "rafMs": 41,
+              "paintedAtMs": 4433,
+              "canvasWidth": 900,
+              "canvasHeight": 1273
+            },
+            {
+              "page": 2,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 50,
+              "totalMs": 51,
+              "rafMs": 32,
+              "paintedAtMs": 4516,
+              "canvasWidth": 878,
+              "canvasHeight": 1256
+            },
+            {
+              "page": 3,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 52,
+              "totalMs": 52,
+              "rafMs": 31,
+              "paintedAtMs": 4600,
+              "canvasWidth": 880,
+              "canvasHeight": 1252
+            },
+            {
+              "page": 4,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 53,
+              "totalMs": 53,
+              "rafMs": 30,
+              "paintedAtMs": 4683,
+              "canvasWidth": 881,
+              "canvasHeight": 1252
+            },
+            {
+              "page": 5,
+              "mode": "explicit",
+              "note": "explicit-context-probe",
+              "getPageMs": 0,
+              "renderMs": 56,
+              "totalMs": 56,
+              "rafMs": 27,
+              "paintedAtMs": 4766,
+              "canvasWidth": 878,
+              "canvasHeight": 1250
+            }
+          ]
+        },
+        "finishedAt": "2026-10-12T13:06:58.474Z",
+        "navigationToFinishMs": 4767,
+        "errors": [],
+        "errorCount": 0,
+        "consoleLines": [],
+        "pageLog": [
+          "527.0ms fetched 64112405 bytes in 489 ms",
+          "571.0ms pdf.js 6.4.299 (modern) imported in 43 ms",
+          "694.0ms getDocument ok: 708 pages in 123 ms",
+          "695.0ms worker: dedicated-worker (port=Worker, Worker ctor calls=1, worker errors=0)",
+          "1087.0ms first page visible at 1086 ms (render 366 ms)",
+          "1736.0ms sequential 5/20 (last total 70 ms, render 68 ms)",
+          "2468.0ms sequential 10/20 (last total 123 ms, render 122 ms)",
+          "3151.0ms sequential 15/20 (last total 107 ms, render 106 ms)",
+          "3851.0ms sequential 20/20 (last total 132 ms, render 130 ms)",
+          "3984.0ms random mid_N_over_2 (page 354) total 122 ms",
+          "4134.0ms random quarter (page 177) total 123 ms",
+          "4267.0ms random three_quarter (page 531) total 114 ms",
+          "4767.0ms explicit-context probe mean 67.4 ms",
+          "4767.0ms POSTing result status=ok"
+        ],
+        "wallClockTotalMs": 4767
+      }
+    }
+  ],
+  "comparison": {
+    "primaryPdf": "learning-patterns.pdf",
+    "webkitgtk": {
+      "runId": "webkitgtk-primary-2026-10-12T13-02-03-503Z",
+      "status": "ok",
+      "numPages": 436,
+      "worker": {
+        "workerTypeDerived": "dedicated-worker",
+        "portConstructor": "Worker",
+        "workerCtorCalls": [
+          {
+            "at": 1942,
+            "url": "/vendor/build/pdf.worker.mjs",
+            "type": "module"
+          }
+        ],
+        "workerErrorEvents": [],
+        "workerScriptFetchedByPage": true,
+        "workerScriptFetchCount": 1,
+        "workerScriptBytes": 2229713
+      },
+      "errors": {
+        "totalRecorded": 1,
+        "harnessAssertions": 1,
+        "pdfjsOrRuntimeErrors": [],
+        "pdfjsConsoleLines": 0
+      },
+      "firstPageVisibleMs": 4953,
+      "firstPageRenderCompleteMs": 4809,
+      "firstPageRenderMs": 2827,
+      "firstPageRafMs": 61,
+      "fetchMs": 1861,
+      "docLoadMs": 121,
+      "seqCount": 20,
+      "seqMeanMs": 827.6,
+      "seqMedianMs": 167,
+      "seqMinMs": 21,
+      "seqMaxMs": 4379,
+      "seqMeanRenderOnlyMs": 825.1,
+      "seqMeanRafMs": 24.7,
+      "seqPagesOver1000ms": 4,
+      "throughputPagesPerSecond": 1.21,
+      "midDocumentJumpMs": 165,
+      "randomAccessJumps": [
+        {
+          "name": "mid_N_over_2",
+          "page": 218,
+          "totalMs": 165,
+          "renderMs": 161
+        },
+        {
+          "name": "quarter",
+          "page": 109,
+          "totalMs": 125,
+          "renderMs": 120
+        },
+        {
+          "name": "three_quarter",
+          "page": 327,
+          "totalMs": 25,
+          "renderMs": 21
+        }
+      ],
+      "explicitContextMeanTotalMs": 1854.2,
+      "defaultVsExplicitSamePages": {
+        "pages": [
+          {
+            "page": 1,
+            "defaultMs": 2663,
+            "explicitMs": 2146
+          },
+          {
+            "page": 2,
+            "defaultMs": 3788,
+            "explicitMs": 3529
+          },
+          {
+            "page": 3,
+            "defaultMs": 432,
+            "explicitMs": 251
+          },
+          {
+            "page": 4,
+            "defaultMs": 167,
+            "explicitMs": 98
+          },
+          {
+            "page": 5,
+            "defaultMs": 4379,
+            "explicitMs": 3247
+          }
+        ],
+        "defaultMeanMs": 2285.8,
+        "explicitMeanMs": 1854.2,
+        "explicitOverDefault": 0.81
+      },
+      "featureSupport": {
+        "typeofWebAssembly": "object"
+      },
+      "wasmAvailableRecorded": false,
+      "failedStage": null,
+      "pageLoadToFinishMs": 31846
+    },
+    "chrome": {
+      "runId": "chrome-primary-2026-10-12T13-05-06-612Z",
+      "status": "ok",
+      "numPages": 436,
+      "worker": {
+        "workerTypeDerived": "dedicated-worker",
+        "portConstructor": "Worker",
+        "workerCtorCalls": [
+          {
+            "at": 3358.9,
+            "url": "/vendor/build/pdf.worker.mjs",
+            "type": "module"
+          }
+        ],
+        "workerErrorEvents": [],
+        "workerScriptFetchedByPage": true,
+        "workerScriptFetchCount": 1,
+        "workerScriptBytes": 2229713
+      },
+      "errors": {
+        "totalRecorded": 0,
+        "harnessAssertions": 0,
+        "pdfjsOrRuntimeErrors": [],
+        "pdfjsConsoleLines": 0
+      },
+      "firstPageVisibleMs": 7662.3,
+      "firstPageRenderCompleteMs": 6403.1,
+      "firstPageRenderMs": 4003.7,
+      "firstPageRafMs": 18.2,
+      "fetchMs": 2123.1,
+      "docLoadMs": 276.3,
+      "seqCount": 20,
+      "seqMeanMs": 968.63,
+      "seqMedianMs": 139.6,
+      "seqMinMs": 13.6,
+      "seqMaxMs": 5356,
+      "seqMeanRenderOnlyMs": 968.03,
+      "seqMeanRafMs": 22.5,
+      "seqPagesOver1000ms": 4,
+      "throughputPagesPerSecond": 1.03,
+      "midDocumentJumpMs": 140.5,
+      "randomAccessJumps": [
+        {
+          "name": "mid_N_over_2",
+          "page": 218,
+          "totalMs": 140.5,
+          "renderMs": 139.8
+        },
+        {
+          "name": "quarter",
+          "page": 109,
+          "totalMs": 134.7,
+          "renderMs": 134
+        },
+        {
+          "name": "three_quarter",
+          "page": 327,
+          "totalMs": 18.9,
+          "renderMs": 18.2
+        }
+      ],
+      "explicitContextMeanTotalMs": 1977.96,
+      "defaultVsExplicitSamePages": {
+        "pages": [
+          {
+            "page": 1,
+            "defaultMs": 2682,
+            "explicitMs": 1618.9
+          },
+          {
+            "page": 2,
+            "defaultMs": 5356,
+            "explicitMs": 4203.9
+          },
+          {
+            "page": 3,
+            "defaultMs": 199.4,
+            "explicitMs": 118.3
+          },
+          {
+            "page": 4,
+            "defaultMs": 136.2,
+            "explicitMs": 101.9
+          },
+          {
+            "page": 5,
+            "defaultMs": 4739.8,
+            "explicitMs": 3846.8
+          }
+        ],
+        "defaultMeanMs": 2622.68,
+        "explicitMeanMs": 1977.96,
+        "explicitOverDefault": 0.75
+      },
+      "featureSupport": {
+        "typeofWebAssembly": "object",
+        "validateEmptyModule": true,
+        "instantiateEmptyModule": true
+      },
+      "wasmAvailableRecorded": true,
+      "failedStage": null,
+      "pageLoadToFinishMs": 37809.9
+    },
+    "ratiosWebkitOverChrome": {
+      "firstPageVisibleMs": 0.65,
+      "firstPageRenderMs": 0.71,
+      "seqMeanMs": 0.85,
+      "seqMedianMs": 1.2,
+      "seqMaxMs": 0.82,
+      "midDocumentJumpMs": 1.17,
+      "webkitThroughputDeficit": 0.85
+    },
+    "webkitRenderedSuccessfully": true,
+    "harnessArtifactsCorrected": [
+      {
+        "runId": "webkitgtk-primary-2026-10-12T13-02-03-503Z",
+        "fields": {
+          "featureSupport.hasWebAssembly": "recorded false, actually true: the page tested `typeof WebAssembly === \"function\"`, but in browsers typeof WebAssembly is \"object\"",
+          "worker.workerType": "recorded unknown, actually dedicated-worker: the page expected PDFWorker.port to be a MessagePort, but pdf.js v6 exposes the Worker object itself",
+          "errors[worker]": "harness self-assertion (see worker.workerType above), not a pdf.js error"
+        }
+      }
+    ],
+    "note": "worker.workerTypeDerived is recomputed here from raw fields (Worker constructor calls + port class). errors.harnessAssertions counts the harness's own worker self-assertions separately from real pdf.js errors. See harnessArtifactsCorrected for field-level corrections found during the spike."
+  }
+}

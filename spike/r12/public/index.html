@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>r12 · pdf.js engine measurement</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #101215;
+        color: #cfd6dd;
+        font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace;
+      }
+      #hud {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 10;
+        padding: 6px 10px;
+        background: #1b1f24;
+        border-bottom: 1px solid #2c333b;
+        white-space: pre-wrap;
+      }
+      #stagewrap {
+        padding: 44px 8px 8px;
+      }
+      canvas {
+        display: block;
+        background: #fff;
+        outline: 1px solid #2c333b;
+        margin-bottom: 8px;
+      }
+      #log {
+        margin: 8px;
+        white-space: pre-wrap;
+        color: #7d8a97;
+      }
+      .label {
+        padding: 2px 8px;
+        color: #6b7885;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">booting…</div>
+    <div id="stagewrap">
+      <div class="label">default render path (pdf.js owns the 2D context)</div>
+      <canvas id="stageDefault" width="10" height="10"></canvas>
+      <div class="label">explicit render path (harness owns the 2D context)</div>
+      <canvas id="stageExplicit" width="10" height="10"></canvas>
+    </div>
+    <pre id="log"></pre>
+    <script type="module" src="./measure.js"></script>
+  </body>
+</html>
