@@ -1,0 +1,18 @@
+[package]
+name = "oct-scan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Watched-folder PDF scanning for oct"
+
+[dependencies]
+oct-core = { workspace = true }
+oct-store = { workspace = true }
+pdfium-render = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+# `lopdf` is here only to *build* the encrypted fixture in `tests/scanner.rs`, which `pdfium` must
+# then refuse. It is never used to count pages: page counting is pdfium's job
+# (see spike/parser/FINDINGS.md).
+lopdf = "0.36"

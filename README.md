@@ -66,6 +66,20 @@ bun install
 cargo build --workspace
 ```
 
+## Running the tests
+
+```bash
+scripts/fetch-pdfium.sh   # once per clone; ~8 MB, gitignored
+cargo test --workspace
+```
+
+Page counting uses the native `pdfium` library (see
+[`spike/parser/FINDINGS.md`](spike/parser/FINDINGS.md) for the measurement that chose it over
+`lopdf`). It is loaded at runtime, so it is fetched rather than committed. The tests that prove real
+page counting parse actual PDFs: without the library they **fail** with a message naming both
+remedies rather than passing without checking anything. Set `OCT_PDFIUM_LIB` to point at a specific
+library file or directory instead.
+
 ## Status and roadmap
 
 | Phase | Scope | State |

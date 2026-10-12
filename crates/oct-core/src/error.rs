@@ -46,6 +46,21 @@ pub enum OctError {
     #[error("invalid path: {0}")]
     InvalidPath(String),
 
+    /// A native component this build needs is missing or could not be loaded.
+    ///
+    /// Deliberately **not** [`OctError::NotSupported`], which means the capability is not implemented
+    /// for this platform at all. Here the capability exists and the *component* is absent: a setup
+    /// problem the user can fix, not a missing feature, and reporting it as unsupported would tell a
+    /// Linux user that Linux is unsupported. The underlying cause is kept verbatim so a wrong
+    /// architecture is distinguishable from a missing file.
+    #[error("{component} could not be loaded: {message}")]
+    ComponentUnavailable {
+        /// The component's name, for example `"pdfium"`.
+        component: &'static str,
+        /// The underlying cause, as reported by the loader.
+        message: String,
+    },
+
     /// A persistence operation failed.
     ///
     /// Carries a description rather than a typed source, because `oct-core` deliberately has no
