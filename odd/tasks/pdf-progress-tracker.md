@@ -62,12 +62,17 @@ version-fragile, sandbox-hostile artifact (see "Cross-platform evidence"). The r
 |---|---|---|
 | Tauri v2 | MIT / Apache-2.0 | **Yes** — both are GPLv3-compatible |
 | pdf.js | Apache-2.0 | **Yes** |
+| **pdfium** (native page counting, T6) | BSD-3-Clause | **Yes** |
+| **inotify** (Linux folder watching, T7) | **ISC** — not MIT | **Yes** |
+| **rusqlite** + bundled SQLite (T5) | MIT / public domain | **Yes** |
 | WebKitGTK (Linux WebView) | LGPL-2.1+ | Yes, as a system library |
 | WebView2 (Windows WebView) | Microsoft proprietary, redistributable as a system runtime | Acceptable in the same way as a system library, but **must be documented** in third-party notices |
 | macOS App Store distribution | — | **Incompatible with GPL-3.0.** Consistent with the native-packages decision; the Mac App Store is off the table permanently under this license. |
 
 The project must ship the GPL-3.0 text, a source tarball per release, and third-party notices for
-pdf.js and the WebView runtimes.
+pdf.js, **pdfium**, the WebView runtimes, and the Rust dependencies above. Licences are recorded here
+because they are a packaging deliverable, and a licence recorded wrong is worse than one not recorded
+at all: `inotify` was assumed MIT in a task brief and is in fact **ISC**.
 
 ## Platform abstraction
 
@@ -390,7 +395,7 @@ further down; this block is what a worker reads to know what is done and what is
 - [x] **T11** Portable file identity (`FileIdentity`) — done (`2b8e9da`)
 - [x] **T5** SQLite schema, migrations and the queries behind them — done (`c2a059d`); specs below
 - [x] **T6** Watched-folder scanner with real page counting via `pdfium` — done (`a5b3ea5`); resolves R2; specs below
-- [ ] **T7** inotify watcher over watched folders (Linux; per-OS backend later)
+- [ ] **T7** inotify watcher over watched folders (Linux; per-OS backend later) — T7a (mechanism) done; T7b (library wiring) remains; specs below
 - [ ] **T8** `/proc/*/fd` open-document detector — Linux backend of axis B
 - [ ] **T12** `RecentDocumentsSource` for `recently-used.xbel` — Linux backend of axis A
 - [ ] **T9** Progress provider registry plus Evince GVFS adapter — the first real `ProgressProvider` (`Live`), and the first caller of `Launcher`
@@ -473,6 +478,47 @@ incremental rescan and the metadata columns it needs (`size`, `mtime`, `discover
 `status` — T5 left them unwritten because nothing filled them); the live watcher (T7); the suggestion
 queue for PDFs found outside watched folders; and scanning a folder the user has not nominated.
 
+## Specs — T7 (watched-folder watcher)
+
+Same rule as T5 and T6: acceptance criteria that restate decisions already locked here, so a worker
+does not reinterpret them. T7 is split into two work units on purpose — **T7a the mechanism** (this
+spec) and **T7b the wiring into the library** (specified when T7a lands), because one delegation that
+does both is a review nobody can hold in their head.
+
+- **S1 — A sixth trait, following the established pattern.** `FolderWatcher` lives in `oct-core` with
+  `id()` and `platform()`, plus the value types it speaks: `WatchTarget { path, recursive }`,
+  `WatchEvent { path, kind }` and `WatchEventKind { Added, Changed, Removed }`. It must be object-safe
+  and `Send + Sync` like the other five, and the existing `object_safety` test must cover it.
+- **S2 — A Linux backend and an honest stub.** `oct-platform` implements it with **inotify** behind
+  `#[cfg(target_os = "linux")]`, and `unsupported.rs` answers `NotSupported` everywhere else — never an
+  empty success. It is wired into `Backends` alongside the other backends. Recursive targets are
+  watched by watching each directory, and **subdirectories that appear later are watched too**.
+- **S3 — A file is reported when it is *settled*, not while it is being written.** A half-copied PDF
+  must never be scanned: `Changed`/`Added` are emitted when the write **completes** (`IN_CLOSE_WRITE`)
+  or when the file arrives already complete (`IN_MOVED_TO`), never on `IN_MODIFY`. Bursts are
+  **coalesced per path** within a short window, so a copy of one large PDF produces one event rather
+  than hundreds. `IN_CREATE` is observed but deliberately **not** emitted: reporting there would
+  announce a file its writer still holds open, and the trade-off is that a file created and never
+  written or closed is not reported at all. *(Corrected during T7a: the first wording listed
+  `IN_CREATE` as a settle trigger, which contradicts the rule two clauses earlier.)*
+- **S4 — Paths stay opaque (R7).** Events carry `PathBuf`, never `String`; nothing is split, trimmed,
+  shell-quoted or Unicode-normalised on the way through.
+- **S5 — Stopping and resource honesty.** The loop runs until the caller sets a stop flag, never
+  panics, and never spins. A kernel limit failure (watch descriptors exhausted) surfaces as **one
+  honest error naming the limit**, never a silently partial watch; a directory that disappears
+  mid-watch is reported and does not end the loop.
+- **S6 — No runtime assumptions.** The loop is blocking and belongs on the caller's own thread. The
+  workspace has no async runtime and T7 does not introduce one.
+- **S7 — Layering.** Trait and types in `oct-core` (still dependency-free), the Linux implementation
+  in `oct-platform`, and `oct-platform` remains the only crate containing OS-specific code.
+
+**What a removal means is deliberately *not* decided here, and this is the decision to record:** the
+watcher reports `Removed`, and the library is **not** changed by it. Deleting the row would destroy
+the reading history that is the entire point of the product, and representing "the file is gone" needs
+`documents.status`, which this document already defers along with the other scanner metadata columns.
+So T7b wires added/changed files into the library and leaves removals as a reported event, and
+"the file is gone but your progress is not" becomes its own task with its own migration.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
@@ -515,6 +561,7 @@ layer, range streaming), content-bound render cost, and the unproven `willReadFr
 | T11 | **Done** | `2b8e9da` | Portable POSIX file identity. Reusable `#[cfg(unix)]` module so macOS inherits it; `st_dev`/`st_ino` primary; streamed SHA-256 fallback when either id is zero. 32 tests pass (was 25), clippy clean. Hard links proven to share an identity, and the stub test was replaced rather than deleted. |
 | T5 | **Done** | `453a849` + `c2a059d` | `oct-store` is a real persistence layer: six tables, forward-only idempotent migrations, lossless `FileId` round trips and lookup by identity alone, per-platform database location. 47 tests pass (was 32), clippy clean. Two should-fix defects were found by an independent verification pass and fixed before the first commit — see L3 in the log for both, the accepted residual, and the `NULL`-distinct trap the test caught. |
 | T6 | **Done** | `57f8c4a` + `a5b3ea5` | Watched-folder scanner with `pdfium` page counting, plus the `folders` API and the project's **first migration (V2)**. 69 tests pass (was 47), clippy clean. Full-library cross-check run independently by the parent *and* by the verifier: **42/42 page counts agree with `pdfinfo`**, 0 documents without a count, 0 extras, whole library in **1.5 s**. The parser was chosen by measurement, not assumption — `spike/parser/FINDINGS.md`, log entries L5 and L6. |
+| T7a | **Done** | `e6003e2` + `8355b2d` | The sixth trait `FolderWatcher` (with `WatchTarget`, `WatchEvent`, `WatchEventKind`) plus the Linux inotify backend and the honest `NotSupported` stub. **85 tests pass** (was 69), clippy clean, and both non-Linux targets type-check. Verified twice: attempt 1 found a blocking defect — a directory moved out of a target stayed watched, so events outside the tree were reported under stale paths — plus two should-fix; attempt 2 settled those and found the coalescing window surviving a subtree release. The verification cap was reached there, so the last delta is parent-checked and RED-pinned only — stated plainly in L9. |
 
 ## Phase 1 — what T4 established
 
@@ -833,3 +880,90 @@ read failure). It is deliberately **uncommitted**, because its parser may be rep
   silently falling back to the vendor or system library, which is the honest reading of an explicit
   override, and `pdfium` is bound once per parsing call rather than held, which serialises concurrent
   scanners through pdfium's own process-global lock instead of racing it.
+
+**L7 — T7 scoped and split (2026-10-12):**
+
+- T7 was the least specified task in this plan — one line, no contract — so S1–S7 were written before
+  any code, including the parts the plan left open.
+- **Split into T7a (the mechanism) and T7b (the wiring into the library)**, deliberately: one delegation
+  doing both is a change nobody can review in one pass, and the mechanism is independently testable
+  without the store.
+- **Decisions taken here, recorded rather than assumed:**
+  1. A **sixth trait**. "React to a watched folder changing" is an OS-specific capability exactly like
+     the other five, and this architecture says every OS-specific source lives behind a trait rather
+     than scattering `#[cfg]` through the product.
+  2. The **`inotify` crate**, not a cross-platform wrapper. The plan's own wording is "Linux; per-OS
+     backend later"; a wrapper would hand the mechanism to a dependency and quietly make the per-OS
+     backends unnecessary — which may be the right call later, but it should be a decision, not a
+     side effect.
+  3. **A file is reported when it is settled, not while it is being written.** Scanning a half-copied
+     PDF would report a parse failure and leave a document that is perfectly fine one second later
+     sitting in the library with no page count.
+  4. **A removal does not change the library.** Deleting the row would destroy the reading history that
+     is the entire point of the product, and representing "the file is gone" needs `documents.status`,
+     which this document already defers with the other scanner metadata columns. The watcher reports
+     the event; representing absence is a later task with its own migration.
+- Left to T7b's spec on purpose: how the application consumes events. T7a's constraint is only that the
+  loop is blocking and belongs on the caller's thread, because the workspace has no async runtime and
+  T7 does not introduce one.
+
+**L8 — T7a delivered, and its review found the same defect class twice (2026-10-12):**
+
+- T7a landed: the sixth trait `FolderWatcher` (with `WatchTarget`, `WatchEvent`, `WatchEventKind`) in
+  `oct-core`, a real inotify backend in `oct-platform`, an honest `NotSupported` stub elsewhere, wired
+  into `Backends`. 77 tests pass (was 69), clippy clean, and the non-Linux stub type-checks for
+  windows-gnu and aarch64-apple-darwin.
+- **The worker deviated from the spec on purpose, and was right.** S3 listed `IN_CREATE` as a settle
+  trigger; emitting there announces a file while its writer still holds it open, which the same spec
+  forbids two clauses earlier. `IN_CREATE` is observed only to classify the following close as `Added`
+  rather than `Changed`, and to install watches for new subdirectories. The trade-off is recorded: a
+  file created and never written or closed is not reported. **The spec was wrong, not the code**, so S3
+  is corrected above.
+- **A licence in the task brief was wrong**: `inotify` is **ISC**, not MIT. Permissive and GPL-3.0
+  compatible, and now recorded in the workspace manifest and in the licensing table above.
+- **The parent review found the same defect class twice, both of them residuals the worker had flagged
+  rather than hidden**: the watcher had no way to report its *own* blind spots. A subdirectory it could
+  not read was skipped in silence, and `IN_Q_OVERFLOW` — the kernel dropping events — was ignored.
+  Either leaves the library stale with nobody told, which is the failure this project exists to
+  prevent. Both are being closed by reporting them: `WatchEventKind` gains `Lost` (events were dropped;
+  rescan this path) and `Unwatchable` (this path cannot be watched, so changes inside it are
+  invisible). `ENOSPC` stays **fatal** on purpose — it means *nothing more* can be watched, so one
+  honest error beats a silently partial watch — while one unreadable corner is reported and the rest
+  keeps updating.
+- The worker also reported honestly that the parent's own phrasing — "a burst of several files produces
+  fewer events than files" — cannot hold for *distinct* paths under per-path coalescing. The tested
+  property is the stronger and honest one: repeated settles of the same path collapse to one event, and
+  every distinct path still appears.
+
+**L9 — T7a verified twice, and the verification cap was reached (2026-10-12):**
+
+- T7a landed: the sixth trait `FolderWatcher` with `WatchTarget`/`WatchEvent`/`WatchEventKind` in
+  `oct-core`, the Linux inotify backend in `oct-platform`, the honest `NotSupported` stub, wired into
+  `Backends`. **85 tests pass**, clippy clean, and both non-Linux targets type-check
+  (`x86_64-pc-windows-gnu`, `aarch64-apple-darwin`).
+- **Verification attempt 1 found a blocking defect**: a watched directory moved *outside* a target
+  stayed watched. inotify watches the **inode**, so after `mv root/sub /elsewhere/sub` the loop kept
+  watching `/elsewhere/sub` and composed its events with the **old** path — monitoring outside the
+  nominated tree and reporting paths that no longer exist. Two should-fix findings came with it:
+  per-entry traversal errors were dropped in silence, and a symlink supplied *as a target* was
+  followed. All three were fixed.
+- **Verification attempt 2 settled the previous round's S2 and S5**, and found the defect that closes
+  this story: `release_subtree` emptied watches, `seen` and `created` but **not the coalescing
+  window**, so a settled event inside a subtree that had just left could still be delivered. Fixed by
+  the parent — the window is emptied for the released subtree — with a test whose RED run delivered
+  exactly that stale event.
+- **The two-attempt verification cap was reached here, and this is the honest state of the record:**
+  the last delta (the pending-window fix) has the parent's own checks and a RED-pinned test, but **no
+  third independent pass**. It is one `retain` and one test, both falsified. A reader should know that
+  rather than assume the whole artifact was re-verified after the fix.
+- **Accepted residual, with reasoning**: `created` — the set that distinguishes `Added` from `Changed`
+  — keeps an entry for a file created and never closed, so it can grow with the number of such files.
+  Left as is deliberately: the alternative, expiring entries, would report a slow copy that takes
+  longer than the window as `Changed` instead of `Added`, and **a wrong fact is worse than a small set
+  of paths**. Revisit this line if a second writer of the same folder ever appears.
+- **A small evidence gap, recorded rather than papered over**: Rust's test harness has no "skipped"
+  state, so the unreadable-directory test that cannot create its condition (running as root) passes
+  with its reason visible only under `--nocapture`. A green run does not prove that branch executed.
+- **Also learned**: a verification subagent ran `codegraph init` inside the repository and left
+  `.codegraph/` behind. It was removed by hand. A read-only verifier that writes to the tree it is
+  verifying is a contradiction, and the brief for the next one says so explicitly.
