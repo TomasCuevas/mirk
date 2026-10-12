@@ -2100,6 +2100,7 @@ name = "oct-platform"
 version = "0.0.1"
 dependencies = [
  "oct-core",
+ "sha2",
 ]
 
 [[package]]

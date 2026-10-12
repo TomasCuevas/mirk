@@ -7,3 +7,4 @@ description = "Operating-system backends for oct"
 
 [dependencies]
 oct-core = { workspace = true }
+sha2 = { workspace = true }

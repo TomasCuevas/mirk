@@ -23,8 +23,8 @@
 use std::path::Path;
 
 use oct_core::{
-    FileId, FileIdentity, LaunchOutcome, Launcher, OctError, OpenDocument, OpenDocumentDetector,
-    Platform, ProgressProvider, RecentDocument, RecentDocumentsSource,
+    LaunchOutcome, Launcher, OctError, OpenDocument, OpenDocumentDetector, Platform,
+    ProgressProvider, RecentDocument, RecentDocumentsSource,
 };
 
 use crate::{not_supported, Backends};
@@ -111,23 +111,38 @@ impl Launcher for XdgLauncher {
 }
 
 /// Portable identity on POSIX, from `st_dev` and `st_ino`.
-pub struct PosixFileIdentity;
-
-impl FileIdentity for PosixFileIdentity {
-    fn id(&self) -> &'static str {
-        "linux-posix-identity"
-    }
-
-    fn identity(&self, _path: &Path) -> Result<FileId, OctError> {
-        // TODO(T11): `std::os::unix::fs::MetadataExt::{dev, ino}`. Some network filesystems report
-        // a zero inode, or the same one for every file; detect that and fall back to hashing.
-        Err(not_supported("file identity", PLATFORM))
-    }
-}
+///
+/// The implementation lives in [`crate::posix`] so that every Unix backend shares it. Some
+/// filesystems report unusable ids; the fallback there hashes content instead of guessing.
+pub use crate::posix::PosixFileIdentity;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oct_core::{FileId, FileIdentity};
+    use std::path::PathBuf;
+
+    /// A unique temporary directory that removes itself on drop, including on panic.
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "oct-linux-{label}-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 
     /// The whole point of the stub convention: an unimplemented backend must say so, because
     /// `Ok(vec![])` would be indistinguishable from a genuinely empty library.
@@ -147,9 +162,22 @@ mod tests {
     }
 
     #[test]
-    fn file_identity_reports_not_supported_rather_than_guessing() {
-        let id = PosixFileIdentity.identity(Path::new("/tmp/does-not-matter.pdf"));
-        assert!(matches!(id, Err(OctError::NotSupported { .. })));
+    fn file_identity_is_implemented_rather_than_stubbed() {
+        // Replaces the old stub assertion: the capability now exists, so a real file must yield a
+        // real identity rather than `NotSupported`.
+        let dir = TempDir::new("identity");
+        let path = dir.path.join("document.pdf");
+        std::fs::write(&path, b"%PDF-1.7 real").unwrap();
+
+        let identity = PosixFileIdentity.identity(&path).unwrap();
+        assert!(matches!(identity, FileId::Posix { .. }));
+
+        // The Linux backend must expose the real implementation, not a private copy.
+        let backend = backends();
+        assert_eq!(
+            backend.file_identity.identity(&path).unwrap(),
+            identity
+        );
     }
 
     #[test]

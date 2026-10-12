@@ -21,4 +21,5 @@ oct-platform = { path = "crates/oct-platform" }
 oct-store = { path = "crates/oct-store" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 serde_json = "1"

@@ -20,6 +20,13 @@
 #[cfg(target_os = "linux")]
 mod linux;
 
+// POSIX file identity is shared by every Unix backend (Linux today, macOS once its backend lands),
+// so it is gated on `unix` rather than on Linux specifically. It is allowed to be unused on Unix
+// systems whose backend does not reference it yet.
+#[cfg(unix)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod posix;
+
 #[cfg(not(target_os = "linux"))]
 mod unsupported;
 
