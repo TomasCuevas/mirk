@@ -45,4 +45,13 @@ pub enum OctError {
     /// A path could not be interpreted for the operation being attempted.
     #[error("invalid path: {0}")]
     InvalidPath(String),
+
+    /// A persistence operation failed.
+    ///
+    /// Carries a description rather than a typed source, because `oct-core` deliberately has no
+    /// database dependency; `oct-store` renders the underlying failure into this string at the
+    /// boundary. Storage failures are ordinary outcomes — a full disk, a locked file, a database
+    /// written by a newer build — and are surfaced rather than hidden.
+    #[error("storage error: {0}")]
+    Storage(String),
 }

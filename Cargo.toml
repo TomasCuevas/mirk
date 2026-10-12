@@ -21,5 +21,8 @@ oct-platform = { path = "crates/oct-platform" }
 oct-store = { path = "crates/oct-store" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
+# `bundled` compiles SQLite from source, so no system `libsqlite3` is required at build or
+# runtime — which is what AppImage/MSI/dmg packaging needs. MIT licensed, GPL-3.0 compatible.
+rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 serde_json = "1"
