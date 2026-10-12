@@ -464,3 +464,40 @@ mid-session invalidates the session's Git binding, and only a restart repairs it
 **Delegation is the default again.** Phase 1 tasks go to a worker with a tight brief and an
 explicit list of allowed edit surfaces, and the parent verifies the result before committing
 rather than trusting the report.
+
+**Engram memory is still bound to the wrong project — same root cause, different subsystem.**
+Restarting Pi repaired the Git binding but **not** the memory binding, because Pi resumed the same
+session id (`01a12186-...`) and Engram keys its project to the session. Detection itself is already
+correct — `mem_current_project` from this directory resolves `oct` via `git_root` — but writes are
+refused with *"Pi runtime session ... belongs to Engram project tomas-cuevas, not oct. Start a fresh
+Pi session in oct before capturing memory."* Routing the write with the `cwd` parameter is refused
+the same way.
+
+Two consequences worth knowing:
+
+1. **The observations recorded before the repository existed went to the `tomas-cuevas` project**
+   (35 observations there versus 1 in `oct`), because with no repository in `oct` the detected
+   project was the home-level repository. Those entries — the plan, the Phase 0 results, T1 and T4 —
+   are mixed in with unrelated home-directory work.
+2. **No information is lost.** This document is the durable record and is committed to the
+   repository; memory is a convenience layer on top of it. That is why every task closes by writing
+   its outcome here rather than relying on the mirror.
+
+**Fixed for the entries that already existed.** The six `oct` observations stranded in
+`tomas-cuevas` were relocated into `oct` by a delegated worker — subagent sessions bind to the
+repository project, which is the mechanism that made it possible — and independently verified
+byte-for-byte by the parent before the originals were soft-deleted. Full mapping and evidence:
+[`engram-migration.md`](engram-migration.md).
+
+**Still required for new writes**: a genuinely **new** Pi session started inside
+`/home/tomas-cuevas/Workspace/Proyectos/oct` — not a resumed one. Restarting Pi resumes the same
+session id, and Engram keys the project to the session, so writes from this session remain bound
+to `tomas-cuevas`.
+
+**Root cause found, and it also explains R6.** An earlier session's own notes record that a stray
+`codegraph init` run with `$HOME` as the project root created an empty `~/.git` at
+`/home/tomas-cuevas` on 2026-09-19. Engram infers the project from the git root, so `$HOME`
+became project `tomas-cuevas` — which is exactly why every `oct` memory written before the
+repository existed was misattributed, and the same artifact behind R6. Removing that empty
+`~/.git` would restore correct classification for home-directory work, but it is outside this
+repository's scope and remains a user decision.
