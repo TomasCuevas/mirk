@@ -389,7 +389,7 @@ further down; this block is what a worker reads to know what is done and what is
 - [x] **T4** Scaffold Tauri v2 workspace and platform abstraction — done (`b34ec4f`)
 - [x] **T11** Portable file identity (`FileIdentity`) — done (`2b8e9da`)
 - [x] **T5** SQLite schema, migrations and the queries behind them — done (`c2a059d`); specs below
-- [ ] **T6** Watched-folder scanner with real page counting via `lopdf` — resolves R2
+- [x] **T6** Watched-folder scanner with real page counting via `pdfium` — done (`a5b3ea5`); resolves R2; specs below
 - [ ] **T7** inotify watcher over watched folders (Linux; per-OS backend later)
 - [ ] **T8** `/proc/*/fd` open-document detector — Linux backend of axis B
 - [ ] **T12** `RecentDocumentsSource` for `recently-used.xbel` — Linux backend of axis A
@@ -433,6 +433,46 @@ file's own "Data model" section, the `oct-store` crate documentation, and the T1
 - **S8 — Honest failures.** Nothing returns an empty result to mean "unsupported"; failures surface
   as `oct_core::OctError`, consistent with the honest-stub invariant established in T4.
 
+## Specs — T6 (watched-folder scanner)
+
+Same rule as T5: acceptance criteria that restate decisions already locked in this document, so a
+worker does not reinterpret them.
+
+- **S1 — Discovery.** A recursive walk of one watched folder. PDFs are recognised by extension
+  (case-insensitive `.pdf`). Paths are treated as **opaque UTF-8** and are never shell-split or
+  Unicode-normalised (R7). The watched root is canonicalised, and symlinks encountered *inside* it are
+  not followed — a symlink loop must not hang the scan.
+- **S2 — Real page counting (this is R2).** Page counts come from a real PDF parser (`pdfium`), never
+  from a byte scan, a regex, or counting `/Type /Page`. Proven against a fixture whose page objects
+  live inside a **FlateDecode-compressed object stream**: the test asserts the correct count *and*
+  that the naive scan is wrong on that same fixture, so the fixture cannot quietly become vacuous.
+- **S3 — Metadata.** `title` and `author` come from the document's Info dictionary when present, and
+  are `None` when absent. Never invented, never taken from the file name.
+- **S4 — Honest failures.** An unreadable, corrupt or encrypted PDF must not panic and must not abort
+  the scan. It appears in the report as a failure with its path. Its stored `pages` is `None` when no
+  count was ever known, and **never `0`** — `0` is indistinguishable from a real count and would render
+  as "0% read". A count established earlier is **preserved** rather than erased (T5's "unknown never
+  erases known"), and the failure entry is what tells the caller the count was *not* re-verified this
+  time; `pages_source` and `status` are the eventual place to record that distinction, and both are
+  deferred. This wording was corrected during T6's verification: the earlier text said `pages` simply
+  "stays `None`", which is only true of a document that never had a count.
+- **S5 — Filesystem robustness.** A permission-denied directory, a symlink loop, and a file that
+  disappears mid-scan must not panic or hang. The scan finishes, reports unreadable paths as failures,
+  and reports **deliberately skipped** paths (symlinks inside the root are never followed) in their own
+  `skipped` list — a skip is not a failure, but it must not be invisible either.
+- **S6 — Persistence and idempotence.** Counted documents are persisted through
+  `Store::upsert_document`, with identity from the injected `FileIdentity` (content-hash fallback), so
+  scanning the same folder twice leaves the same rows and the same counts — no duplicates. The watched
+  folder is recorded in `folders`. The scan is **read-only** over the PDFs.
+- **S7 — Layering.** `oct-scan` receives the identity provider and the store by injection and depends
+  only on `oct-core`, `oct-store` and the PDF parser — **not** on `oct-platform`, so a fake identity
+  provider can drive the tests and the crate stays testable without a filesystem backend.
+
+**Deliberately deferred, with reasons** (they are separate work units, not omissions): size/mtime-based
+incremental rescan and the metadata columns it needs (`size`, `mtime`, `discovered_via`, `platform`,
+`status` — T5 left them unwritten because nothing filled them); the live watcher (T7); the suggestion
+queue for PDFs found outside watched folders; and scanning a folder the user has not nominated.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
@@ -474,6 +514,7 @@ layer, range streaming), content-bound render cost, and the unproven `willReadFr
 | T4 | **Done** | `b34ec4f` | Cargo workspace, 4 crates, 1391 lines of Rust across 39 tracked files. `cargo build --workspace` and 25 tests pass, clippy `--all-targets -D warnings` clean, frontend builds, app launches and exits with no process left. See "Phase 1 — what T4 established" below. |
 | T11 | **Done** | `2b8e9da` | Portable POSIX file identity. Reusable `#[cfg(unix)]` module so macOS inherits it; `st_dev`/`st_ino` primary; streamed SHA-256 fallback when either id is zero. 32 tests pass (was 25), clippy clean. Hard links proven to share an identity, and the stub test was replaced rather than deleted. |
 | T5 | **Done** | `453a849` + `c2a059d` | `oct-store` is a real persistence layer: six tables, forward-only idempotent migrations, lossless `FileId` round trips and lookup by identity alone, per-platform database location. 47 tests pass (was 32), clippy clean. Two should-fix defects were found by an independent verification pass and fixed before the first commit — see L3 in the log for both, the accepted residual, and the `NULL`-distinct trap the test caught. |
+| T6 | **Done** | `57f8c4a` + `a5b3ea5` | Watched-folder scanner with `pdfium` page counting, plus the `folders` API and the project's **first migration (V2)**. 69 tests pass (was 47), clippy clean. Full-library cross-check run independently by the parent *and* by the verifier: **42/42 page counts agree with `pdfinfo`**, 0 documents without a count, 0 extras, whole library in **1.5 s**. The parser was chosen by measurement, not assumption — `spike/parser/FINDINGS.md`, log entries L5 and L6. |
 
 ## Phase 1 — what T4 established
 
@@ -645,3 +686,150 @@ it was created with. The fix is a new session, not a restart of the same one.
   (`COALESCE`) and is partial (`WHERE file_id_kind IS NOT NULL`) so identity-less rows stay
   unconstrained, as the path-supersede rule requires. The test that proves the constraint is live did
   fail against the naive version before this was understood.
+- **T5 correction during T6 (2026-10-12), and the first real migration.** T6's first caller made a
+  second invariant worth enforcing in the database: a watched folder is recorded once. The first
+  attempt edited `SCHEMA_V1` in place, and independent verification caught the real problem with that:
+  **V1 is frozen**, so a database an earlier build had already created would report version 1 and never
+  gain the constraint, while the code claimed it had. The constraint is now `SCHEMA_V2` and
+  `CURRENT_SCHEMA_VERSION` is 2, applied by an explicit one-step-per-version ladder, each step in its
+  own transaction so an interrupted migration retries the same step rather than finding half a schema.
+  A unit test builds a genuine version-1 database from `SCHEMA_V1` itself, migrates it, and asserts the
+  constraint is live and the older build's folder row survived — which also proves the migration
+  mechanism every future schema change will use.
+
+**L4 — T6 started (2026-10-12):**
+
+- Specs S1–S7 written above before any code, because the previous task's stale spec was the thing that
+  nearly sent a worker in the wrong direction.
+- **Fixture reconnaissance done by the parent first, not handed to the worker as an unknown.** `qpdf`,
+  `mutool` and `pdftk` are absent; `ghostscript` is present but its `pdfwrite` device produces **no
+  object streams** at all (`CompatibilityLevel=1.7`; 0 occurrences of `ObjStm`, `/Type /Page` still
+  plain text), so it cannot produce the R2 fixture. The fixture is therefore built directly and
+  committed alongside its generator, with its page count confirmed by `pdfinfo` (poppler) — an
+  independent implementation, the same cross-check discipline used for T1 and R12.
+- **Empirical evidence planned for T6**: scan the maintainer's real library into a throwaway database and
+  compare every page count against `pdfinfo`. Unit tests prove the parser path; the corpus proves it on
+  real documents, including the pathological ones. That means reading outside the repository, so it was
+  asked for explicitly rather than assumed.
+- **Consent and scope, as given**: the user authorised a **sample of about 20 PDFs**, not the whole tree.
+  The sample is drawn from `/home/tomas-cuevas/Documents/Mega/Libros` (42 PDFs there) and is deliberately
+  loaded with the worst cases — `pdfinfo` ground truth already captured for a 436-page/142.8 MB file, a
+  708-page/64.1 MB file and a 313-page/93.6 MB file, because that is where a page-counting bug would
+  hide. The "192 PDFs" figure elsewhere in this document came from T3's wider sweep of the machine, not
+  from this root; the sample is what was authorised and the evidence will say so rather than implying
+  full coverage.
+- **Fixtures validated twice, by two independent implementations**: `pdfinfo` (poppler) and `lopdf 0.36.0`
+  both report 3 pages for `pages-in-object-stream.pdf` and 4 for `with-info-metadata.pdf`, and `lopdf`
+  extracts `A Known Title` / `A Known Author` from the second. The R2 fixture is therefore known to be
+  both valid and defeating: a naive byte scan of it finds **0** pages against a true count of 3.
+- **Independent verification of T6 found three should-fix issues, all fixed before the first commit**:
+  (1) the in-place `SCHEMA_V1` edit above, replaced by a real V2 migration; (2) symlinks were skipped
+  silently while S5 required reporting what was skipped, so `Discovery` and `ScanReport` now carry a
+  `skipped` list, which is deliberately **not** the failure list because nothing went wrong;
+  (3) S4's wording claimed a failed document "stays `None`", which is false for one that had been
+  counted before — the behaviour (preserve the last known count) is right and the sentence was wrong,
+  so the spec was corrected and a test now pins the interaction with T5's `COALESCE`. Two further
+  verifier notes were accepted as documented limitations rather than changed: an identity-provider
+  failure stores the document without identity and resolves it by path (a document that moves while
+  its identity is unavailable becomes a new row), and `Store::document_count()` exists mainly to make
+  "no duplicates on rescan" provable through the public API.
+- **RED evidence for the parent's fixes**: each new test was falsified by reverting its fix — the
+  folder constraint test failed with `got Ok(1)` against the unconstrained schema, and the
+  unrepresentable-name test failed because the file was skipped — then both files were restored to
+  byte-identical hashes.
+
+**L5 — T6 blocked on its parser, and the plan changed (2026-10-12):**
+
+The empirical run found something the fixtures could not: `lopdf` is **not viable** for a real
+library. The spike then measured it properly, in release builds, against `pdfium` — full method,
+tables and reproduction steps in [`spike/parser/FINDINGS.md`](../../spike/parser/FINDINGS.md):
+
+| Document | Size | `pdfinfo` | `lopdf` (release) | `pdfium` |
+|---|---|---|---|---|
+| Learning Patterns (Quartz/macOS) | 142.80 MB | 436 | 26.3 s / 217 s CPU / 290 MB | **0.0 s / 6.2 MB** |
+| gentleman-programming-book-es (pdf-lib) | 93.58 MB | 313 | **TIMEOUT (60 s)** | **0.1 s / 22.5 MB** |
+| Cracking the Coding Interview (Quartz) | 64.11 MB | 708 | **TIMEOUT (60 s)** | **0.0 s / 9.5 MB** |
+| Historia del Pensamiento III | 34.66 MB | 1015 | 16.8 s / 110 s CPU / 202 MB | **0.0 s / 7.9 MB** |
+| Carl G. Jung - El Hombre y sus Simbolos | 34.60 MB | 314 | 0.9 s / 5.6 s CPU / 76 MB | **0.0 s / 6.7 MB** |
+| Grokking Data Structures (Adobe) | 17.65 MB | 282 | 1.9 s / 12.8 s CPU / 66 MB | **0.0 s / 6.6 MB** |
+| El extranjero - Albert Camus | 0.77 MB | 66 | 0.0 s / 5.6 MB | **0.0 s / 6.1 MB** |
+
+**Both parsers returned the exact `pdfinfo` count wherever they returned one.** The difference is cost
+and completeness, not accuracy: `pdfium` is correct on **7 of 7** in ≤ 0.1 s with a flat 6–22 MB
+footprint, while `lopdf` **never finishes on 2 of 7** and costs up to 26.3 s of wall time, 217 s of
+CPU and 290 MB of memory on the rest.
+
+**A correction, recorded on purpose.** An earlier sweep in this session reported *four* documents as
+"> 60 s, killed", and the live scanner stall was real, but **both ran debug builds**. Re-measured in
+release, two of those four finish (26.3 s and 16.8 s). So the accurate statement is **2 of these 7
+exceed 60 s**, and the "4 of 42 documents never finish" figure this entry first carried is
+**pessimistic and must not be inherited**. The conclusion is unchanged — a parser that cannot finish
+two documents out of seven, and costs three orders of magnitude more on the ones it does finish, is
+the wrong foundation — but the number had to be corrected rather than passed along.
+
+What it is **not**: not size (34.66 MB fails where 34.60 MB takes 0.9 s), not a broken cross-reference
+(all carry a valid `startxref` and `xref`), not an encrypted document, and not a scanner bug —
+`pdfinfo` reads every one of them instantly. The shape of the problem is that `Document::load` builds
+the whole object graph — every image stream included — while this product only needs the page tree and
+the Info dictionary. `pdfium` parallelises nothing and still wins by doing only the required work;
+`lopdf` already uses ~8× parallelism and loses anyway.
+
+**Decision (user): spike `pdfium` against `lopdf` before committing to either.** The plan named
+`lopdf` for T6; that is now a measured question rather than an assumption, so T6 was **not closed** at
+that point (it was closed by L6 below). `pdfium` is the FFI escape hatch this document already
+reserved, it is the engine Chrome renders with, and it is BSD-3-Clause (GPL-3 compatible).
+
+**Spike bounds, because this is the user's machine:** one bounded measurement per (parser, document),
+per-document timeout of 60 s enforced by killing the **process group** — a stopped job does not kill
+its grandchildren, which was learned the hard way here when a probe kept burning 6.6 cores after its
+job was stopped. Total wall budget around ten minutes, and the heavy run happens only after the user
+says go. Ground truth stays `pdfinfo` (poppler), an independent implementation.
+
+**Interim state, recorded so it is not mistaken for finished work**: the T6 scanner exists,
+63 workspace tests pass, clippy is clean, and independent verification's three should-fix findings
+are fixed (a real V2 migration instead of editing `SCHEMA_V1`, a `skipped` list so symlinks are not
+invisible, and corrected S4 wording plus a test pinning that a known page count survives a later
+read failure). It is deliberately **uncommitted**, because its parser may be replaced.
+
+**L6 — T6's parser replaced, and the swap verified (2026-10-12):**
+
+- `oct-scan` now counts pages and reads metadata with `pdfium`, loaded at runtime from
+  `$OCT_PDFIUM_LIB` → `vendor/pdfium/lib` → the system library. `lopdf` survives only as a
+  **dev-dependency that builds the encrypted test fixture**; it never counts pages. The resolver is a
+  pure function taking the explicit value as a parameter, so resolution is tested without mutating
+  process environment.
+- **Full-library cross-check, run by the parent and not accepted from the worker's report**: all 42
+  PDFs under `/home/tomas-cuevas/Documents/Mega/Libros` scanned into a throwaway database, every page
+  count compared against `pdfinfo` — **42/42 agree, 0 mismatches, 0 documents without a count, 0
+  extras**. The whole library indexes in **1.5 s** in a debug build; the same library stalled for
+  roughly ten minutes under `lopdf`.
+- **Two corrections to the parent's own brief**, both surfaced by the worker and both fixed by the
+  parent before verification:
+  1. The brief required `discover()` to surface a missing library. That was wrong — discovery is a
+     filesystem walk and must keep working when page counting cannot run at all. `discover()` no
+     longer touches pdfium; `scan()` and `count_and_persist()` do, before anything is recorded.
+  2. The brief said to report a missing library as `OctError::NotSupported`, which mislabels it: page
+     counting **is** implemented on every platform `oct` targets, it is the native component that is
+     absent, and telling a Linux user that Linux is unsupported is exactly the kind of lie this
+     project refuses elsewhere. A new additive variant,
+     `OctError::ComponentUnavailable { component, message }`, carries the loader's own cause, so "the
+     configured path does not exist" and "the library is the wrong architecture" are different
+     messages instead of one shrug. Both remedies stay in the message.
+- **RED evidence for both fixes, independently**: restoring the `discover()` coupling failed
+  `discovery must not need the pdfium library`, and reverting the variant failed with `expected
+  OctError::ComponentUnavailable, got NotSupported`. Each file was restored to a byte-identical hash
+  afterwards.
+- **Independent verification of the whole T6 change set: S1–S7 all `satisfied`**, and it reproduced
+  the headline number on its own rather than accepting the parent's — 42 documents scanned, 42
+  agreements with `pdfinfo`, 0 mismatches, 0 without a count, 0 extras. Two should-fix findings, both
+  documentation drift caused by this session rather than by the code, both fixed:
+  1. T6's task line and spec S2 still named `lopdf` while the implementation uses `pdfium`; the
+     acceptance text and the status now match the delivered code.
+  2. The test suite needs the native library and a fresh clone would not know it. That is now stated
+     in the crate docs, the test module, and the README, together with the one command that fixes it.
+     The alternative — skipping those tests when the library is absent — was rejected on purpose: a
+     test that silently checks nothing is worse than one that says it cannot run.
+- Also noted by the verifier and left as accepted: `OCT_PDFIUM_LIB` set to a bad path fails rather than
+  silently falling back to the vendor or system library, which is the honest reading of an explicit
+  override, and `pdfium` is bound once per parsing call rather than held, which serialises concurrent
+  scanners through pdfium's own process-global lock instead of racing it.
