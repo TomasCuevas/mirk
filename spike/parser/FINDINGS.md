@@ -82,6 +82,12 @@ to be corrected rather than inherited.
 
 ## Not yet verified — the first follow-ups if this is adopted
 
+> **Update (later the same day):** items 1 and 2 below were verified when the swap landed. `oct-scan`
+> now reads Title/Author through pdfium's metadata API (with `None` for absent values) and pdfium
+> refuses an encrypted document loaded without a password, which surfaces as a reported failure with
+> no page count. Items 3 and 4 remain open, and the whole-library cross-check has since grown to all
+> 42 documents: **42/42 counts agree with `pdfinfo`**, and the library indexes in 1.5 s.
+
 1. **Metadata extraction through `pdfium`.** This spike counted pages only. T6's S3 (Title/Author from
    the Info dictionary) must be re-verified against `pdfium`'s API before `lopdf` is removed
    altogether; the current tests prove it for `lopdf`.
