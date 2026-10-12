@@ -1,0 +1,9 @@
+[package]
+name = "oct-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Operating-system backends for oct"
+
+[dependencies]
+oct-core = { workspace = true }

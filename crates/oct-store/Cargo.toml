@@ -1,0 +1,9 @@
+[package]
+name = "oct-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SQLite persistence for oct"
+
+[dependencies]
+oct-core = { workspace = true }

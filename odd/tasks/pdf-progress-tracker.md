@@ -200,9 +200,13 @@ axis A (OS recent-documents lists), which is a curated signal.
 is therefore load-bearing, and the first-party reader is the real answer. *(Severity reduced by
 the revised shape.)*
 
-**R6 — Nested git repository trap.** A git repository is rooted at `/home/tomas-cuevas`
-(branch `master`, **0 commits**) and `~/Workspace/Proyectos/oct` sits inside it. `git init` in
-`oct` would create a nested submodule-like repository. **Blocks every work-unit commit.**
+**R6 — RESOLVED.** `oct` is an **independent repository** at the project root with **`main`** as the
+default branch, bootstrapped in commit `66f299a`. A git repository does exist at
+`/home/tomas-cuevas` (branch `master`, 0 commits) and still has `oct` as an untracked
+directory nested inside it; that repository is unrelated and is left untouched. Nothing in this
+project runs git against it. If it is ever committed, `oct` would appear as an embedded
+repository — the honest long-term fix is to remove or relocate that accidental home-level
+repository, which is outside this project's scope.
 
 **R7 — Path encoding is a correctness requirement.** The reference corpus has names like
 `Comparación de Métodos de Strings entre JavaScript y Python.pdf`. Unquoted shell iteration over
@@ -378,12 +382,16 @@ platform, first-party reader, i18n scaffolding, license + CONTRIBUTING + CI, pac
 
 ## Open decisions
 
-1. **Product name**: is `oct` the product name, or just the working directory? Needs availability
-   checks before repository creation and package naming.
-2. **Git layout** (R6): blocks all commits. With `oct` now a standalone open-source project, an
-   independent repository is the strongly indicated answer.
+**Nothing blocking.** Both blocking decisions were made by the user:
 
-Everything else is locked. The remaining Phase 0 item (T1) is a measurement, not a decision.
+- **Product name**: **`oct`**.
+- **Git layout**: an independent repository at the project root, default branch **`main`**.
+  Bootstrapped in commit `66f299a`; Phase 1 work proceeds on `feat/phase-1-core`.
+
+**Non-blocking, deferred**: the **frontend framework**. The T4 scaffold deliberately uses plain
+TypeScript + Vite with no framework, so nothing is locked in. React / Svelte / Solid is a real
+choice with long-term consequences — the contributor pool matters for an open-source project — and
+it must be settled before the UI phase (T12 onward), not during a scaffold task.
 
 ## Task log / evidence
 
@@ -405,3 +413,8 @@ false positive by matching its own command line, the same self-contamination cla
 
 **Remaining contained follow-ups**: in-Tauri webview re-verification (continuous scroll, text
 layer, range streaming), content-bound render cost, and the unproven `willReadFrequently` lead.
+
+| Task | Status | Commit | Evidence |
+|---|---|---|---|
+| T0 | **Done** | `66f299a` | Independent repository, default branch `main`, GPL-3.0, README, `.gitignore`. PDF symlinks and vendored pdf.js correctly excluded (`git status --ignored` confirmed). |
+| — | Phase 1 started | — | Working branch `feat/phase-1-core` created from `main`. |

@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/oct-core",
+    "crates/oct-platform",
+    "crates/oct-store",
+    "crates/oct-desktop",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "GPL-3.0"
+authors = ["Tomás Cuevas"]
+description = "Cross-platform PDF reading-progress tracker"
+rust-version = "1.80"
+
+[workspace.dependencies]
+oct-core = { path = "crates/oct-core" }
+oct-platform = { path = "crates/oct-platform" }
+oct-store = { path = "crates/oct-store" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
