@@ -519,6 +519,36 @@ the reading history that is the entire point of the product, and representing "t
 So T7b wires added/changed files into the library and leaves removals as a reported event, and
 "the file is gone but your progress is not" becomes its own task with its own migration.
 
+## Specs — T7b (wiring watcher events into the library)
+
+Written once T7a landed, so the mechanism's contract was real rather than imagined. Same rule as
+every other spec here: acceptance criteria that restate decisions already locked in this document.
+
+- **S1 — Injected, never coupled.** The wiring lives in `oct-scan` and receives the `FolderWatcher`
+  and the `Scanner` by injection, so `oct-scan` still does not depend on `oct-platform` (T6's S7). No
+  async runtime, no new dependency, and no change to `oct-core`, `oct-platform` or `oct-store`.
+- **S2 — `Added`/`Changed` reach the library through T6's path.** The document is counted and
+  persisted with `count_and_persist`, so a PDF that appears in a watched folder shows up with a real
+  page count. T6's failure rules apply unchanged: an unreadable, corrupt or encrypted file is reported
+  and keeps `pages = None`, never `0`.
+- **S3 — `Removed` does **not** change the library.** It is reported to the caller and nothing else
+  happens. Deleting the row would destroy the reading history that is the whole point of the product,
+  and representing absence needs `documents.status`, which is deferred — the decision recorded in L7.
+- **S4 — The watcher's own blind spots get the right response.** `Lost` means events were dropped, so
+  the reported path is **rescanned**; that is the recovery. `Unwatchable` is reported and **not**
+  rescanned, because rescanning cannot fix a path that cannot be watched.
+- **S5 — Nothing is swallowed.** Every outcome — counted, failed, removed, lost, unwatchable — reaches
+  one sink the caller supplies, so the application can log it or tell the user. The wiring never panics
+  and never blocks beyond the call itself.
+- **S6 — The caller's order is scan first, then watch**, and the spec says so because T7a cannot watch
+  a change that happens before its watches are installed. The wiring itself only reacts to changes; the
+  initial scan is the caller's job with `Scanner::scan`.
+
+**Deliberately not built**: any batching layer. Events already arrive coalesced per path, and pdfium
+counts a document in about a millisecond (T6's measured 1.5 s for a 42-document library), so
+per-event processing is not a bottleneck worth a second buffering window. Also deferred: the UI that
+shows these outcomes, and `documents.status` for representing absence.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
@@ -967,3 +997,21 @@ read failure). It is deliberately **uncommitted**, because its parser may be rep
 - **Also learned**: a verification subagent ran `codegraph init` inside the repository and left
   `.codegraph/` behind. It was removed by hand. A read-only verifier that writes to the tree it is
   verifying is a contradiction, and the brief for the next one says so explicitly.
+
+**L10 — T7b scoped (2026-10-12):**
+
+- T7b is the half of T7 that touches the library, and it was specified only once T7a's mechanism
+  existed, so the contract it wires is real rather than imagined. S1–S6 above.
+- **Decisions taken here, recorded rather than assumed:**
+  1. **A removal does not touch the store.** The event is reported and that is all. Deleting the row
+     would destroy the reading history that is the product's whole point, and representing absence
+     needs `documents.status`, which is deferred. This deliberately repeats L7, because it is the
+     decision a future contributor is most likely to "fix" without having read why.
+  2. **`Lost` is rescanned; `Unwatchable` is not.** Dropped events are recoverable by looking again; a
+     path that cannot be watched is not, and rescanning it would only produce a second identical
+     failure.
+  3. **No batching layer.** Events already arrive coalesced per path and a document costs about a
+     millisecond to count (T6 measured 1.5 s for 42 real documents), so a second buffering window
+     would be complexity with no bottleneck to justify it.
+  4. **Scan first, then watch** is the caller's order, written into the spec because T7a cannot see a
+     change that happens before its watches are installed — the startup race it documents.
