@@ -324,8 +324,10 @@ UI can warn before opening.
 ```sql
 documents(
   id, path, path_normalized, uri,
-  volume_id, file_index,        -- portable identity (dev+ino on POSIX, serial+index on Windows)
-  size, mtime, sha1,
+  file_id_kind,                 -- 'posix' | 'windows' | 'content-hash' | NULL (no identity known)
+  volume_id, file_index,        -- decimal TEXT: the full u64 range must survive SQLite's INTEGER
+  content_hash,                 -- FileId::ContentHash verbatim; the algorithm lives in the value
+  size, mtime,
   title, author, pages, pages_source,
   discovered_via,               -- 'watched' | 'recent' | 'live' | 'native'
   platform,
@@ -348,6 +350,18 @@ at Evince close time, and progress typed by hand are **not the same truth**. Col
 one column yields a UI that silently lies — a precise-looking 40% that corresponds to nothing.
 Provenance lets the UI be honest: *"p. 12 of 80, recorded when Evince closed"*.
 
+**Reconciled with T5's implementation (2026-10-12).** Three details were only visible once the
+schema was written, and all three are plan changes rather than implementation drift:
+
+1. **`file_id_kind` added.** `volume_id` / `file_index` alone cannot tell a POSIX `(dev, ino)` pair
+   from a Windows `(serial, index)` pair, and neither can carry `ContentHash`. Without a
+   discriminator the three `FileId` variants are not losslessly storable, so S3 would fail.
+2. **Numeric identity stored as decimal TEXT.** `u64` exceeds SQLite's signed 64-bit `INTEGER`;
+   `u64::MAX` must round-trip, and a truncating cast would silently merge two documents.
+3. **`sha1` renamed `content_hash`.** T11's fallback hashes with **SHA-256**, so a column named
+   `sha1` would have been a permanent lie in a name that cannot be fixed once data exists. The
+   algorithm stays inside the value.
+
 ## Roadmap (revised)
 
 **Phase 0 — Validation spike. COMPLETE.** T1 (Evince flush timing), T2 (Okular), T3 (metadata
@@ -363,22 +377,61 @@ counting, watcher, recent-documents ingestion (axis A), provider registry.
 **Phase 4 — UI.** Library, filters, capabilities screen, manual override, suggestion queue.
 **Phase 5 — Ecosystem.** Adapters for SumatraPDF, Zathura; contributor docs; packaging.
 
-### Existing tasks
+### Task list (reconciled 2026-10-12)
 
+The list below is the current record. Commit hashes and measurements live in the evidence tables
+further down; this block is what a worker reads to know what is done and what is active.
+
+- [x] **T0** Resolve git repository layout — done (`66f299a`): independent repository, default branch `main`
+- [x] **T1** Measure Evince GVFS page-write semantics — done: the write is **Live**; off-by-one confirmed 3x
 - [x] **T2** Validate snap Okular docdata path and sandbox access — done, non-issue
 - [x] **T3** Benchmark GVFS metadata reads across 192 PDFs — done, 10.0 ms/file
-- [ ] **T1** Measure Evince GVFS page-write semantics (live vs close) — **open**
-- [ ] **T0** Resolve git repository layout — **blocker**
-- [ ] **T4** Scaffold Tauri v2 workspace and crate layout — needs scope revision
-- [ ] **T5** SQLite schema and migrations — needs portable-identity revision
-- [ ] **T6** Watched-folder scanner with real page counting via `lopdf`
+- [x] **T4** Scaffold Tauri v2 workspace and platform abstraction — done (`b34ec4f`)
+- [x] **T11** Portable file identity (`FileIdentity`) — done (`2b8e9da`)
+- [x] **T5** SQLite schema, migrations and the queries behind them — done (`c2a059d`); specs below
+- [ ] **T6** Watched-folder scanner with real page counting via `lopdf` — resolves R2
 - [ ] **T7** inotify watcher over watched folders (Linux; per-OS backend later)
-- [ ] **T8** `/proc/*/fd` open-document detector (Linux backend of axis B)
-- [ ] **T9** Progress provider registry plus Evince GVFS adapter
-- [ ] **T10-T16** Tray, UI, manual override, capabilities screen, suggestion queue
+- [ ] **T8** `/proc/*/fd` open-document detector — Linux backend of axis B
+- [ ] **T12** `RecentDocumentsSource` for `recently-used.xbel` — Linux backend of axis A
+- [ ] **T9** Progress provider registry plus Evince GVFS adapter — the first real `ProgressProvider` (`Live`), and the first caller of `Launcher`
+- [ ] **T10, T13–T16** Tray, library and UI, manual override, capabilities screen, suggestion queue
 
-New tasks implied by the scope change: portable file identity, recent-documents ingestion per
-platform, first-party reader, i18n scaffolding, license + CONTRIBUTING + CI, packaging matrix.
+Still unnumbered, implied by the scope change: first-party reader (pdf.js), i18n scaffolding,
+license + CONTRIBUTING + CI, packaging matrix, in-Tauri webview re-verification.
+
+**Numbering note.** An earlier draft gave axis C (`Launcher`) the label `T7` in the trait table and
+reused `T12` for both recent documents and the UI phase. The authoritative order is the one
+recorded with T4 — `T5 → T6 → T7 (inotify) → T8 (/proc) → T9 (providers) → T12 (recent documents)` —
+and `Launcher` has no dedicated number: it lands together with `T9`, whose Evince adapter is the
+first thing that needs to reopen a document at a page.
+
+## Specs — T5 (SQLite schema, migrations, queries)
+
+Acceptance criteria. They are **not new product requirements**: each one restates a decision locked
+earlier in this document, so a worker does not have to reinterpret it. Line references are to this
+file's own "Data model" section, the `oct-store` crate documentation, and the T11 record.
+
+- **S1 — The six tables, by name.** `documents`, `progress`, `open_events`, `viewers`, `folders`,
+  `suggestions`, with the columns given in "Data model". No table may be silently dropped or renamed.
+- **S2 — Provenance survives storage.** `progress` keeps `source` and `confidence` as **separate
+  columns**; they are never collapsed into one value or inferred from each other. Two rows with the
+  same page but different `source`/`confidence` must be distinguishable after a round trip.
+- **S3 — Portable identity, never only a path.** `documents` persists `oct_core::FileId` in all three
+  variants — `Posix { dev, ino }`, `Windows { volume_serial, file_index }`, `ContentHash(String)` —
+  and can find a document again by identity alone.
+- **S4 — Pages are zero-based in storage.** `progress.page` matches `StoredProgress::page`
+  (0-based). The 1-based `evince --page-index` conversion stays at the adapter boundary and must
+  **not** leak into the schema.
+- **S5 — The database lives in the user data directory.** `$XDG_DATA_HOME/oct` on Linux,
+  `%APPDATA%` on Windows, `~/Library/Application Support` on macOS — never the repository, never the
+  current working directory.
+- **S6 — Migrations are versioned, forward-only and idempotent.** Opening a database brings it to
+  the current schema version and records that version inside the database; opening an already
+  current database changes nothing and succeeds; a fresh file is created at the current version.
+- **S7 — Paths are opaque UTF-8 and are not Unicode-normalised.** The GVFS lookup key is a
+  percent-encoded `file://` URI, so NFC/NFD must survive a round trip byte-for-byte (risk R7).
+- **S8 — Honest failures.** Nothing returns an empty result to mean "unsupported"; failures surface
+  as `oct_core::OctError`, consistent with the honest-stub invariant established in T4.
 
 ## Open decisions
 
@@ -420,6 +473,7 @@ layer, range streaming), content-bound render cost, and the unproven `willReadFr
 | — | Phase 1 started | — | Working branch `feat/phase-1-core` created from `main`. |
 | T4 | **Done** | `b34ec4f` | Cargo workspace, 4 crates, 1391 lines of Rust across 39 tracked files. `cargo build --workspace` and 25 tests pass, clippy `--all-targets -D warnings` clean, frontend builds, app launches and exits with no process left. See "Phase 1 — what T4 established" below. |
 | T11 | **Done** | `2b8e9da` | Portable POSIX file identity. Reusable `#[cfg(unix)]` module so macOS inherits it; `st_dev`/`st_ino` primary; streamed SHA-256 fallback when either id is zero. 32 tests pass (was 25), clippy clean. Hard links proven to share an identity, and the stub test was replaced rather than deleted. |
+| T5 | **Done** | `453a849` + `c2a059d` | `oct-store` is a real persistence layer: six tables, forward-only idempotent migrations, lossless `FileId` round trips and lookup by identity alone, per-platform database location. 47 tests pass (was 32), clippy clean. Two should-fix defects were found by an independent verification pass and fixed before the first commit — see L3 in the log for both, the accepted residual, and the `NULL`-distinct trap the test caught. |
 
 ## Phase 1 — what T4 established
 
@@ -501,3 +555,93 @@ became project `tomas-cuevas` — which is exactly why every `oct` memory writte
 repository existed was misattributed, and the same artifact behind R6. Removing that empty
 `~/.git` would restore correct classification for home-directory work, but it is outside this
 repository's scope and remains a user decision.
+
+**RESOLVED for new writes (verified 2026-10-12, session `01a15ee9-…`).** A Pi session started
+*inside* `oct` writes to Engram project `oct`. Proven directly, not inferred: two observations held
+by `oct` (`5970`, the write-target probe, and `5977`, the migration summary) were deleted from this
+session and the deletion was confirmed by read-back returning "observation not found". The earlier
+blocker was never about detection — `mem_current_project` had always resolved `oct` from `git_root`
+— it was that Engram keys the project to the **Pi session**, so a resumed session keeps the binding
+it was created with. The fix is a new session, not a restart of the same one.
+
+## Log
+
+**L1 — user request, verbatim (2026-10-12, session `01a15ee9-…`):**
+
+> Estuve trabajando en otra sesion anteriormente, necesito que retomes el trabajado, la sesiona anterior me dio para esta sesion lo siguiente:
+>
+> Lo que queda pendiente para la sesión nueva
+>
+>  1. Las escrituras nuevas: una sesión nueva arrancada desde oct es lo único que ata los writes al proyecto correcto. Reiniciar Pi no alcanza porque reanuda el mismo session id.
+>  2. Limpiar dos artefactos míos en oct: la 5970 (sonda) y la 5977 (resumen de la migración). No puedo borrarlas yo — son escrituras a oct, que es justo lo bloqueado. Se borran en un segundo desde allá.
+>  3. La duplicación 5951 / 5975 sobre R12 es deliberada: la 5951 es el resumen en inglés, la 5975 trae los números crudos y la lista de huecos residuales. Si preferís un solo registro, se saca la 5975.
+>
+> Cuando abras la sesión, alcanza con decirle que lea odd/tasks/pdf-progress-tracker.md y continúe desde la próxima tarea sin terminar.
+
+**L2 — decisions taken in this session:**
+
+- Item 1 verified, not assumed: the two deletions below succeeded **from this session**, which is the
+  evidence that writes now bind to `oct`. Recorded under the Engram section above.
+- Item 2 done: `5970` and `5977` soft-deleted (`hard_delete: false`, so the operation is reversible),
+  confirmed by read-back. No information was lost: the migration audit record survives in
+  `odd/engram-migration.md`, which is committed.
+- Item 3: **both `5951` and `5975` are kept.** They carry different `topic_key`s and neither is a
+  copy of the other: `5951` is the English summary, `5975` adds the raw per-page numbers, the
+  residual-gap list and the process-verification lesson. Deleting `5975` would drop the residual
+  gaps — the part that says R12 is *downgraded, not retired*. Remove it only if the user asks.
+- Next unfinished task per the reconciled list: **T5**. Checked against the T4 record's own
+  "Next in order" line, which names T5 first and notes that it needs T11's portable identity to be
+  honest — T11 has since landed, so T5 is now unblocked.
+
+**L3 — T5 delivered and verified (2026-10-12):**
+
+- `crates/oct-store` is a real persistence layer: the six tables, forward-only idempotent migrations
+  recorded with `PRAGMA user_version`, lossless `FileId` round-tripping and lookup by identity alone,
+  and the minimum query surface needed to prove S1–S8. `OctError::Storage` was added as the single
+  new error variant; queries with no caller yet are deliberately absent and listed as such in the
+  crate docs.
+- **Deviation found and corrected by the parent, not by the worker:** the worker stored the content
+  hash in a column named `sha1` while T11's fallback is SHA-256. Renamed to `content_hash` before the
+  first commit, because after data exists a rename is a migration and the wrong name would have been
+  permanent. Recorded in the Data model section above.
+- Two worker-added columns beyond the original sketch (`file_id_kind`, numeric identity as TEXT) were
+  reviewed and accepted for the reasons in the Data model section.
+- Open, low-severity notes: `path_normalized` currently holds the same bytes as `path` (R7 forbids
+  Unicode normalisation, so a future cross-platform matcher will need its own fold rule), and
+  `ProgressSource::External(&'static str)` is reconstructed through a small process-global string
+  interner because the domain type carries a `&'static str` — T9's provider registry should replace
+  that lookup with the registry's own ids.
+- **Independent verification (a separate `gentle-ai-verify` pass, not the implementer's own checks)
+  found one should-fix defect**: `upsert_document` matched by identity *or* path but never both, so a
+  document whose identity became known later forked into a second row, splitting its reading history.
+  Fixed by the parent before the first commit, with the matching rule now explicit in the crate docs:
+  identity first (it survives renames); a row found by path that has no identity yet **adopts** the
+  supplied one; a path that now holds a **different** file gets its own row, because attributing the
+  older row's progress to the replacement is the silent lie the provenance columns exist to prevent.
+  Path lookups resolve to the newest row for the path. A second, related hole was closed at the same
+  time: an upsert never erases a stored value with an unknown (`NULL`) one, so a caller that does not
+  know the identity, page count or metadata cannot destroy what an earlier caller established.
+  Those semantics are the parent's decision on a question the plan left open; they are recorded here
+  because T6 is the first caller and will depend on them.
+- **TDD evidence for the fix**: the two added tests (`a_document_that_gains_an_identity_keeps_its_row_and_its_progress`,
+  `an_upsert_never_erases_known_values_with_unknown_ones`) were each falsified by temporarily reverting
+  the corresponding fix — both failed, the other 12 passed — then the file was restored to a byte-identical
+  hash. The S1 test now also asserts the **documented columns** of all six tables, not only their names.
+- **Open, unverified**: the declared MSRV (`rust-version = "1.80"`) was never exercised against
+  `rusqlite 0.32` / `libsqlite3-sys 0.30`; the build is green only on the installed toolchain.
+- **A second verification round found one more should-fix**: the read-then-write in `upsert_document`
+  is not a transaction, so two connections to the same database could both see an identity as absent
+  and both insert it. The invariant is now enforced by the **schema** — a partial unique index over
+  the identity columns — so the loser of that race gets an honest `OctError::Storage` instead of
+  silently forking a document. The residual is deliberate and recorded: writers are not serialised
+  with an immediate transaction and the failure is not retried. The honest statement of why: `Store::open`
+  is called by tests only today, so **no production caller exists that could race this**, and inventing
+  a retry policy before the first writer exists would be guessing. The moment a second writer does exist,
+  this line is the reminder that it was accepted deliberately.
+- **A trap worth remembering, caught by the test rather than by review**: a plain composite unique
+  index over nullable identity columns constrains **nothing**, because every row leaves the other
+  kinds' columns `NULL` and SQLite treats each `NULL` as distinct — two identical `posix` rows would
+  both be "unique". The index therefore normalises `NULL` to an empty string inside the index
+  (`COALESCE`) and is partial (`WHERE file_id_kind IS NOT NULL`) so identity-less rows stay
+  unconstrained, as the path-supersede rule requires. The test that proves the constraint is live did
+  fail against the naive version before this was understood.
