@@ -7,11 +7,13 @@
 //! rather than discovered later.
 
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use oct_core::{
-    Availability, Confidence, Document, FileId, LaunchOutcome, OctError, OpenDocument, Platform,
-    ProgressCapability, ProgressProvider, ProgressSource, RecentDocument, RecentDocumentsSource,
-    StoredProgress, FileIdentity, Launcher, OpenDocumentDetector,
+    Availability, Confidence, Document, FileId, FolderWatcher, LaunchOutcome, OctError,
+    OpenDocument, Platform, ProgressCapability, ProgressProvider, ProgressSource, RecentDocument,
+    RecentDocumentsSource, StoredProgress, WatchEvent, WatchTarget, FileIdentity, Launcher,
+    OpenDocumentDetector,
 };
 
 /// A provider that implements every method with the cheapest honest answer.
@@ -120,6 +122,27 @@ impl FileIdentity for MinimalIdentity {
     }
 }
 
+struct MinimalWatcher;
+
+impl FolderWatcher for MinimalWatcher {
+    fn id(&self) -> &'static str {
+        "minimal-watcher"
+    }
+
+    fn platform(&self) -> Platform {
+        Platform::current()
+    }
+
+    fn watch(
+        &self,
+        _targets: &[WatchTarget],
+        _stop: &AtomicBool,
+        _on_event: &mut dyn FnMut(WatchEvent),
+    ) -> Result<(), OctError> {
+        Ok(())
+    }
+}
+
 #[test]
 fn every_platform_trait_is_object_safe() {
     // If any of these traits lost object safety, this test would not compile — which is the point.
@@ -128,6 +151,7 @@ fn every_platform_trait_is_object_safe() {
     let detector: Box<dyn OpenDocumentDetector> = Box::new(MinimalDetector);
     let launcher: Box<dyn Launcher> = Box::new(MinimalLauncher);
     let identity: Box<dyn FileIdentity> = Box::new(MinimalIdentity);
+    let watcher: Box<dyn FolderWatcher> = Box::new(MinimalWatcher);
 
     assert_eq!(providers.len(), 1);
     assert_eq!(providers[0].id(), "minimal");
@@ -135,6 +159,7 @@ fn every_platform_trait_is_object_safe() {
     assert_eq!(detector.id(), "minimal-detector");
     assert_eq!(launcher.id(), "minimal-launcher");
     assert_eq!(identity.id(), "minimal-identity");
+    assert_eq!(watcher.id(), "minimal-watcher");
 }
 
 #[test]
@@ -204,6 +229,7 @@ fn adapters_are_send_and_sync_so_scanning_can_leave_the_ui_thread() {
     assert_send_sync::<dyn OpenDocumentDetector>();
     assert_send_sync::<dyn Launcher>();
     assert_send_sync::<dyn FileIdentity>();
+    assert_send_sync::<dyn FolderWatcher>();
 }
 
 #[test]

@@ -19,7 +19,8 @@
 //! Every trait here is object-safe and `Send + Sync`, because the registry stores
 //! `Box<dyn ProgressProvider>` and the scanning happens off the interface thread.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use crate::domain::{Document, FileId, OpenDocument, Platform, RecentDocument};
 use crate::error::OctError;
@@ -169,4 +170,116 @@ pub trait FileIdentity: Send + Sync {
     /// For [`FileId::ContentHash`] this reads the whole file, so implementations should prefer a
     /// native identifier and only hash when the native one is unusable.
     fn identity(&self, path: &Path) -> Result<FileId, OctError>;
+}
+
+/// A folder to watch and whether its subdirectories are watched as well.
+///
+/// `path` is kept as a [`PathBuf`] on purpose: see contract rule 3 on [`FolderWatcher`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchTarget {
+    /// The folder to watch.
+    ///
+    /// A watcher canonicalises this path when it starts, so a symlink target resolves to the real
+    /// directory and events are reported under the same canonical path the scanner stores. The
+    /// path is never rewritten for display — see contract rule 3 on [`FolderWatcher`].
+    pub path: PathBuf,
+    /// When true, every directory under `path` is watched too, *including directories that appear
+    /// after the watch starts*. A subdirectory that was created while watching must never become
+    /// invisible.
+    pub recursive: bool,
+}
+
+/// What happened to a watched path.
+///
+/// The first three describe changes to a file in the tree. The last two describe the **watcher
+/// itself**: they are not file changes, and a consumer must treat them as "my view of this path
+/// may be wrong" rather than as an add, change or remove.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WatchEventKind {
+    /// The path appeared in a watched folder.
+    Added,
+    /// The path was already there and a write to it completed.
+    Changed,
+    /// The path disappeared from a watched folder.
+    Removed,
+    /// Events for this path may have been dropped — for example the kernel's event queue
+    /// overflowed. The consumer must rescan `path`; it must not assume its view is current.
+    Lost,
+    /// This path could not be watched, so changes inside it are invisible until it is watched
+    /// again. Typically a directory that could not be read, or for which a watch could not be
+    /// installed for a reason other than the kernel's hard watch limit.
+    Unwatchable,
+}
+
+/// A settled change to a watched folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchEvent {
+    /// The full path the event concerns, exactly as the watcher composed it — never rewritten.
+    pub path: PathBuf,
+    /// What happened to `path`.
+    pub kind: WatchEventKind,
+}
+
+/// Watches folders and reports files that have **settled**, meaning the writer has finished with
+/// them.
+///
+/// This is what lets `oct` notice new and updated PDFs without re-reading the whole library on a
+/// timer. Unlike every other trait here it does not answer a question and return: [`watch`] runs a
+/// blocking loop on the caller's own thread until the caller asks it to stop.
+///
+/// [`watch`]: FolderWatcher::watch
+///
+/// # The contract
+///
+/// 1. **Settled files only.** A file being copied is opened, written in many chunks and closed.
+///    `Added`/`Changed` describe the *completed* write, never the chunks: reporting a half-copied
+///    PDF would make the scanner parse it, fail, and leave a perfectly good document in the
+///    library with no page count one second later.
+/// 2. **Coalesced, not streamed.** A burst of events for the same path within a short window is
+///    reported once. Copying one large PDF must not produce hundreds of events.
+/// 3. **Paths are opaque.** Events carry [`PathBuf`], never `String`. Nothing is split, trimmed,
+///    shell-quoted or Unicode-normalised on the way through — a path is bytes the filesystem
+///    understands, not text for display.
+/// 4. **Report your own blind spots.** Watching can fail quietly in ways no file event can
+///    express: the kernel's event queue can overflow, and a corner of the tree may be unreadable
+///    or unwatchable. The watcher reports those as [`WatchEventKind::Lost`] and
+///    [`WatchEventKind::Unwatchable`] instead of staying silent, because a library that goes stale
+///    without saying so is exactly the failure this project refuses everywhere else.
+/// 5. **Honest failure.** If the operating system refuses a watch — the watch limit is exhausted,
+///    for example — the call returns one error naming the limit. Continuing with a silently
+///    partial watch would leave part of the tree permanently invisible, which is worse than
+///    failing.
+/// 6. **Never panic, never spin, no async.** The loop belongs on the caller's thread; it checks
+///    `stop` regularly and sleeps between checks rather than busy-waiting.
+///
+/// # What a removal means
+///
+/// A `Removed` event is reported and nothing else happens. It deliberately does not delete anything
+/// from the library: the reading history attached to a document is the reason `oct` exists, and
+/// representing "the file is gone" needs a `documents.status` column that does not exist yet.
+/// Treating a removal as a deletion would destroy the very data the product protects.
+pub trait FolderWatcher: Send + Sync {
+    /// Stable identifier for this watcher implementation.
+    fn id(&self) -> &'static str;
+
+    /// The platform this watcher is for.
+    fn platform(&self) -> Platform;
+
+    /// Watches `targets`, calling `on_event` once per settled change, until `stop` is set.
+    ///
+    /// Runs on the calling thread and returns only when `stop` becomes true. Implementations must
+    /// check `stop` regularly enough to return promptly, and must not panic: a folder that
+    /// disappears mid-watch is an ordinary event, not a fatal error.
+    ///
+    /// `on_event` is called from this thread, so it must not block for long. Events already
+    /// observed but not yet coalesced may be delivered before the call returns.
+    ///
+    /// Besides the three file changes, it may report the watcher's own blind spots as
+    /// [`WatchEventKind::Lost`] and [`WatchEventKind::Unwatchable`]; see the contract above.
+    fn watch(
+        &self,
+        targets: &[WatchTarget],
+        stop: &AtomicBool,
+        on_event: &mut dyn FnMut(WatchEvent),
+    ) -> Result<(), OctError>;
 }

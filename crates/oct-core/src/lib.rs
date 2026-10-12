@@ -22,10 +22,13 @@
 //! | A. Recent documents | [`RecentDocumentsSource`] | Which PDFs did the user open recently? |
 //! | B. Live detection | [`OpenDocumentDetector`] | What is open *right now*? |
 //! | C. Launch | [`Launcher`] | How do I open a document at a given page? |
+//! | D. Watched folders | [`FolderWatcher`] | Which PDFs changed, and when are they settled? |
 //!
 //! Reading progress itself comes from [`ProgressProvider`], and file identity from
 //! [`FileIdentity`] — identity is an axis of its own because `(device, inode)` does not exist on
-//! Windows.
+//! Windows. `FolderWatcher` is the sixth trait: watching a folder is an OS-specific capability
+//! like the others, so it lives behind a trait rather than scattering `#[cfg]` through the
+//! product.
 
 pub mod domain;
 pub mod error;
@@ -37,7 +40,7 @@ pub use domain::{Document, FileId, OpenDocument, Platform, RecentDocument};
 pub use error::OctError;
 pub use progress::{Confidence, ProgressCapability, ProgressSource, StoredProgress};
 pub use traits::{
-    Availability, FileIdentity, LaunchOutcome, Launcher, OpenDocumentDetector, ProgressProvider,
-    RecentDocumentsSource,
+    Availability, FileIdentity, FolderWatcher, LaunchOutcome, Launcher, OpenDocumentDetector,
+    ProgressProvider, RecentDocumentsSource, WatchEvent, WatchEventKind, WatchTarget,
 };
 pub use uri::file_uri_from_path;
