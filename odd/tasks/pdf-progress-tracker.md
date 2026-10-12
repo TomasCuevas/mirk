@@ -395,7 +395,7 @@ further down; this block is what a worker reads to know what is done and what is
 - [x] **T11** Portable file identity (`FileIdentity`) — done (`2b8e9da`)
 - [x] **T5** SQLite schema, migrations and the queries behind them — done (`c2a059d`); specs below
 - [x] **T6** Watched-folder scanner with real page counting via `pdfium` — done (`a5b3ea5`); resolves R2; specs below
-- [ ] **T7** inotify watcher over watched folders (Linux; per-OS backend later) — T7a (mechanism) done; T7b (library wiring) remains; specs below
+- [x] **T7** inotify watcher over watched folders (Linux; per-OS backend later) — done (T7a `8355b2d`, T7b `41e11c6`); specs below
 - [ ] **T8** `/proc/*/fd` open-document detector — Linux backend of axis B
 - [ ] **T12** `RecentDocumentsSource` for `recently-used.xbel` — Linux backend of axis A
 - [ ] **T9** Progress provider registry plus Evince GVFS adapter — the first real `ProgressProvider` (`Live`), and the first caller of `Launcher`
@@ -592,6 +592,7 @@ layer, range streaming), content-bound render cost, and the unproven `willReadFr
 | T5 | **Done** | `453a849` + `c2a059d` | `oct-store` is a real persistence layer: six tables, forward-only idempotent migrations, lossless `FileId` round trips and lookup by identity alone, per-platform database location. 47 tests pass (was 32), clippy clean. Two should-fix defects were found by an independent verification pass and fixed before the first commit — see L3 in the log for both, the accepted residual, and the `NULL`-distinct trap the test caught. |
 | T6 | **Done** | `57f8c4a` + `a5b3ea5` | Watched-folder scanner with `pdfium` page counting, plus the `folders` API and the project's **first migration (V2)**. 69 tests pass (was 47), clippy clean. Full-library cross-check run independently by the parent *and* by the verifier: **42/42 page counts agree with `pdfinfo`**, 0 documents without a count, 0 extras, whole library in **1.5 s**. The parser was chosen by measurement, not assumption — `spike/parser/FINDINGS.md`, log entries L5 and L6. |
 | T7a | **Done** | `e6003e2` + `8355b2d` | The sixth trait `FolderWatcher` (with `WatchTarget`, `WatchEvent`, `WatchEventKind`) plus the Linux inotify backend and the honest `NotSupported` stub. **85 tests pass** (was 69), clippy clean, and both non-Linux targets type-check. Verified twice: attempt 1 found a blocking defect — a directory moved out of a target stayed watched, so events outside the tree were reported under stale paths — plus two should-fix; attempt 2 settled those and found the coalescing window surviving a subtree release. The verification cap was reached there, so the last delta is parent-checked and RED-pinned only — stated plainly in L9. |
+| T7b | **Done** | `41e11c6` | `WatchBridge` wires watcher events into the library: added/changed files counted and persisted, removals reported with the row and its reading progress deliberately kept, `Lost` rescanned, `Unwatchable` reported without pretending a recovery. **93 tests pass** (was 85), clippy clean, `oct-scan` still free of any `oct-platform` dependency, and independent verification marked **S1–S6 all satisfied with no findings**. |
 
 ## Phase 1 — what T4 established
 
@@ -1015,3 +1016,21 @@ read failure). It is deliberately **uncommitted**, because its parser may be rep
      would be complexity with no bottleneck to justify it.
   4. **Scan first, then watch** is the caller's order, written into the spec because T7a cannot see a
      change that happens before its watches are installed — the startup race it documents.
+
+**L11 — T7 closed (2026-10-12):**
+
+- T7b landed: `WatchBridge` consumes settled watcher events and updates the library, with one sink for
+  every outcome. **93 tests pass** (was 85), clippy clean, `oct-scan` still has no `oct-platform`
+  dependency, and independent verification marked **S1–S6 all satisfied with no findings** — the first
+  clean pass in this task, after T7a needed two rounds.
+- The four per-event decisions were verified as behaviour rather than as comments: `Removed` reaches no
+  store call at all, and its test asserts the row, the page count **and** the recorded progress all
+  survive, so a future edit that deletes a row fails loudly; `Lost` reports and rescans while
+  `Unwatchable` reports and does not, because reading a path cannot make it watchable.
+- **T7 is complete**: the watcher exists, it reports its own blind spots, and the library is wired to
+  it. What remains of Phase 1 is T8 (`/proc` open-document detection, axis B), T9 (the provider registry
+  plus the Evince GVFS adapter) and T12 (`recently-used.xbel`, axis A) — then the tray and the UI.
+- **The residual from T7a still stands and is not quietly absorbed by this entry**: the watcher
+  mechanism's last delta is parent-checked and RED-pinned but was never independently re-verified,
+  because the two-attempt cap was reached. Everything built after it — this task — was verified
+  normally.
