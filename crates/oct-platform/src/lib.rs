@@ -31,7 +31,7 @@ mod posix;
 mod unsupported;
 
 use oct_core::{
-    FileIdentity, Launcher, OctError, OpenDocumentDetector, ProgressProvider,
+    FileIdentity, FolderWatcher, Launcher, OctError, OpenDocumentDetector, ProgressProvider,
     RecentDocumentsSource,
 };
 
@@ -48,6 +48,8 @@ pub struct Backends {
     pub launcher: Box<dyn Launcher>,
     /// Portable file identity, used to recognise documents across moves and renames.
     pub file_identity: Box<dyn FileIdentity>,
+    /// Watched folders: reports files once a write to them has settled.
+    pub folder_watcher: Box<dyn FolderWatcher>,
 }
 
 /// Every backend for the platform this binary was compiled for.
@@ -98,6 +100,7 @@ mod tests {
         assert_eq!(backends.recent_documents.platform(), expected);
         assert_eq!(backends.open_documents.platform(), expected);
         assert_eq!(backends.launcher.platform(), expected);
+        assert_eq!(backends.folder_watcher.platform(), expected);
     }
 
     #[test]
@@ -110,6 +113,7 @@ mod tests {
             backends.open_documents.id(),
             backends.launcher.id(),
             backends.file_identity.id(),
+            backends.folder_watcher.id(),
         ];
 
         let mut sorted = ids.to_vec();

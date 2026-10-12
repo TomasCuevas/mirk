@@ -34,3 +34,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 pdfium-render = { version = "0.8", default-features = false, features = ["pdfium_latest", "thread_safe"] }
 sha2 = "0.10"
 serde_json = "1"
+# Linux file watching, used only by `oct-platform` behind `#[cfg(target_os = "linux")]`.
+# License: **ISC** (not MIT as the brief assumed), which is permissive and GPL-3.0 compatible.
+# Default features are off on purpose: they pull in `tokio` and `futures-util` for the async
+# `EventStream`, and this workspace has no async runtime (S6).
+inotify = { version = "0.11", default-features = false }

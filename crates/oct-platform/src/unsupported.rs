@@ -8,10 +8,11 @@
 //! impossible, and would be a worse signal than a runtime answer that names the missing capability.
 
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use oct_core::{
-    FileId, FileIdentity, LaunchOutcome, Launcher, OctError, OpenDocument, OpenDocumentDetector,
-    Platform, RecentDocument, RecentDocumentsSource,
+    FileId, FileIdentity, FolderWatcher, LaunchOutcome, Launcher, OctError, OpenDocument,
+    OpenDocumentDetector, Platform, RecentDocument, RecentDocumentsSource, WatchEvent, WatchTarget,
 };
 
 use crate::{not_supported, Backends};
@@ -21,13 +22,14 @@ fn platform() -> Platform {
     Platform::current()
 }
 
-/// Backends for an unsupported platform. All four report `NotSupported`.
+/// Backends for an unsupported platform. All five report `NotSupported`.
 pub(super) fn backends() -> Backends {
     Backends {
         recent_documents: Box::new(UnsupportedRecentDocuments),
         open_documents: Box::new(UnsupportedOpenDocuments),
         launcher: Box::new(UnsupportedLauncher),
         file_identity: Box::new(UnsupportedFileIdentity),
+        folder_watcher: Box::new(UnsupportedFolderWatcher),
     }
 }
 
@@ -92,5 +94,43 @@ impl FileIdentity for UnsupportedFileIdentity {
 
     fn identity(&self, _path: &Path) -> Result<FileId, OctError> {
         Err(not_supported("file identity", platform()))
+    }
+}
+
+/// Watched folders, unimplemented here.
+pub struct UnsupportedFolderWatcher;
+
+impl FolderWatcher for UnsupportedFolderWatcher {
+    fn id(&self) -> &'static str {
+        "unsupported-folder-watcher"
+    }
+
+    fn platform(&self) -> Platform {
+        platform()
+    }
+
+    fn watch(
+        &self,
+        _targets: &[WatchTarget],
+        _stop: &AtomicBool,
+        _on_event: &mut dyn FnMut(WatchEvent),
+    ) -> Result<(), OctError> {
+        Err(not_supported("folder watching", platform()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The same rule the other stubs follow: a non-Linux build must say it cannot watch, never
+    /// return `Ok(())`. An empty success would be indistinguishable from "I watched and nothing
+    /// happened", which is the failure mode this project exists to avoid.
+    #[test]
+    fn the_watcher_stub_reports_not_supported_rather_than_success() {
+        let stop = AtomicBool::new(false);
+        let mut sink = |_event: WatchEvent| {};
+        let result = UnsupportedFolderWatcher.watch(&[], &stop, &mut sink);
+        assert!(matches!(result, Err(OctError::NotSupported { .. })));
     }
 }

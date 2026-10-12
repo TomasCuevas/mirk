@@ -11,6 +11,7 @@
 //! | Axis A | `~/.local/share/recently-used.xbel` (freedesktop Recent files, GTK) | T12 |
 //! | Axis B | `/proc/<pid>/fd` plus `/proc/<pid>/cmdline` | T8 |
 //! | Axis C | `xdg-open`, or a viewer CLI such as `evince -i <N>` | T7 |
+//! | Watched folders | `inotify`, one watch per directory, coalesced per path | T7a |
 //! | Identity | `st_dev` plus `st_ino` from `std::os::unix::fs::MetadataExt` | T11 |
 //!
 //! Two facts from the project's own measurements are worth carrying into that work:
@@ -20,11 +21,20 @@
 //! - Metadata reads cost roughly 10 ms per document on the reference machine, so a scan over a
 //!   large library must be incremental rather than a full re-read on every pass.
 
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::OsString;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 
 use oct_core::{
-    LaunchOutcome, Launcher, OctError, OpenDocument, OpenDocumentDetector, Platform,
-    ProgressProvider, RecentDocument, RecentDocumentsSource,
+    FolderWatcher, LaunchOutcome, Launcher, OctError, OpenDocument, OpenDocumentDetector, Platform,
+    ProgressProvider, RecentDocument, RecentDocumentsSource, WatchEvent, WatchEventKind,
+    WatchTarget,
 };
 
 use crate::{not_supported, Backends};
@@ -38,6 +48,7 @@ pub(super) fn backends() -> Backends {
         open_documents: Box::new(ProcOpenDocuments),
         launcher: Box::new(XdgLauncher),
         file_identity: Box::new(PosixFileIdentity),
+        folder_watcher: Box::new(LinuxFolderWatcher),
     }
 }
 
@@ -116,11 +127,532 @@ impl Launcher for XdgLauncher {
 /// filesystems report unusable ids; the fallback there hashes content instead of guessing.
 pub use crate::posix::PosixFileIdentity;
 
+// --- Watched folders (T7a) --------------------------------------------------------------------
+
+/// How long a burst of events for one path is merged before the path is reported.
+///
+/// Chosen at 250 ms: longer than the gap between the several `CLOSE_WRITE`/`MOVED_TO` events a
+/// copy tool emits for a single file, so those collapse into one report; short enough that a new
+/// document shows up without the user noticing a delay. It is also comfortably longer than this
+/// project's measured ~10 ms per-document scan cost, so the report cannot race the scan it
+/// triggers.
+const COALESCE_WINDOW: Duration = Duration::from_millis(250);
+
+/// How long the loop sleeps when no events are available.
+///
+/// The inotify API has no "read with timeout", and blocking in `read` would make the stop flag
+/// unobservable until the next filesystem event. A short non-blocking read followed by this sleep
+/// keeps the loop off the CPU while bounding how long a stop request waits. It is deliberately far
+/// below [`COALESCE_WINDOW`] so polling never delays coalescing.
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// A comfortably large event buffer.
+///
+/// One inotify event is the kernel struct plus a name of at most `NAME_MAX` (255) bytes, so this
+/// holds many events and can never be too small for a single one — an undersized buffer makes
+/// `read` fail with `EINVAL`.
+const EVENT_BUFFER_BYTES: usize = 64 * 1024;
+
+/// `ENOSPC` on Linux. `inotify_add_watch` uses it for an exhausted watch-descriptor limit, which
+/// is why it must never be presented to the user as "the disk is full".
+const ENOSPC: i32 = 28;
+
+/// The events the watcher subscribes to.
+///
+/// Deliberately **not** `MODIFY`: a file being written is not settled, and subscribing to
+/// `IN_MODIFY` is exactly how a watcher ends up reporting a half-copied PDF. `CREATE` is needed to
+/// notice new subdirectories and to tell an `Added` file from a `Changed` one, but is not itself
+/// reported — the following `CLOSE_WRITE` is what settles the file.
+const WATCH_MASK: WatchMask = WatchMask::CREATE
+    .union(WatchMask::CLOSE_WRITE)
+    .union(WatchMask::MOVED_TO)
+    .union(WatchMask::MOVED_FROM)
+    .union(WatchMask::DELETE)
+    .union(WatchMask::DELETE_SELF)
+    .union(WatchMask::MOVE_SELF);
+
+/// Linux watched-folder watcher, backed by **inotify**.
+///
+/// One inotify instance watches every target directory. The value holds no state between calls:
+/// [`FolderWatcher::watch`] builds the instance, runs the loop and drops it, so the same value can
+/// be reused.
+pub struct LinuxFolderWatcher;
+
+impl FolderWatcher for LinuxFolderWatcher {
+    fn id(&self) -> &'static str {
+        "linux-inotify"
+    }
+
+    fn platform(&self) -> Platform {
+        PLATFORM
+    }
+
+    fn watch(
+        &self,
+        targets: &[WatchTarget],
+        stop: &AtomicBool,
+        on_event: &mut dyn FnMut(WatchEvent),
+    ) -> Result<(), OctError> {
+        WatchLoop::start(targets)?.run(stop, on_event)
+    }
+}
+
+/// Maps a failed `inotify_add_watch` into the error `oct` reports.
+///
+/// `inotify_add_watch` reports an exhausted per-user watch limit as `ENOSPC`, the same errno as a
+/// genuinely full disk. Returning it unchanged would send the user looking at their disk; this
+/// names the limit and the tunable that raises it instead. Every other failure keeps its original,
+/// typed cause. Small and pure so it can be unit-tested without provoking a real kernel limit.
+fn map_watch_error(path: &Path, error: io::Error) -> OctError {
+    if is_watch_limit(&error) {
+        OctError::Io(io::Error::other(format!(
+            "cannot watch `{}`: the inotify watch limit is exhausted ({error}); raise \
+             fs.inotify.max_user_watches and retry",
+            path.display()
+        )))
+    } else {
+        OctError::Io(error)
+    }
+}
+
+/// Whether an `inotify_add_watch` failure is the kernel refusing more watch descriptors.
+///
+/// `ENOSPC` from `inotify_add_watch` means the watch limit is exhausted, not that the disk is
+/// full. Pure so it can be unit-tested without provoking the real limit.
+fn is_watch_limit(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ENOSPC)
+}
+
+/// Reads an inotify mask that describes the watcher's own health instead of a file change.
+///
+/// `IN_Q_OVERFLOW` is the only such signal today: it means the kernel dropped events and the
+/// watcher's view may already be stale. Pure, so the classification is unit-testable without
+/// provoking a real queue overflow, which userspace cannot do deterministically.
+fn watcher_observation(mask: EventMask) -> Option<WatchEventKind> {
+    mask.contains(EventMask::Q_OVERFLOW)
+        .then_some(WatchEventKind::Lost)
+}
+
+/// Maps a target that cannot even be resolved into the error `oct` reports.
+///
+/// A watched target is canonicalised so the watcher watches — and reports — the same path the
+/// scanner stored, which also makes a symlinked target resolve to its real directory. If that
+/// resolution fails, the target is unusable and the message names both the path and the cause.
+fn map_target_error(path: &Path, error: io::Error) -> OctError {
+    OctError::InvalidPath(format!(
+        "watched target `{}` could not be resolved: {error}",
+        path.display()
+    ))
+}
+
+/// The decision the recursive walk makes about one directory entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryDecision {
+    /// A directory: watch it and walk into it.
+    Directory,
+    /// Not a directory: nothing to watch.
+    Ignore,
+    /// The entry could not be read, or its type could not be determined: report `Unwatchable`.
+    Unwatchable,
+}
+
+/// Classifies one `read_dir` item.
+///
+/// Extracted as a pure function because neither a per-entry iteration failure nor a `file_type`
+/// failure can be produced on demand, so the error branches are tested directly rather than
+/// through a reproduction that does not exist.
+fn classify_entry(entry: &io::Result<fs::DirEntry>) -> EntryDecision {
+    let Ok(entry) = entry else {
+        return EntryDecision::Unwatchable;
+    };
+    match entry.file_type() {
+        Ok(file_type) if file_type.is_dir() => EntryDecision::Directory,
+        Ok(_) => EntryDecision::Ignore,
+        Err(_) => EntryDecision::Unwatchable,
+    }
+}
+
+/// One raw kernel event, owned so it can outlive the read buffer.
+struct RawEvent {
+    descriptor: WatchDescriptor,
+    mask: EventMask,
+    name: Option<OsString>,
+}
+
+/// An event waiting out the coalescing window.
+struct PendingEvent {
+    kind: WatchEventKind,
+    first_seen: Instant,
+}
+
+/// The state of one [`FolderWatcher::watch`] call.
+struct WatchLoop {
+    inotify: Inotify,
+    /// Watch descriptor to the directory it watches.
+    watched: HashMap<WatchDescriptor, PathBuf>,
+    /// The roots whose whole subtree is watched. A directory that appears later is only watched if
+    /// it lies under one of these.
+    recursive_roots: Vec<PathBuf>,
+    /// Paths for which `IN_CREATE` was seen but the write has not settled, so the close is `Added`.
+    created: HashSet<PathBuf>,
+    /// Paths already reported as present during this call, so a later move-in is `Changed`.
+    seen: HashSet<PathBuf>,
+    /// Events waiting out the coalescing window, keyed by path. A `BTreeMap` makes delivery order
+    /// deterministic at no cost at this size.
+    pending: BTreeMap<PathBuf, PendingEvent>,
+    buffer: Vec<u8>,
+    /// The resolved (canonical) target paths the caller asked for. A queue overflow normally names
+    /// no directory, so these are what `Lost` is reported against.
+    roots: Vec<PathBuf>,
+}
+
+impl WatchLoop {
+    fn start(targets: &[WatchTarget]) -> Result<Self, OctError> {
+        let inotify = Inotify::init().map_err(OctError::Io)?;
+        let mut state = Self {
+            inotify,
+            watched: HashMap::new(),
+            recursive_roots: Vec::new(),
+            created: HashSet::new(),
+            seen: HashSet::new(),
+            pending: BTreeMap::new(),
+            buffer: vec![0; EVENT_BUFFER_BYTES],
+            roots: Vec::new(),
+        };
+        for target in targets {
+            // Watch and report the same path the scanner stored: canonicalising resolves a
+            // symlinked target to the real directory, so a symlink can never make the watcher and
+            // the scanner disagree about where a file lives. An explicit target that cannot be
+            // resolved is fatal: the caller asked for it by name.
+            let resolved = target
+                .path
+                .canonicalize()
+                .map_err(|error| map_target_error(&target.path, error))?;
+            // An explicit target that cannot be watched is fatal, whatever the reason: the caller
+            // asked for it by name, so a partial watch would be a broken promise.
+            state
+                .add_directory(&resolved)
+                .map_err(|error| map_watch_error(&resolved, error))?;
+            state.roots.push(resolved.clone());
+            if target.recursive {
+                state.recursive_roots.push(resolved.clone());
+                state.add_subdirectories(&resolved)?;
+            }
+        }
+        Ok(state)
+    }
+
+    fn run(
+        &mut self,
+        stop: &AtomicBool,
+        on_event: &mut dyn FnMut(WatchEvent),
+    ) -> Result<(), OctError> {
+        while !stop.load(Ordering::Relaxed) {
+            let events = match self.read_events() {
+                Ok(events) => events,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => Vec::new(),
+                Err(error) => return Err(OctError::Io(error)),
+            };
+            for event in events {
+                self.handle(event)?;
+            }
+            self.flush(on_event, false);
+            if !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(POLL_INTERVAL);
+            }
+        }
+        // Deliver whatever was observed but had not yet left the coalescing window, so stopping
+        // does not silently drop a change that has already settled.
+        self.flush(on_event, true);
+        Ok(())
+    }
+
+    fn read_events(&mut self) -> io::Result<Vec<RawEvent>> {
+        // Borrow the two fields separately: the event iterator borrows the buffer, and the borrow
+        // checker cannot see through `self` for two disjoint field borrows in one expression.
+        let inotify = &mut self.inotify;
+        let buffer = &mut self.buffer;
+        let mut raw = Vec::new();
+        for event in inotify.read_events(buffer)? {
+            raw.push(RawEvent {
+                descriptor: event.wd.clone(),
+                mask: event.mask,
+                name: event.name.map(|name| name.to_os_string()),
+            });
+        }
+        Ok(raw)
+    }
+
+    fn handle(&mut self, raw: RawEvent) -> Result<(), OctError> {
+        let mask = raw.mask;
+
+        // A queue overflow describes the watcher, not a path, and usually carries no usable
+        // descriptor. It must be classified before the normal path logic, which would otherwise
+        // drop it as untracked and let the library go silently stale.
+        if let Some(WatchEventKind::Lost) = watcher_observation(mask) {
+            self.report_lost();
+            return Ok(());
+        }
+
+        let path = match &raw.name {
+            Some(name) => self.watched.get(&raw.descriptor).map(|dir| dir.join(name)),
+            None => self.watched.get(&raw.descriptor).cloned(),
+        };
+        // A watch this loop no longer tracks; nothing to report.
+        let Some(path) = path else {
+            return Ok(());
+        };
+
+        if mask.contains(EventMask::IGNORED) {
+            self.watched.remove(&raw.descriptor);
+            return Ok(());
+        }
+
+        if mask.contains(EventMask::ISDIR) {
+            if mask.intersects(EventMask::CREATE | EventMask::MOVED_TO) {
+                self.watch_new_directory(&path)?;
+            }
+            if mask.intersects(
+                EventMask::DELETE
+                    | EventMask::MOVED_FROM
+                    | EventMask::DELETE_SELF
+                    | EventMask::MOVE_SELF,
+            ) {
+                // The directory left the tree, whether deleted or moved elsewhere. inotify keeps
+                // watching the inode, so the watches under it must be released or the loop would
+                // keep monitoring — and mislabelling — a path outside the nominated target.
+                self.release_subtree(&path);
+                self.enqueue(path, WatchEventKind::Removed);
+            }
+            return Ok(());
+        }
+
+        // A directory's own self-event is expected to carry `IN_ISDIR`. Handle it here anyway so a
+        // kernel that omits the flag cannot leave a whole subtree watched after its root is gone.
+        if mask.intersects(EventMask::MOVE_SELF | EventMask::DELETE_SELF) {
+            self.release_subtree(&path);
+            self.enqueue(path, WatchEventKind::Removed);
+            return Ok(());
+        }
+
+        if mask.contains(EventMask::CLOSE_WRITE) {
+            let kind = if self.created.remove(&path) {
+                WatchEventKind::Added
+            } else {
+                WatchEventKind::Changed
+            };
+            self.seen.insert(path.clone());
+            self.enqueue(path, kind);
+        } else if mask.contains(EventMask::MOVED_TO) {
+            let kind = if self.seen.insert(path.clone()) {
+                WatchEventKind::Added
+            } else {
+                WatchEventKind::Changed
+            };
+            self.created.remove(&path);
+            self.enqueue(path, kind);
+        } else if mask.contains(EventMask::CREATE) {
+            // A file that is still being written. Remember it so the close is `Added`, but do not
+            // report it yet: a created file is not a settled file.
+            self.created.insert(path);
+        } else if mask.intersects(EventMask::DELETE | EventMask::MOVED_FROM) {
+            self.seen.remove(&path);
+            self.created.remove(&path);
+            self.enqueue(path, WatchEventKind::Removed);
+        }
+        Ok(())
+    }
+
+    /// Adds one watch for `directory`, returning the kernel's own error on failure so callers can
+    /// choose between fatal (`ENOSPC`) and degraded (`Unwatchable`).
+    fn add_directory(&mut self, directory: &Path) -> io::Result<()> {
+        let descriptor = self.inotify.watches().add(directory, WATCH_MASK)?;
+        self.watched.insert(descriptor, directory.to_path_buf());
+        Ok(())
+    }
+
+    /// Adds a watch for every directory under `root`.
+    ///
+    /// Symlinks are not followed: `DirEntry::file_type` does not resolve them, which also stops a
+    /// symlink loop from hanging this walk. A subdirectory that cannot be read is reported as
+    /// [`WatchEventKind::Unwatchable`] rather than skipped quietly, because its contents are
+    /// invisible and the library must know that. The walk itself continues: one unreadable corner
+    /// must not stop the rest of the tree from being watched.
+    fn add_subdirectories(&mut self, root: &Path) -> Result<(), OctError> {
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(directory) = stack.pop() {
+            let entries = match fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(_) => {
+                    self.enqueue(directory, WatchEventKind::Unwatchable);
+                    continue;
+                }
+            };
+            for entry in entries {
+                match classify_entry(&entry) {
+                    EntryDecision::Directory => {
+                        if let Ok(entry) = entry {
+                            let subdirectory = entry.path();
+                            self.try_watch_subdirectory(&subdirectory)?;
+                            // Walk it even when its own watch could not be installed: its children
+                            // may still be watchable, and the parent is already reported
+                            // `Unwatchable`.
+                            stack.push(subdirectory);
+                        }
+                    }
+                    EntryDecision::Ignore => {}
+                    EntryDecision::Unwatchable => {
+                        // Prefer the entry's own path when it can be read; a per-entry read
+                        // failure leaves only the directory that produced it to name.
+                        let path = match entry {
+                            Ok(entry) => entry.path(),
+                            Err(_) => directory.clone(),
+                        };
+                        self.enqueue(path, WatchEventKind::Unwatchable);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Watches a discovered subdirectory, treating only the kernel's hard watch limit as fatal.
+    ///
+    /// `ENOSPC` stays fatal on purpose: the contract requires one honest error naming the limit
+    /// rather than a watch that silently covers only part of the tree. Every other failure — a
+    /// permission the kernel refuses, a directory that vanished between listing and watching — is
+    /// reported as [`WatchEventKind::Unwatchable`] and the walk continues.
+    fn try_watch_subdirectory(&mut self, path: &Path) -> Result<(), OctError> {
+        match self.add_directory(path) {
+            Ok(()) => Ok(()),
+            Err(error) if is_watch_limit(&error) => Err(map_watch_error(path, error)),
+            Err(_) => {
+                self.enqueue(path.to_path_buf(), WatchEventKind::Unwatchable);
+                Ok(())
+            }
+        }
+    }
+
+    /// Releases every watch at or under `path` and forgets the bookkeeping for that subtree.
+    ///
+    /// inotify watches the inode, not the name: when a watched directory is moved elsewhere its
+    /// watch follows it, and events would keep arriving composed with the old stored path — a
+    /// monitor outside the tree the caller nominated. The kernel only sends `IN_IGNORED` for a
+    /// watch it removed itself (a deletion); a move keeps the watch alive, and the `seen`/`created`
+    /// bookkeeping for descendants is never covered by `IN_IGNORED` at all. This helper covers
+    /// both, and is idempotent so the parent's `MOVED_FROM` and the child's `MOVE_SELF` may both
+    /// call it.
+    fn release_subtree(&mut self, path: &Path) {
+        let stale: Vec<WatchDescriptor> = self
+            .watched
+            .iter()
+            .filter(|(_, directory)| {
+                let directory = directory.as_path();
+                directory == path || directory.starts_with(path)
+            })
+            .map(|(descriptor, _)| descriptor.clone())
+            .collect();
+        for descriptor in stale {
+            // A watch the kernel already dropped (the common case for a deleted directory, whose
+            // `IN_IGNORED` is on its way) refuses removal; that is not an error to report.
+            let _ = self.inotify.watches().remove(descriptor.clone());
+            self.watched.remove(&descriptor);
+        }
+        self.seen
+            .retain(|known| known.as_path() != path && !known.starts_with(path));
+        self.created
+            .retain(|created| created.as_path() != path && !created.starts_with(path));
+        // A settled event already inside the coalescing window belongs to the tree that just left.
+        // Delivering it afterwards would report a path outside the target — the very thing releasing
+        // the watches exists to prevent — so the window is emptied for that subtree too.
+        self.pending
+            .retain(|queued, _| queued.as_path() != path && !queued.starts_with(path));
+    }
+
+    /// Watches a directory that appeared while watching, but only when it lies under a recursive
+    /// target. A non-recursive target reports the new directory's contents not at all, which is the
+    /// contract of `WatchTarget::recursive`.
+    fn watch_new_directory(&mut self, path: &Path) -> Result<(), OctError> {
+        if !self
+            .recursive_roots
+            .iter()
+            .any(|root| path.starts_with(root))
+        {
+            return Ok(());
+        }
+        if self.watched.values().any(|dir| dir.as_path() == path) {
+            return Ok(());
+        }
+        self.try_watch_subdirectory(path)?;
+        self.add_subdirectories(path)
+    }
+
+    /// Reports that events may have been dropped for a directory.
+    ///
+    /// A queue overflow normally carries no usable descriptor, so no single directory can be
+    /// named. In that case every target root is reported: any of them may have lost events, and
+    /// the consumer must rescan to be sure. When a descriptor is present, only that directory is
+    /// reported.
+    /// Reports that events may have been dropped.
+    ///
+    /// A queue overflow belongs to the inotify **instance**, not to one directory: the kernel sets
+    /// the descriptor to `-1` for exactly that reason, because the loss is not attributable to a
+    /// single watch. So every target is reported. Narrowing this to whichever directory a descriptor
+    /// happened to name would leave the rest of the library silently stale — the failure this variant
+    /// exists to prevent — and a consumer that rescans one directory would never learn otherwise.
+    fn report_lost(&mut self) {
+        for root in self.roots.clone() {
+            self.enqueue(root, WatchEventKind::Lost);
+        }
+    }
+
+    /// Queues an event, merging it into any event already waiting for the same path.
+    ///
+    /// The latest kind wins: a path created and then removed inside one window is reported as
+    /// removed, which is its final observed state.
+    fn enqueue(&mut self, path: PathBuf, kind: WatchEventKind) {
+        match self.pending.get_mut(&path) {
+            Some(pending) => pending.kind = kind,
+            None => {
+                self.pending.insert(
+                    path,
+                    PendingEvent {
+                        kind,
+                        first_seen: Instant::now(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Emits every queued event whose window has elapsed, or all of them when `force` is set.
+    fn flush(&mut self, on_event: &mut dyn FnMut(WatchEvent), force: bool) {
+        let now = Instant::now();
+        let due: Vec<(PathBuf, WatchEventKind)> = self
+            .pending
+            .iter()
+            .filter(|(_, pending)| {
+                force || now.duration_since(pending.first_seen) >= COALESCE_WINDOW
+            })
+            .map(|(path, pending)| (path.clone(), pending.kind))
+            .collect();
+        for (path, kind) in due {
+            self.pending.remove(&path);
+            on_event(WatchEvent { path, kind });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oct_core::{FileId, FileIdentity};
-    use std::path::PathBuf;
+    use oct_core::{FileId, FileIdentity, FolderWatcher, WatchEvent, WatchEventKind, WatchTarget};
+    use std::collections::HashSet;
+    use std::io::{self, Write};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::time::{Duration, Instant};
 
     /// A unique temporary directory that removes itself on drop, including on panic.
     struct TempDir {
@@ -195,5 +727,654 @@ mod tests {
         assert_eq!(backends.recent_documents.id(), "linux-xbel-recent");
         assert_eq!(backends.open_documents.id(), "linux-proc-fd");
         assert_eq!(backends.file_identity.id(), "linux-posix-identity");
+        assert_eq!(backends.folder_watcher.id(), "linux-inotify");
+        assert_eq!(backends.folder_watcher.platform(), Platform::Linux);
+    }
+
+    // --- T7a: the watched-folder watcher -----------------------------------------------------
+
+    /// How long a test waits after starting the watcher before touching the filesystem.
+    ///
+    /// `watch` installs its watches on the thread it runs on, and the test cannot observe that
+    /// moment through the trait. This bounds the startup race; every wait after it is
+    /// event-driven with a timeout, never a sleep-poll.
+    const WATCH_STARTUP_WAIT: Duration = Duration::from_millis(500);
+
+    /// A watcher running on its own thread, with a bounded channel for the events it reports.
+    ///
+    /// `watch` blocks by contract, so the tests run it off-thread and read events with a timeout.
+    /// Nothing here waits unbounded: a missing event fails an assertion instead of hanging.
+    struct RunningWatcher {
+        stop_flag: Arc<AtomicBool>,
+        events: mpsc::Receiver<WatchEvent>,
+        done: mpsc::Receiver<()>,
+        thread: Option<std::thread::JoinHandle<Result<(), OctError>>>,
+    }
+
+    impl RunningWatcher {
+        fn start(targets: Vec<WatchTarget>) -> Self {
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let (events_tx, events) = mpsc::channel();
+            let (done_tx, done) = mpsc::channel();
+            let thread_stop = Arc::clone(&stop_flag);
+            let thread = std::thread::spawn(move || {
+                let mut sink = move |event: WatchEvent| {
+                    // A send failure only means the test ended early; it is not the
+                    // watcher's problem.
+                    let _ = events_tx.send(event);
+                };
+                let result = LinuxFolderWatcher.watch(&targets, &thread_stop, &mut sink);
+                let _ = done_tx.send(());
+                result
+            });
+            // Let the spawned thread install its watches before the test writes anything.
+            std::thread::sleep(WATCH_STARTUP_WAIT);
+            Self {
+                stop_flag,
+                events,
+                done,
+                thread: Some(thread),
+            }
+        }
+
+        fn next_within(&self, timeout: Duration) -> Option<WatchEvent> {
+            self.events.recv_timeout(timeout).ok()
+        }
+
+        /// Fails if any event arrives during `quiet`.
+        fn assert_silent_for(&self, quiet: Duration) {
+            match self.events.recv_timeout(quiet) {
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {}
+                Ok(event) => panic!("expected no event, got {event:?}"),
+            }
+        }
+
+        /// Stops the loop and returns its result, failing the test if it does not stop promptly.
+        fn stop(mut self) -> Result<(), OctError> {
+            self.stop_flag.store(true, Ordering::SeqCst);
+            self.done
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the watcher did not stop after the stop flag was set");
+            self.thread
+                .take()
+                .expect("thread handle taken twice")
+                .join()
+                .expect("the watcher thread panicked")
+        }
+    }
+
+    impl Drop for RunningWatcher {
+        fn drop(&mut self) {
+            // Best effort, so a failing assertion cannot leave a loop running.
+            self.stop_flag.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// The canonical form of a temporary directory.
+    ///
+    /// The watcher canonicalises its targets, so tests must compare against canonical paths or
+    /// they would assert the pre-fix behaviour on any host whose temporary directory is itself
+    /// reached through a symlink.
+    fn canonical(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).expect("canonicalise the temporary directory")
+    }
+
+    /// Receives until `wanted` events have arrived or the deadline passes. Never unbounded.
+    fn collect_events(
+        watcher: &RunningWatcher,
+        wanted: usize,
+        deadline: Duration,
+    ) -> Vec<WatchEvent> {
+        let cutoff = Instant::now() + deadline;
+        let mut collected = Vec::new();
+        while collected.len() < wanted && Instant::now() < cutoff {
+            if let Some(event) = watcher.next_within(Duration::from_millis(250)) {
+                collected.push(event);
+            }
+        }
+        collected
+    }
+
+    #[test]
+    fn a_written_file_is_reported_once_after_it_is_closed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = canonical(dir.path());
+        let watcher = RunningWatcher::start(vec![WatchTarget {
+            path: root.clone(),
+            recursive: false,
+        }]);
+
+        let path = root.join("document.pdf");
+        let mut file = std::fs::File::create(&path).expect("create the document");
+        file.write_all(b"%PDF-1.7 first half").expect("write");
+        file.flush().expect("flush");
+
+        // The writer still holds the file open, so it has not settled: nothing may be reported.
+        watcher.assert_silent_for(Duration::from_millis(400));
+
+        file.write_all(b" and the rest").expect("write the rest");
+        drop(file); // closing the writer is what settles the file
+
+        let event = collect_events(&watcher, 1, Duration::from_secs(5))
+            .into_iter()
+            .next()
+            .expect("the closed file was never reported");
+        assert_eq!(event.path, path);
+        assert_eq!(event.kind, WatchEventKind::Added);
+
+        // Reported once, not once per write.
+        watcher.assert_silent_for(Duration::from_millis(400));
+
+        watcher.stop().expect("the watcher stops cleanly");
+    }
+
+    #[test]
+    fn a_burst_of_settles_collapses_to_one_event_per_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = canonical(dir.path());
+        let watcher = RunningWatcher::start(vec![WatchTarget {
+            path: root.clone(),
+            recursive: false,
+        }]);
+
+        // Four paths, each written twice in a tight burst: eight settle points for four paths.
+        // Coalescing per path must yield one event each, not one per write session.
+        let names: Vec<PathBuf> = (0..4)
+            .map(|index| root.join(format!("doc-{index}.pdf")))
+            .collect();
+        for session in 0..2 {
+            for (index, path) in names.iter().enumerate() {
+                std::fs::write(path, format!("%PDF session {session} doc {index}")).expect("write");
+            }
+        }
+
+        let reported = collect_events(&watcher, names.len(), Duration::from_secs(5));
+        let reported_paths: HashSet<PathBuf> =
+            reported.iter().map(|event| event.path.clone()).collect();
+
+        // Every distinct path appears exactly once, and the eight writes did not become eight
+        // events.
+        assert_eq!(reported.len(), names.len(), "expected one event per path: {reported:?}");
+        assert_eq!(reported_paths, names.iter().cloned().collect::<HashSet<_>>());
+        assert!(
+            reported.len() < names.len() * 2,
+            "the second write of each path was not coalesced"
+        );
+
+        watcher.assert_silent_for(Duration::from_millis(400));
+        watcher.stop().expect("the watcher stops cleanly");
+    }
+
+    #[test]
+    fn a_recursive_target_watches_a_subdirectory_created_later() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = canonical(dir.path());
+        let watcher = RunningWatcher::start(vec![WatchTarget {
+            path: root.clone(),
+            recursive: true,
+        }]);
+
+        let nested = root.join("nested");
+        std::fs::create_dir(&nested).expect("create the subdirectory");
+        // The watcher learns about the new directory from the parent's IN_CREATE and installs the
+        // watch asynchronously. Give it a bounded moment first, otherwise the file's creation can
+        // race ahead of the watch and be genuinely, correctly invisible. This is a fixed wait,
+        // never an unbounded one.
+        std::thread::sleep(Duration::from_millis(500));
+
+        let file = nested.join("later.pdf");
+        std::fs::write(&file, b"%PDF-1.7 created later").expect("write");
+
+        let cutoff = Instant::now() + Duration::from_secs(5);
+        let mut found = None;
+        while Instant::now() < cutoff && found.is_none() {
+            if let Some(event) = watcher.next_within(Duration::from_millis(250)) {
+                if event.path == file {
+                    found = Some(event);
+                }
+            }
+        }
+
+        let event = found.expect("a file created in a later subdirectory was never reported");
+        assert_eq!(event.kind, WatchEventKind::Added);
+        watcher.stop().expect("the watcher stops cleanly");
+    }
+
+    #[test]
+    fn a_removed_file_is_reported_as_removed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = canonical(dir.path());
+        let file = root.join("gone.pdf");
+        std::fs::write(&file, b"%PDF-1.7 present").expect("write before watching");
+
+        let watcher = RunningWatcher::start(vec![WatchTarget {
+            path: root.clone(),
+            recursive: false,
+        }]);
+
+        std::fs::remove_file(&file).expect("remove");
+
+        let cutoff = Instant::now() + Duration::from_secs(5);
+        let mut removed = None;
+        while Instant::now() < cutoff && removed.is_none() {
+            if let Some(event) = watcher.next_within(Duration::from_millis(250)) {
+                if event.kind == WatchEventKind::Removed {
+                    removed = Some(event);
+                }
+            }
+        }
+
+        let event = removed.expect("the removed file was never reported");
+        assert_eq!(event.path, file);
+        watcher.stop().expect("the watcher stops cleanly");
+    }
+
+    #[test]
+    fn a_directory_that_disappears_mid_watch_is_reported_and_does_not_end_the_loop() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = canonical(dir.path());
+        let watcher = RunningWatcher::start(vec![WatchTarget {
+            path: root.clone(),
+            recursive: true,
+        }]);
+
+        let nested = root.join("vanishing");
+        std::fs::create_dir(&nested).expect("create the subdirectory");
+        // Bound the wait for the new subdirectory's own watch to be installed (S2).
+        std::thread::sleep(Duration::from_millis(500));
+        std::fs::remove_dir(&nested).expect("remove the subdirectory");
+
+        let cutoff = Instant::now() + Duration::from_secs(5);
+        let mut removed = None;
+        while Instant::now() < cutoff && removed.is_none() {
+            if let Some(event) = watcher.next_within(Duration::from_millis(250)) {
+                if event.path == nested && event.kind == WatchEventKind::Removed {
+                    removed = Some(event);
+                }
+            }
+        }
+        let event = removed.expect("the disappeared directory was never reported");
+        assert_eq!(event.path, nested);
+
+        // The loop is still alive and stops cleanly: a disappearing directory is an event, not a
+        // fatal error.
+        watcher
+            .stop()
+            .expect("the watcher stops cleanly after a directory disappears");
+    }
+
+    #[test]
+    fn setting_the_stop_flag_ends_the_loop_promptly() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = canonical(dir.path());
+        let watcher = RunningWatcher::start(vec![WatchTarget {
+            path: root,
+            recursive: false,
+        }]);
+        // Let the loop reach its steady state before asking it to stop.
+        std::thread::sleep(Duration::from_millis(100));
+
+        let asked_at = Instant::now();
+        watcher.stop().expect("the watcher stops cleanly");
+        assert!(
+            asked_at.elapsed() < Duration::from_secs(2),
+            "stopping took {:?}",
+            asked_at.elapsed()
+        );
+    }
+
+    #[test]
+    fn the_watch_limit_failure_is_mapped_to_an_error_that_names_the_limit() {
+        // `inotify_add_watch` reports the exhausted watch-descriptor limit as ENOSPC. On Linux
+        // that errno is 28. The mapping must name the limit rather than report "no space left on
+        // device", which would send the user looking at their disk.
+        let error = map_watch_error(Path::new("/library"), io::Error::from_raw_os_error(28));
+        let rendered = error.to_string();
+        assert!(rendered.contains("watch"), "{rendered}");
+        assert!(rendered.contains("limit"), "{rendered}");
+        assert!(rendered.contains("max_user_watches"), "{rendered}");
+        assert!(rendered.contains("/library"), "{rendered}");
+    }
+
+    #[test]
+    fn a_watch_failure_that_is_not_a_limit_keeps_its_underlying_cause() {
+        let error = map_watch_error(Path::new("/library"), io::Error::from_raw_os_error(2));
+        match error {
+            OctError::Io(inner) => assert_eq!(inner.raw_os_error(), Some(2)),
+            other => panic!("expected the io error to pass through, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_queue_overflow_is_classified_as_a_lost_observation() {
+        // A real queue overflow cannot be induced deterministically from userspace, so the
+        // classification is a pure function and is tested directly. Nothing here fakes a kernel
+        // overflow.
+        assert_eq!(
+            watcher_observation(EventMask::Q_OVERFLOW),
+            Some(WatchEventKind::Lost)
+        );
+        assert_eq!(watcher_observation(EventMask::CLOSE_WRITE), None);
+        assert_eq!(watcher_observation(EventMask::CREATE), None);
+        assert_eq!(watcher_observation(EventMask::IGNORED), None);
+    }
+
+    #[test]
+    fn a_queue_overflow_reports_every_target_not_just_one_directory() {
+        // A real overflow cannot be produced from userspace, but its *consequence* is deterministic
+        // and is the part that matters: events for any watched directory may have been dropped, so
+        // every target must be reported. Reporting only the directory the descriptor happens to name
+        // would leave the rest of the library silently stale.
+        let first = TempDir::new("overflow-first");
+        let second = TempDir::new("overflow-second");
+        std::fs::create_dir_all(first.path.join("nested")).expect("create a nested directory");
+        let targets = vec![
+            WatchTarget {
+                path: first.path.clone(),
+                recursive: true,
+            },
+            WatchTarget {
+                path: second.path.clone(),
+                recursive: false,
+            },
+        ];
+
+        let mut watcher = WatchLoop::start(&targets).expect("start the watch loop");
+        // A descriptor that *is* tracked, which is the case that used to narrow the report.
+        let descriptor = watcher
+            .watched
+            .keys()
+            .next()
+            .cloned()
+            .expect("the loop watches at least one directory");
+        watcher
+            .handle(RawEvent {
+                descriptor,
+                mask: EventMask::Q_OVERFLOW,
+                name: None,
+            })
+            .expect("an overflow is not fatal");
+
+        let mut reported = Vec::new();
+        watcher.flush(&mut |event| reported.push(event), true);
+
+        let lost: Vec<PathBuf> = reported
+            .iter()
+            .filter(|event| event.kind == WatchEventKind::Lost)
+            .map(|event| event.path.clone())
+            .collect();
+        assert!(
+            lost.contains(&first.path),
+            "the recursive target is reported: {lost:?}"
+        );
+        assert!(
+            lost.contains(&second.path),
+            "and so is the non-recursive one: {lost:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_subdirectory_is_reported_as_unwatchable_and_the_rest_keeps_working() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = canonical(dir.path());
+        let locked = root.join("locked");
+        let visible = root.join("visible");
+        std::fs::create_dir(&locked).expect("create the locked subdirectory");
+        std::fs::create_dir(&visible).expect("create the visible subdirectory");
+        std::fs::write(locked.join("hidden.pdf"), b"%PDF-1.7 hidden").expect("write hidden");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("lock the subdirectory");
+
+        // Root and some filesystems ignore the mode bits, so the condition cannot be created
+        // there. Restore and skip with an explicit reason, never a silent pass.
+        if std::fs::read_dir(&locked).is_ok() {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+                .expect("restore");
+            eprintln!(
+                "skipping: this account can read a 0o000 directory, so Unwatchable cannot be \
+                 produced"
+            );
+            return;
+        }
+
+        let watcher = RunningWatcher::start(vec![WatchTarget {
+            path: root.clone(),
+            recursive: true,
+        }]);
+
+        let cutoff = Instant::now() + Duration::from_secs(5);
+        let mut unwatchable = None;
+        while Instant::now() < cutoff && unwatchable.is_none() {
+            if let Some(event) = watcher.next_within(Duration::from_millis(250)) {
+                if event.path == locked && event.kind == WatchEventKind::Unwatchable {
+                    unwatchable = Some(event);
+                }
+            }
+        }
+
+        // Restore before any assertion, so the temporary directory can always be cleaned up.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("restore");
+
+        // The loop must still be watching everything else: a file created in `visible` arrives
+        // even though a corner of the tree is unwatchable.
+        let later = visible.join("later.pdf");
+        std::fs::write(&later, b"%PDF-1.7 visible").expect("write visible");
+        let cutoff = Instant::now() + Duration::from_secs(5);
+        let mut saw_later = false;
+        while Instant::now() < cutoff && !saw_later {
+            if let Some(event) = watcher.next_within(Duration::from_millis(250)) {
+                if event.path == later && event.kind == WatchEventKind::Added {
+                    saw_later = true;
+                }
+            }
+        }
+
+        let event = unwatchable.expect("the unreadable subdirectory was never reported");
+        assert_eq!(event.path, locked);
+        assert_eq!(event.kind, WatchEventKind::Unwatchable);
+        assert!(saw_later, "the rest of the tree stopped being watched");
+
+        watcher.stop().expect("the watcher stops cleanly");
+    }
+
+    #[test]
+    fn the_recursive_walk_classifies_per_entry_failures_as_unwatchable() {
+        // A per-entry `read_dir` failure cannot be induced on demand, so it is fed as a synthetic
+        // `Err` here. The other branches use real `DirEntry` values from a temporary directory.
+        let broken: io::Result<std::fs::DirEntry> =
+            Err(io::Error::other("entry could not be read"));
+        assert_eq!(classify_entry(&broken), EntryDecision::Unwatchable);
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir(dir.path().join("sub")).expect("create a subdirectory");
+        std::fs::write(dir.path().join("file.pdf"), b"%PDF-1.7").expect("create a file");
+        let decisions: Vec<EntryDecision> = std::fs::read_dir(dir.path())
+            .expect("read the temp dir")
+            .map(|entry| classify_entry(&entry))
+            .collect();
+
+        assert!(decisions.contains(&EntryDecision::Directory));
+        assert!(decisions.contains(&EntryDecision::Ignore));
+        assert!(!decisions.contains(&EntryDecision::Unwatchable));
+    }
+
+    #[test]
+    fn a_directory_moved_out_of_the_tree_is_released_and_not_reported() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let base = canonical(dir.path());
+        let root = base.join("root");
+        let outside = base.join("outside");
+        std::fs::create_dir(&root).expect("create root");
+        std::fs::create_dir(&outside).expect("create outside");
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).expect("create sub");
+
+        let watcher = RunningWatcher::start(vec![WatchTarget {
+            path: root.clone(),
+            recursive: true,
+        }]);
+
+        let moved = outside.join("sub");
+        std::fs::rename(&sub, &moved).expect("move the directory out of the tree");
+
+        // The move itself is reported as `Removed` for the old path.
+        let cutoff = Instant::now() + Duration::from_secs(5);
+        let mut saw_removed = false;
+        while Instant::now() < cutoff && !saw_removed {
+            if let Some(event) = watcher.next_within(Duration::from_millis(250)) {
+                if event.path == sub && event.kind == WatchEventKind::Removed {
+                    saw_removed = true;
+                }
+            }
+        }
+        assert!(
+            saw_removed,
+            "the move out of the tree was not reported as Removed for {}",
+            sub.display()
+        );
+
+        // A file created in the moved directory is now outside the target and must stay invisible.
+        std::fs::write(moved.join("later.pdf"), b"%PDF-1.7 outside").expect("write outside");
+
+        let cutoff = Instant::now() + Duration::from_secs(2);
+        let mut leaked = None;
+        while Instant::now() < cutoff && leaked.is_none() {
+            if let Some(event) = watcher.next_within(Duration::from_millis(250)) {
+                if event.path.starts_with(&sub) {
+                    leaked = Some(event);
+                }
+            }
+        }
+        watcher.stop().expect("the watcher stops cleanly");
+        assert!(
+            leaked.is_none(),
+            "an event leaked through for a directory moved outside the target: {leaked:?}"
+        );
+    }
+
+    #[test]
+    fn releasing_a_moved_out_directory_drops_its_watches_and_bookkeeping() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = canonical(dir.path());
+        let sub = root.join("sub");
+        let deeper = sub.join("deeper");
+        std::fs::create_dir_all(&deeper).expect("create sub/deeper");
+
+        let targets = [WatchTarget {
+            path: root.clone(),
+            recursive: true,
+        }];
+        let mut loop_state = WatchLoop::start(&targets).expect("start the watch loop");
+
+        assert!(loop_state.watched.values().any(|dir| dir.as_path() == sub));
+        assert!(loop_state.watched.values().any(|dir| dir.as_path() == deeper));
+
+        // Pretend the loop had already reported bookkeeping for the subtree.
+        loop_state.seen.insert(sub.clone());
+        loop_state.seen.insert(deeper.clone());
+        loop_state.created.insert(deeper.clone());
+
+        loop_state.release_subtree(&sub);
+
+        assert!(
+            loop_state.watched.values().all(|dir| {
+                let dir = dir.as_path();
+                dir != sub && !dir.starts_with(&sub)
+            }),
+            "a moved-out directory or one of its descendants is still watched"
+        );
+        assert!(
+            loop_state.watched.values().any(|dir| dir.as_path() == root),
+            "the root watch was released along with the subtree"
+        );
+        assert!(loop_state.seen.iter().all(|path| !path.starts_with(&sub)));
+        assert!(
+            loop_state.created.is_empty(),
+            "stale `created` bookkeeping survived the release"
+        );
+    }
+
+    #[test]
+    fn releasing_a_subtree_drops_its_pending_events() {
+        // A settled event already inside the coalescing window belongs to the tree that just left.
+        // Delivering it afterwards would report a path outside the target, which is exactly what
+        // releasing the watches is meant to prevent.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = canonical(dir.path());
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).expect("create sub");
+        let child = sub.join("settled.pdf");
+        let kept = root.join("kept.pdf");
+
+        let targets = [WatchTarget {
+            path: root.clone(),
+            recursive: true,
+        }];
+        let mut loop_state = WatchLoop::start(&targets).expect("start the watch loop");
+
+        loop_state.enqueue(child.clone(), WatchEventKind::Added);
+        loop_state.enqueue(kept.clone(), WatchEventKind::Added);
+
+        loop_state.release_subtree(&sub);
+
+        let mut reported = Vec::new();
+        loop_state.flush(&mut |event| reported.push(event), true);
+        let paths: Vec<PathBuf> = reported.iter().map(|event| event.path.clone()).collect();
+
+        assert!(
+            !paths.contains(&child),
+            "an event for a path inside the released subtree was still delivered: {paths:?}"
+        );
+        assert!(
+            paths.contains(&kept),
+            "an unrelated pending event was dropped along with the subtree: {paths:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_target_is_watched_at_its_canonical_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let base = canonical(dir.path());
+        let real = base.join("real");
+        std::fs::create_dir(&real).expect("create the real directory");
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("create the symlink");
+
+        let watcher = RunningWatcher::start(vec![WatchTarget {
+            path: link.clone(),
+            recursive: true,
+        }]);
+
+        let created = real.join("document.pdf");
+        std::fs::write(&created, b"%PDF-1.7 through the symlink").expect("write");
+
+        let cutoff = Instant::now() + Duration::from_secs(5);
+        let mut events = Vec::new();
+        let mut saw_canonical = false;
+        while Instant::now() < cutoff && !saw_canonical {
+            if let Some(event) = watcher.next_within(Duration::from_millis(250)) {
+                if event.path == created && event.kind == WatchEventKind::Added {
+                    saw_canonical = true;
+                }
+                events.push(event);
+            }
+        }
+        watcher.stop().expect("the watcher stops cleanly");
+
+        assert!(
+            saw_canonical,
+            "the file was not reported under the canonical path {}: {events:?}",
+            created.display()
+        );
+        assert!(
+            events.iter().all(|event| !event.path.starts_with(&link)),
+            "an event was reported under the symlink path: {events:?}"
+        );
     }
 }
