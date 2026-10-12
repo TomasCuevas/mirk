@@ -60,7 +60,8 @@
 //! # What is deliberately deferred
 //!
 //! Size/mtime-based incremental rescan and the metadata columns it needs (`size`, `mtime`,
-//! `discovered_via`, `platform`, `status`); the live watcher (T7); the suggestion queue for PDFs
+//! `discovered_via`, `platform`, `status`); the application that consumes [`WatchOutcome`]s and
+//! decides what to show the user; the suggestion queue for PDFs
 //! found outside watched folders; and scanning a folder the user has not nominated. Each is a
 //! separate work unit, not an omission here.
 
@@ -69,6 +70,10 @@ use std::path::{Path, PathBuf};
 use oct_core::{Document, FileIdentity, OctError};
 use oct_store::Store;
 use pdfium_render::prelude::{PdfDocumentMetadataTagType, Pdfium};
+
+mod watch;
+
+pub use watch::{WatchBridge, WatchOutcome};
 
 /// The remedies named by every pdfium failure, so the error is actionable on its own and a caller
 /// never has to guess what to install.
@@ -295,7 +300,10 @@ impl<'a> Scanner<'a> {
     }
 
     /// Resolves and binds the pdfium native library for this scanner.
-    fn pdfium(&self) -> Result<Pdfium, OctError> {
+    ///
+    /// Crate-visible so [`WatchBridge`] can bind once before it starts watching, turning a missing
+    /// library into one actionable error instead of one failure per event.
+    pub(crate) fn pdfium(&self) -> Result<Pdfium, OctError> {
         let library = resolve_pdfium_library(
             self.explicit_pdfium.as_deref(),
             &vendor_pdfium_directory(),
@@ -445,7 +453,9 @@ impl<'a> Scanner<'a> {
     }
 
     /// The per-path loop behind [`Scanner::count_and_persist`], with pdfium already loaded.
-    fn count_and_persist_with(&self, pdfium: &Pdfium, paths: &[PathBuf]) -> ScanOutcome {
+    ///
+    /// Crate-visible so [`WatchBridge`] can reuse one bound library across many events.
+    pub(crate) fn count_and_persist_with(&self, pdfium: &Pdfium, paths: &[PathBuf]) -> ScanOutcome {
         let mut outcome = ScanOutcome::default();
 
         for path in paths {
