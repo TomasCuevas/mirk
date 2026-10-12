@@ -599,3 +599,97 @@ fn the_schema_refuses_a_second_row_for_a_known_identity() {
     assert_eq!(rows.id, moved);
     assert_eq!(rows.document.path, PathBuf::from("/library/moved.pdf"));
 }
+
+// --- T6: the folders API ---------------------------------------------------------------------
+
+#[test]
+fn recording_the_same_folder_twice_keeps_one_row_and_the_first_added_time() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+
+    let first = store
+        .record_folder("/library", true)
+        .expect("record the folder");
+    let second = store
+        .record_folder("/library", true)
+        .expect("record the same folder again");
+    assert_eq!(first, second, "re-recording must update, not insert");
+    assert_eq!(store.folders().expect("list folders").len(), 1);
+
+    let recorded = store.folders().expect("list folders").pop().expect("one folder");
+    assert_eq!(recorded.path, PathBuf::from("/library"));
+    assert!(recorded.recursive);
+    assert!(recorded.enabled, "the scanner does not touch the user's enabled flag");
+
+    // A different recursion flag updates the existing row rather than forking it.
+    store
+        .record_folder("/library", false)
+        .expect("update recursion");
+    let folders = store.folders().expect("list folders");
+    assert_eq!(folders.len(), 1);
+    assert!(!folders[0].recursive);
+    assert_eq!(folders[0].id, first);
+}
+
+#[test]
+fn document_count_tracks_the_documents_table() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    assert_eq!(store.document_count().expect("count"), 0);
+
+    store
+        .upsert_document(&document(
+            "/library/one.pdf",
+            FileId::Posix { dev: 1, ino: 1 },
+        ))
+        .expect("insert");
+    store
+        .upsert_document(&document(
+            "/library/two.pdf",
+            FileId::Posix { dev: 1, ino: 2 },
+        ))
+        .expect("insert");
+    assert_eq!(store.document_count().expect("count"), 2);
+
+    // An update is not a new row.
+    store
+        .upsert_document(&document(
+            "/library/one.pdf",
+            FileId::Posix { dev: 1, ino: 1 },
+        ))
+        .expect("update");
+    assert_eq!(store.document_count().expect("count"), 2);
+}
+
+#[test]
+fn the_schema_refuses_a_second_row_for_the_same_folder() {
+    // "A folder is recorded once" is a schema invariant, not only a rule in `record_folder`: a
+    // second writer that loses the race must fail honestly rather than making the watcher walk the
+    // same folder twice.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let folder = "/library/watched";
+    let first = store.record_folder(folder, true).expect("record once");
+    let again = store.record_folder(folder, true).expect("record twice");
+    assert_eq!(first, again, "recording the same path must reuse the row");
+    assert_eq!(store.folders().expect("list").len(), 1);
+
+    let connection = rusqlite::Connection::open(&path).expect("open raw");
+    let duplicate = connection.execute(
+        "INSERT INTO folders (path, recursive, enabled, added_at) VALUES (?1, 1, 1, 0)",
+        rusqlite::params![folder],
+    );
+    assert!(
+        duplicate.is_err(),
+        "the schema must reject a duplicate folder path, got {duplicate:?}"
+    );
+
+    // Re-recording with a different `recursive` updates in place and never touches `enabled`,
+    // which is the user's setting rather than the scanner's.
+    let updated = store.record_folder(folder, false).expect("update");
+    assert_eq!(updated, first);
+    let folders = store.folders().expect("list");
+    assert_eq!(folders.len(), 1);
+    assert!(!folders[0].recursive);
+    assert!(folders[0].enabled, "the user's enabled flag must survive");
+}

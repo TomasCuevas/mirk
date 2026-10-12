@@ -55,7 +55,9 @@
 //! than as speculative SQL:
 //!
 //! - library listing, filtering and sorting over `documents`;
-//! - writes and reads for `open_events`, `viewers`, `folders` and `suggestions`;
+//! - writes and reads for `open_events`, `viewers` and `suggestions`; the `folders` table has only
+//!   what the scanner (T6) needs: [`Store::record_folder`], [`Store::folders`] and
+//!   [`WatchedFolder`];
 //! - metadata writes (`size`, `mtime`, `discovered_via`, `platform`, `status`) — the
 //!   [`oct_core::Document`] value type does not carry them yet, so [`Store::upsert_document`]
 //!   leaves those columns unset for the scanner (T6) to fill;
@@ -171,6 +173,19 @@ CREATE TABLE suggestions (
 );
 ";
 
+/// Version 2: folders are recorded once, enforced by the database and not only by the read-then-write
+/// in [`Store::record_folder`].
+///
+/// Added as a migration rather than by editing [`SCHEMA_V1`], because V1 is **frozen**: a database
+/// created by an earlier build already reports version 1, and editing the V1 text would leave it
+/// without the constraint forever while claiming otherwise. `folders.path` is `NOT NULL`, so unlike
+/// the identity index on `documents` there is no NULL-distinct trap to work around here. The scanner
+/// canonicalises the root before recording it, so two spellings of one folder are still possible
+/// from a careless caller; that is a documented limitation this constraint cannot see.
+const SCHEMA_V2: &str = "
+CREATE UNIQUE INDEX idx_folders_path_unique ON folders (path);
+";
+
 /// A stored document, together with its database id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentRecord {
@@ -178,6 +193,23 @@ pub struct DocumentRecord {
     pub id: i64,
     /// The document as stored.
     pub document: Document,
+}
+
+/// A watched folder as stored.
+///
+/// A folder is a source of truth for the library: the scanner walks it, and the live watcher
+/// (T7) reacts to changes inside it. It is stored separately from `documents` because a folder
+/// exists whether or not a scan has found anything in it yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchedFolder {
+    /// The `folders.id` primary key.
+    pub id: i64,
+    /// Absolute path of the watched folder, as recorded.
+    pub path: PathBuf,
+    /// Whether the scanner descends into subdirectories.
+    pub recursive: bool,
+    /// Whether the watcher is enabled. User-controlled; [`Store::record_folder`] leaves it alone.
+    pub enabled: bool,
 }
 
 /// A SQLite connection to `oct`'s database.
@@ -191,7 +223,7 @@ pub struct Store {
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -494,6 +526,98 @@ impl Store {
         Ok(progress)
     }
 
+    /// Records a watched folder and returns its row id.
+    ///
+    /// Recording the same path again updates `recursive` in place rather than inserting a second
+    /// row, so the scanner can record its folder on every run without duplicating it. `added_at`
+    /// keeps the time the folder was first recorded, and `enabled` is left untouched: it is the
+    /// user's setting, not the scanner's.
+    ///
+    /// Like [`Store::upsert_document`], the read-then-write below is not a transaction; the same
+    /// accepted residual applies, because `oct` opens one store per process today. A second writer
+    /// that loses the race cannot duplicate the folder: `folders.path` is UNIQUE, so it fails with
+    /// a [`OctError::Storage`] constraint error instead.
+    pub fn record_folder(
+        &self,
+        path: impl AsRef<Path>,
+        recursive: bool,
+    ) -> Result<i64, OctError> {
+        let path = path_to_string(path.as_ref())?;
+        let recursive = if recursive { 1 } else { 0 };
+
+        let existing: Option<(i64, i64)> = self
+            .connection
+            .query_row(
+                "SELECT id, recursive FROM folders WHERE path = ?1 ORDER BY id LIMIT 1",
+                params![path],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+
+        match existing {
+            Some((id, current)) => {
+                if current != recursive {
+                    self.connection
+                        .execute(
+                            "UPDATE folders SET recursive = ?1 WHERE id = ?2",
+                            params![recursive, id],
+                        )
+                        .map_err(storage_error)?;
+                }
+                Ok(id)
+            }
+            None => {
+                self.connection
+                    .execute(
+                        "INSERT INTO folders (path, recursive, enabled, added_at) \
+                         VALUES (?1, ?2, 1, ?3)",
+                        params![path, recursive, unix_now()],
+                    )
+                    .map_err(storage_error)?;
+                Ok(self.connection.last_insert_rowid())
+            }
+        }
+    }
+
+    /// Every watched folder, oldest first.
+    pub fn folders(&self) -> Result<Vec<WatchedFolder>, OctError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id, path, recursive, enabled FROM folders ORDER BY id")
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(WatchedFolder {
+                    id: row.get(0)?,
+                    path: PathBuf::from(row.get::<_, String>(1)?),
+                    recursive: row.get::<_, i64>(2)? != 0,
+                    enabled: row.get::<_, i64>(3)? != 0,
+                })
+            })
+            .map_err(storage_error)?;
+
+        let mut folders = Vec::new();
+        for row in rows {
+            folders.push(row.map_err(storage_error)?);
+        }
+        Ok(folders)
+    }
+
+    /// The number of rows in `documents`.
+    ///
+    /// Added for the scanner's idempotence contract (T6): "scanning the same folder twice leaves
+    /// no duplicates" cannot be proven by looking known identities up one at a time, because a
+    /// duplicate row is exactly what such a lookup would not reveal.
+    pub fn document_count(&self) -> Result<usize, OctError> {
+        let count: i64 = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+            .map_err(storage_error)?;
+        usize::try_from(count)
+            .map_err(|_| OctError::Storage(format!("document count {count} is not a usize")))
+    }
+
     fn find_id_by_identity(&self, identity: &FileId) -> Result<Option<i64>, OctError> {
         let (kind, volume, index, hash) = encode_identity(identity);
         self.connection
@@ -600,7 +724,7 @@ pub fn user_data_dir_for(
 
 /// Brings `connection` to [`Store::CURRENT_SCHEMA_VERSION`], forward-only.
 fn migrate(connection: &mut Connection) -> Result<(), OctError> {
-    let version = read_schema_version(connection)?;
+    let mut version = read_schema_version(connection)?;
 
     if version > Store::CURRENT_SCHEMA_VERSION {
         return Err(OctError::Storage(format!(
@@ -610,11 +734,25 @@ fn migrate(connection: &mut Connection) -> Result<(), OctError> {
         )));
     }
 
+    // One step per version, each recorded as it is applied, so a database left at any version by an
+    // older build is brought forward by exactly the steps it is missing. Every step is applied in
+    // its own transaction: an interrupted migration leaves the recorded version untouched, so the
+    // next open retries the same step instead of finding half a schema.
     if version < 1 {
         let transaction = connection.transaction().map_err(storage_error)?;
         transaction.execute_batch(SCHEMA_V1).map_err(storage_error)?;
         transaction
-            .pragma_update(None, "user_version", i64::from(Store::CURRENT_SCHEMA_VERSION))
+            .pragma_update(None, "user_version", 1i64)
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+        version = 1;
+    }
+
+    if version < 2 {
+        let transaction = connection.transaction().map_err(storage_error)?;
+        transaction.execute_batch(SCHEMA_V2).map_err(storage_error)?;
+        transaction
+            .pragma_update(None, "user_version", 2i64)
             .map_err(storage_error)?;
         transaction.commit().map_err(storage_error)?;
     }
@@ -757,4 +895,75 @@ fn unix_now() -> i64 {
 
 fn storage_error(error: rusqlite::Error) -> OctError {
     OctError::Storage(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a database exactly as version 1 left it: the V1 schema, a recorded folder, and the
+    /// version stamp. Built from `SCHEMA_V1` itself rather than a copy, so the fixture cannot drift
+    /// away from the schema it claims to reproduce.
+    fn a_version_1_database() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("oct.sqlite3");
+        let connection = Connection::open(&path).expect("open raw");
+        connection
+            .execute_batch(SCHEMA_V1)
+            .expect("create the version 1 schema");
+        connection
+            .execute(
+                "INSERT INTO folders (path, recursive, enabled, added_at) VALUES (?1, 1, 1, 7)",
+                params!["/library/watched"],
+            )
+            .expect("record a folder the way version 1 did");
+        connection
+            .pragma_update(None, "user_version", 1i64)
+            .expect("stamp version 1");
+        drop(connection);
+        (dir, path)
+    }
+
+    #[test]
+    fn a_version_1_database_gains_the_folder_constraint_when_it_migrates() {
+        // The reason SCHEMA_V1 is never edited in place: a database an earlier build already created
+        // must be brought forward by a migration, not silently left behind while the code claims a
+        // constraint it does not have.
+        let (_dir, path) = a_version_1_database();
+
+        let store = Store::open(&path).expect("opening migrates the database");
+        assert_eq!(store.schema_version().expect("schema version"), 2);
+
+        // What the older build recorded survives, including the flags the user owns.
+        let folders = store.folders().expect("list folders");
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].path, PathBuf::from("/library/watched"));
+        assert!(folders[0].recursive);
+        assert!(folders[0].enabled);
+
+        // And the constraint the migration exists for is live afterwards.
+        let connection = Connection::open(&path).expect("open raw");
+        let duplicate = connection.execute(
+            "INSERT INTO folders (path, recursive, enabled, added_at) VALUES (?1, 0, 1, 0)",
+            params!["/library/watched"],
+        );
+        assert!(
+            duplicate.is_err(),
+            "a migrated database must reject a duplicate folder, got {duplicate:?}"
+        );
+    }
+
+    #[test]
+    fn a_migrated_database_is_not_rewritten_on_the_next_open() {
+        let (_dir, path) = a_version_1_database();
+        drop(Store::open(&path).expect("migrate"));
+        let before = std::fs::read(&path).expect("read the database bytes");
+
+        let store = Store::open(&path).expect("reopen");
+        assert_eq!(store.schema_version().expect("schema version"), 2);
+        drop(store);
+
+        let after = std::fs::read(&path).expect("read the database bytes");
+        assert_eq!(after, before, "a database already current must not be rewritten");
+    }
 }
