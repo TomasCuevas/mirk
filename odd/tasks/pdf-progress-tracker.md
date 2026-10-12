@@ -418,3 +418,44 @@ layer, range streaming), content-bound render cost, and the unproven `willReadFr
 |---|---|---|---|
 | T0 | **Done** | `66f299a` | Independent repository, default branch `main`, GPL-3.0, README, `.gitignore`. PDF symlinks and vendored pdf.js correctly excluded (`git status --ignored` confirmed). |
 | — | Phase 1 started | — | Working branch `feat/phase-1-core` created from `main`. |
+| T4 | **Done** | `b34ec4f` | Cargo workspace, 4 crates, 1391 lines of Rust across 39 tracked files. `cargo build --workspace` and 25 tests pass, clippy `--all-targets -D warnings` clean, frontend builds, app launches and exits with no process left. See "Phase 1 — what T4 established" below. |
+
+## Phase 1 — what T4 established
+
+The platform abstraction is now compiler-checked rather than documented. Five traits in
+`oct-core` are the public, contributor-facing interface, and all five are asserted object-safe and
+`Send + Sync` by an integration test, because the provider registry stores
+`Box<dyn ProgressProvider>` and the scan runs off the interface thread:
+
+| Trait | Axis | On Linux | Task |
+| --- | --- | --- | --- |
+| `RecentDocumentsSource` | A — what the user opened | `recently-used.xbel` | T12 |
+| `OpenDocumentDetector` | B — what is open now | `/proc/<pid>/fd` | T8 |
+| `Launcher` | C — open at a page | `xdg-open` / viewer CLI | T7 |
+| `FileIdentity` | portable identity | `st_dev` + `st_ino` | T11 |
+| `ProgressProvider` | reading position | GVFS metadata | T9 |
+
+Three things landed as enforced invariants rather than comments:
+
+1. **Honest stubs.** An unimplemented backend returns `OctError::NotSupported`, never `Ok(vec![])`.
+   The difference matters: the second is indistinguishable from "I looked and there are none", so
+   a missing capability would render as an empty library. A test asserts this for every stub.
+2. **Zero-based pages, everywhere in the domain.** `evince --page-index` is one-based while its
+   stored metadata is zero-based; the conversion belongs at the adapter boundary, and the type
+   documents it so nobody has to rediscover the off-by-one.
+3. **Percent-encoded URIs are tested, not assumed.** GVFS keys its per-document state by URI, so
+   `%C3%B3` versus `%F3` decides whether a lookup finds anything. `file_uri_from_path` is covered
+   by seven tests including the multi-byte escape and the URI-delimiter cases. It does **not**
+   normalise Unicode — macOS stores NFD while Linux stores NFC, and normalising would break the
+   lookup on whichever platform actually holds the file (R7).
+
+**Deferred, not skipped**: `oct-platform` returns empty from `progress_providers()` until T9, and
+`oct-store` is a documented placeholder until T5. Both say so in code.
+
+**Process note**: T4 was implemented inline rather than delegated. Subagent delegation broke
+mid-session — creating the repository changed the session's Git identity, and the delegation layer
+now refuses with *"Writer session Git authority changed before admission"* while
+`session_worktree_register` reports *"Session Git identity changed; cannot register a worktree"*.
+A Pi session restart is required to restore delegation. Until then, remaining Phase 1 tasks are
+implemented inline, which is workable but far more context-expensive, so they should be kept small
+and committed one work unit at a time.
