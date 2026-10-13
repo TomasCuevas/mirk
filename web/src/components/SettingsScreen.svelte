@@ -75,7 +75,7 @@
   <div class="panel">
     <h2>{t("provider.heading")}</h2>
     {#if providerError !== null}
-      <p class="state error">{providerError}</p>
+      <p class="state error">{t("settings.providers.error", { message: providerError })}</p>
     {:else if providerMessage !== null}
       <p class="state">{providerMessage}</p>
     {:else}

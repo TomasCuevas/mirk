@@ -288,6 +288,21 @@ describe("sorting the listing", () => {
   });
 });
 
+describe("progress fraction", () => {
+  it("clamps a position beyond its total, agreeing with the domain", () => {
+    // `StoredProgress::fraction()` clamps in Rust. A stale total reported by a viewer must mean
+    // "finished" on both sides, not a fraction above one that outranks a completed document.
+    const malformed = entry({ progress: progress({ page: 90, total: 80 }) });
+    expect(progressFraction(malformed)).toBe(1);
+  });
+
+  it("is null without a position or without a total, never a guess", () => {
+    expect(progressFraction(entry({ progress: null }))).toBeNull();
+    expect(progressFraction(entry({ progress: progress({ page: 3, total: null }) }))).toBeNull();
+    expect(progressFraction(entry({ progress: progress({ page: 0, total: 0 }) }))).toBeNull();
+  });
+});
+
 describe("title fallback", () => {
   it("shows the file's own name, never the path", () => {
     expect(titleFromPath("/home/u/libros/Cosmos - Carl Sagan.pdf")).toBe("Cosmos - Carl Sagan");

@@ -285,7 +285,11 @@ export function progressFraction(entry: LibraryEntry): number | null {
   if (progress === null || progress.total === null || progress.total === 0) {
     return null;
   }
-  return (progress.page + 1) / progress.total;
+  // Clamped, to agree with `StoredProgress::fraction()` in the domain. A viewer can report a stale
+  // total, and the core already decided what that means: a position beyond the total is *finished*
+  // (1.0), not a fraction above one. Two implementations of one rule that disagree would rank the
+  // same document differently depending on which side asked.
+  return Math.min(1, (progress.page + 1) / progress.total);
 }
 
 /**
