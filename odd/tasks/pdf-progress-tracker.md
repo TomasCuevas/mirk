@@ -584,6 +584,50 @@ success, and `oct-core` stays dependency-free. `/proc` is read with `std` alone:
 `read_link` calls do not justify a `procfs` dependency in a project that already ships a native
 library and a SQLite build.
 
+## Specs — T9 (progress provider registry + the Evince GVFS adapter)
+
+Same rule as every other spec here. This is the task that makes the product's headline claim real: the
+plan measured that **26 of the maintainer's 42 PDFs already hold reading progress nobody can see**, and
+this is what surfaces it.
+
+- **S1 — A real provider, with a stable identity.** The adapter's `id()` is `evince-gvfs` — the value
+already used as the example in the trait docs and asserted in T5's tests, so it is frozen: stored
+progress rows reference it. `platform()` is Linux; `viewer_ids()` names what it claims (`evince`,
+`org.gnome.Evince`, `papers`, `org.gnome.Papers`); `capability()` is **`Live`**, proven in T1.
+`detect()` reports `Missing` when the viewer **or** `gio` is absent, because without either the provider
+cannot work at all.
+- **S2 — `read` returns the stored position, zero-based, with its provenance.**
+`metadata::evince::page` is a **0-based** index and is stored as such; `total` comes from the document's
+page count when known; `source` is `External("evince-gvfs")` and `confidence` is `Exact`, because T1
+proved the write lands live and survives an abrupt exit. No record is `Ok(None)` — a normal answer, not
+an error — and state that exists but cannot be understood is also `Ok(None)`, per the trait's own
+contract rule. Never a guess, never a zero standing in for "unknown".
+- **S3 — The off-by-one is converted exactly once, at the CLI boundary.** `resume(doc, page)` passes the
+**1-based** index to `evince -i` (`page + 1`), because T1 confirmed three times that `--page-index` is
+1-based while the stored value is 0-based. This gets a **dedicated round-trip test, not a comment**:
+read a position, resume from it, and assert the CLI was handed `stored + 1`.
+- **S4 — Read through `gio`, never by parsing a private binary format.** The GVFS store is queried with
+`gio info -a metadata::evince::page`, the mechanism T3 measured (re-measured here: **8.7 ms/file**, the
+whole 42-document library in **0.37 s**). The metadata file itself is a log-structured format that is
+undocumented and version-fragile, and parsing it would be exactly the adapter fragility this project
+treats as a liability (R10). The per-document cost is inherent to the trait's shape (`read(&self, doc)`);
+a bulk path would need a bulk trait method, which the plan does not have.
+- **S5 — `resume` goes through the Linux `Launcher` (axis C), implemented here because this adapter is
+its first caller.** `launch(path, None)` opens with the system default (`xdg-open`);
+`launch(path, Some(page))` uses a viewer CLI that accepts a page. `LaunchOutcome` must say what actually
+happened, and a missing viewer is an honest error — never a silent success that leaves the user staring
+at nothing.
+- **S6 — Registered, and the registry's existing invariant still holds.** `oct-platform::progress_providers()`
+returns the adapter on Linux (it returns an empty vector today), and the test that asserts provider ids
+are unique and trackable keeps passing — it was written for exactly this moment.
+- **S7 — Layering and honesty.** The adapter lives in `oct-platform` behind `#[cfg(target_os = "linux")]`,
+`oct-core` stays dependency-free, **no new dependency** (a subprocess and `std` are enough), nothing
+panics, and no call blocks longer than one `gio` invocation.
+
+**Deferred on purpose**: Zathura, Okular and SumatraPDF adapters (separate viewers, separate tasks), and
+any caching layer over `gio` — the trait's per-document shape is what the plan locked, and a cache would
+be a workaround for a cost that is already acceptable at library scale.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
@@ -1094,3 +1138,34 @@ read failure). It is deliberately **uncommitted**, because its parser may be rep
 - **Phase 1 has two tasks left**: T9 (the provider registry plus the Evince GVFS adapter — the first
   real `ProgressProvider`, `Live`, and the first caller of `Launcher`) and T12 (`recently-used.xbel`,
   axis A). Then the tray and the UI.
+
+**L13 — T9 scoped, and the UI order changed at the user's request (2026-10-12):**
+
+- **Reconnaissance ran before the specs, and it settled two things.** `gio` is present and reads
+  `metadata::evince::page` at **8.7 ms/file** — 0.37 s for the whole 42-document library, consistent with
+  T3's 10.0 ms/file — and **26 of those 42 documents carry a real position**. So the subprocess
+  mechanism the plan assumed is viable at library scale, and the trait's per-document shape is
+  affordable. Parsing the GVFS store directly was rejected: that format is undocumented and
+  version-fragile, which is exactly the adapter fragility this project treats as a liability (R10).
+- **The provider id is frozen at `evince-gvfs`.** Stored progress rows reference it, and the trait docs
+  and T5's tests already use that exact string; changing it later would orphan real rows.
+- **The off-by-one from T1 gets a round-trip test, not a comment.** `read` keeps the 0-based index, and
+  `resume` converts to the 1-based CLI argument exactly once, at the boundary.
+- **The Linux `Launcher` (axis C) is implemented in T9**, because the Evince adapter is its first
+  caller: `xdg-open` for "just open it", a viewer CLI for "open at this page", and an honest error when
+  no viewer is present.
+- **UI order changed, at the user's request.** The plan put the UI in Phase 4, after the tray. The user
+  wants to judge the architecture early, and there is a concrete reason to agree: **the store has no
+  library-listing query at all** — T5 deferred it explicitly because nothing called it — so the first UI
+  screen is what will force that contract into existence. A thin vertical slice therefore moves to
+  immediately after T9, ahead of T12 and the tray. T9 still goes first because it is what makes the
+  screen show the *product* (real reading progress) rather than only the plumbing.
+- **A decision the user owns, not this session**: the frontend framework. T4 deliberately left the web
+  scaffold as plain TypeScript + Vite, and the plan says React / Svelte / Solid must be settled before
+  the UI phase because it changes who can contribute to an open-source project. It will be brought with
+  concrete trade-offs rather than decided unilaterally.
+- **A constraint discovered while scoping T9, worth writing down**: the only way to *create* a GVFS
+  metadata record is `gio set`, which writes to the user's own metadata store. The tests must not do
+  that, so they exercise the real subprocess against a file with no record (`Ok(None)`), cover the
+  value path with the pure parser, and the real end-to-end read is checked by the parent against the
+  maintainer's library instead of being faked.
