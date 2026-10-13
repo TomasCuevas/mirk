@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -83,6 +84,16 @@ impl RecentDocumentsSource for XbelRecentDocuments {
 }
 
 /// Axis B — documents currently open, discovered by inspecting process file descriptors.
+///
+/// This is the plan's acknowledged **heuristic** (R4): thumbnail indexers, backups and antivirus
+/// open PDFs without a human reading them, and `/proc` cannot say which is which. The detector
+/// therefore reports every open `.pdf` target — including one held by this very process, which may
+/// legitimately be the first-party reader — and leaves the judgement to the review queue this axis
+/// feeds (S3). There is deliberately no viewer allowlist here.
+///
+/// Best effort is the contract (S5): a process whose `/proc/<pid>` cannot be listed (another
+/// user's, `EACCES`) or that exits mid-scan is skipped without failing the call. Only an unreadable
+/// `/proc` itself, which would make the answer meaningless, is an error.
 pub struct ProcOpenDocuments;
 
 impl OpenDocumentDetector for ProcOpenDocuments {
@@ -94,12 +105,135 @@ impl OpenDocumentDetector for ProcOpenDocuments {
         PLATFORM
     }
 
+    /// A best-effort snapshot, one entry per `(path, pid)`, sorted by path then pid (S6).
     fn open_documents(&self) -> Result<Vec<OpenDocument>, OctError> {
-        // TODO(T8): walk `/proc/<pid>/fd`, resolve symlinks, keep `.pdf` targets, read
-        // `/proc/<pid>/comm` for the viewer name. Expect noise from thumbnailers and indexers —
-        // the output feeds a review queue, not the library.
-        Err(not_supported("open-document detection", PLATFORM))
+        let processes = fs::read_dir(PROC)?;
+        // Keyed by `(path, pid)`, so duplicate descriptors in one process collapse to one entry and
+        // the iteration order is already the contract's sort order: path, then pid.
+        let mut found: BTreeMap<(PathBuf, u32), Option<String>> = BTreeMap::new();
+
+        for process in processes {
+            let Ok(process) = process else {
+                continue;
+            };
+            let Some(pid) = parse_pid(&process.file_name()) else {
+                continue;
+            };
+            // Resolved lazily: most processes hold no PDF, so their viewer name is never read.
+            let mut viewer: Option<Option<String>> = None;
+            let Ok(descriptors) = fs::read_dir(process.path().join("fd")) else {
+                // The process exited, or belongs to another user. S5.
+                continue;
+            };
+
+            for descriptor in descriptors {
+                let Ok(descriptor) = descriptor else {
+                    continue;
+                };
+                let Ok(target) = fs::read_link(descriptor.path()) else {
+                    // The descriptor was closed between `read_dir` and `read_link`, or the target
+                    // cannot be resolved. S4/S5: skip it rather than inventing a path.
+                    continue;
+                };
+                if is_deleted(&target) || !is_pdf(&target) {
+                    continue;
+                }
+                // Check the type through the resolved path: the `.pdf` suffix alone would accept a
+                // symlink named `report.pdf` pointing at a directory.
+                if !fs::metadata(&target).map(|meta| meta.is_file()).unwrap_or(false) {
+                    continue;
+                }
+
+                let viewer = viewer.get_or_insert_with(|| read_viewer(pid)).clone();
+                found.entry((target, pid)).or_insert(viewer);
+            }
+        }
+
+        Ok(found
+            .into_iter()
+            .map(|((path, pid), viewer)| OpenDocument {
+                path,
+                pid: Some(pid),
+                viewer,
+            })
+            .collect())
     }
+}
+
+/// The process filesystem root. A constant so the scan and its tests agree on one path.
+const PROC: &str = "/proc";
+
+/// The marker the kernel appends to a `/proc/<pid>/fd` target that has been unlinked.
+const DELETED_SUFFIX: &[u8] = b" (deleted)";
+
+/// The PDF extension, matched case-insensitively.
+const PDF_EXTENSION: &[u8] = b".pdf";
+
+/// Parses a `/proc` directory name as a process id.
+///
+/// `/proc` also holds `sys`, `self`, `thread-self` and similar; only numeric names are processes.
+fn parse_pid(name: &std::ffi::OsStr) -> Option<u32> {
+    name.to_str()?.parse().ok()
+}
+
+/// Whether a resolved descriptor target names a file the kernel has already unlinked.
+///
+/// The kernel appends ` (deleted)`. Reporting such a target would create a suggestion pointing at
+/// a path that no longer exists, so it is skipped (S4).
+fn is_deleted(target: &Path) -> bool {
+    target.as_os_str().as_bytes().ends_with(DELETED_SUFFIX)
+}
+
+/// Whether the file name ends in `.pdf`, case-insensitively.
+///
+/// Compared as bytes rather than through a `String`: paths are opaque (R7), and a name that is not
+/// valid UTF-8 must not be silently dropped.
+fn is_pdf(path: &Path) -> bool {
+    let Some(name) = path.file_name().map(|name| name.as_bytes()) else {
+        return false;
+    };
+    name.len() >= PDF_EXTENSION.len()
+        && name[name.len() - PDF_EXTENSION.len()..].eq_ignore_ascii_case(PDF_EXTENSION)
+}
+
+/// The viewer name for `pid`, read from `/proc/<pid>/cmdline` with `/proc/<pid>/comm` as fallback.
+///
+/// `None` when neither is readable. The name is never invented and never the pid as a string (S2).
+fn read_viewer(pid: u32) -> Option<String> {
+    let base = Path::new(PROC).join(pid.to_string());
+    let cmdline = fs::read(base.join("cmdline")).ok();
+    let comm = fs::read(base.join("comm")).ok();
+    viewer_name(cmdline.as_deref(), comm.as_deref())
+}
+
+/// Chooses the viewer name from the two `/proc` files' contents.
+///
+/// Pure, so the `cmdline` -> `comm` fallback is testable without a process that omits `cmdline`,
+/// which cannot be produced on demand.
+fn viewer_name(cmdline: Option<&[u8]>, comm: Option<&[u8]>) -> Option<String> {
+    cmdline
+        .and_then(first_argument_basename)
+        .or_else(|| comm.and_then(comm_name))
+}
+
+/// The basename of `argv[0]` in a `/proc/<pid>/cmdline` image.
+///
+/// `cmdline` is a NUL-separated argument list; the first field is the executable. An empty first
+/// field (a kernel thread, for instance) yields `None` so `viewer_name` can fall back.
+fn first_argument_basename(cmdline: &[u8]) -> Option<String> {
+    let first = cmdline.split(|byte| *byte == 0).next()?;
+    if first.is_empty() {
+        return None;
+    }
+    let argument = std::str::from_utf8(first).ok()?;
+    Path::new(argument).file_name()?.to_str().map(str::to_owned)
+}
+
+/// A process name from `/proc/<pid>/comm`, which the kernel terminates with a newline.
+fn comm_name(comm: &[u8]) -> Option<String> {
+    let name = std::str::from_utf8(comm).ok()?;
+    let name = name.trim_end_matches(['\n', '\0']);
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// Axis C — opening documents through the desktop's own association mechanism.
@@ -651,7 +785,7 @@ mod tests {
     use std::io::{self, Write};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{mpsc, Arc};
+    use std::sync::{mpsc, Arc, Mutex};
     use std::time::{Duration, Instant};
 
     /// A unique temporary directory that removes itself on drop, including on panic.
@@ -679,12 +813,13 @@ mod tests {
     /// The whole point of the stub convention: an unimplemented backend must say so, because
     /// `Ok(vec![])` would be indistinguishable from a genuinely empty library.
     #[test]
-    fn unimplemented_backends_report_not_supported_rather_than_empty_success() {
+    fn the_recent_documents_stub_reports_not_supported_rather_than_empty_success() {
         let recent = XbelRecentDocuments.recent(10);
         assert!(matches!(recent, Err(OctError::NotSupported { .. })));
 
-        let open = ProcOpenDocuments.open_documents();
-        assert!(matches!(open, Err(OctError::NotSupported { .. })));
+        // The `/proc` detector is implemented (T8), so it must answer rather than claim the
+        // capability is missing. Its behaviour is covered by the T8 tests below.
+        assert!(ProcOpenDocuments.open_documents().is_ok());
     }
 
     #[test]
@@ -729,6 +864,237 @@ mod tests {
         assert_eq!(backends.file_identity.id(), "linux-posix-identity");
         assert_eq!(backends.folder_watcher.id(), "linux-inotify");
         assert_eq!(backends.folder_watcher.platform(), Platform::Linux);
+    }
+
+    // --- T8: the `/proc` open-document detector ----------------------------------------------
+
+    /// A committed PDF fixture, used only to give the detector a real `.pdf` target. The detector
+    /// never parses it: on this axis only the extension and the regular-file type matter.
+    const PDF_FIXTURE: &[u8] =
+        include_bytes!("../../oct-scan/tests/fixtures/pages-in-object-stream.pdf");
+
+    /// Serialises the detector tests in this binary.
+    ///
+    /// They hold files open in the *same* process, and `/proc/<pid>/fd` cannot tell one test's
+    /// descriptor from another's. Running them one at a time keeps the determinism test from
+    /// observing another test's close as a change. Poisoning is irrelevant to these assertions, so
+    /// the guard is recovered rather than unwrapped.
+    static DETECTOR_TESTS: Mutex<()> = Mutex::new(());
+
+    fn detector_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        DETECTOR_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Writes the committed fixture into `dir` and returns its canonical path.
+    fn write_fixture(dir: &TempDir, name: &str) -> PathBuf {
+        let path = dir.path.join(name);
+        std::fs::write(&path, PDF_FIXTURE).expect("write the PDF fixture");
+        canonical(&path)
+    }
+
+    #[test]
+    fn a_held_open_pdf_is_reported_with_our_pid_and_real_viewer() {
+        let _guard = detector_test_guard();
+        let dir = TempDir::new("proc-held");
+        let path = write_fixture(&dir, "held.pdf");
+        let _held = std::fs::File::open(&path).expect("hold the fixture open");
+
+        let documents = ProcOpenDocuments
+            .open_documents()
+            .expect("the snapshot succeeds");
+
+        // Containment, not equality: other processes on this machine may legitimately hold PDFs
+        // open, so an exact-vector assertion would be flaky.
+        let ours = documents
+            .iter()
+            .find(|document| document.path == path && document.pid == Some(std::process::id()))
+            .unwrap_or_else(|| panic!("a held-open PDF was not reported: {documents:?}"));
+
+        let expected = std::env::current_exe()
+            .expect("current executable")
+            .file_name()
+            .expect("executable file name")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            ours.viewer.as_deref(),
+            Some(expected.as_str()),
+            "the viewer must come from `/proc/<pid>/cmdline`, not from the pid"
+        );
+    }
+
+    #[test]
+    fn a_held_open_non_pdf_is_not_reported() {
+        let _guard = detector_test_guard();
+        let dir = TempDir::new("proc-txt");
+        let path = dir.path.join("notes.txt");
+        std::fs::write(&path, b"not a PDF").expect("write the text file");
+        let path = canonical(&path);
+        let _held = std::fs::File::open(&path).expect("hold the text file open");
+
+        let documents = ProcOpenDocuments
+            .open_documents()
+            .expect("the snapshot succeeds");
+
+        assert!(
+            !documents.iter().any(|document| document.path == path),
+            "a non-PDF descriptor was reported: {documents:?}"
+        );
+    }
+
+    #[test]
+    fn a_held_open_but_unlinked_file_is_not_reported() {
+        let _guard = detector_test_guard();
+        let dir = TempDir::new("proc-unlinked");
+        let path = write_fixture(&dir, "vanished.pdf");
+        let _held = std::fs::File::open(&path).expect("hold the fixture open");
+        std::fs::remove_file(&path).expect("unlink while the descriptor is still open");
+
+        let documents = ProcOpenDocuments
+            .open_documents()
+            .expect("the snapshot succeeds");
+
+        assert!(
+            !documents.iter().any(|document| document.path == path),
+            "an unlinked descriptor became a suggestion for a path that no longer exists: {documents:?}"
+        );
+    }
+
+    #[test]
+    fn a_pdf_closed_before_the_snapshot_is_not_reported() {
+        let _guard = detector_test_guard();
+        let dir = TempDir::new("proc-closed");
+        let path = write_fixture(&dir, "closed.pdf");
+        {
+            let _held = std::fs::File::open(&path).expect("open the fixture");
+        } // the descriptor is released here
+
+        let documents = ProcOpenDocuments
+            .open_documents()
+            .expect("the snapshot succeeds");
+
+        assert!(
+            !documents.iter().any(|document| document.path == path),
+            "a file that is not open was reported: {documents:?}"
+        );
+    }
+
+    #[test]
+    fn two_consecutive_snapshots_are_identical_sorted_and_deduplicated() {
+        let _guard = detector_test_guard();
+        let dir = TempDir::new("proc-stable");
+        let path = write_fixture(&dir, "stable.pdf");
+        let _held = std::fs::File::open(&path).expect("hold the fixture open");
+
+        let first = ProcOpenDocuments
+            .open_documents()
+            .expect("the first snapshot succeeds");
+        let second = ProcOpenDocuments
+            .open_documents()
+            .expect("the second snapshot succeeds");
+
+        // Stability is asserted for the entries this test controls, not for the whole machine. Other
+        // processes — a browser with a PDF open — and sibling tests in this binary, which hold PDFs
+        // open while they run, can legitimately change the snapshot between two calls. Asserting that
+        // the entire system stood still would be a flake dressed up as a test; the properties that
+        // *are* the contract (deduplication and order) are asserted below over the whole snapshot.
+        let root = std::fs::canonicalize(&dir.path).expect("canonicalise the temporary directory");
+        let controlled = |documents: &[OpenDocument]| -> Vec<OpenDocument> {
+            documents
+                .iter()
+                .filter(|document| document.path.starts_with(&root))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(
+            controlled(&first),
+            controlled(&second),
+            "two snapshots must agree about the paths this test controls"
+        );
+
+        let mut pairs: Vec<(PathBuf, Option<u32>)> = first
+            .iter()
+            .map(|document| (document.path.clone(), document.pid))
+            .collect();
+        let total = pairs.len();
+        pairs.sort();
+        pairs.dedup();
+        assert_eq!(
+            pairs.len(),
+            total,
+            "a (path, pid) pair was reported more than once: {first:?}"
+        );
+
+        let mut sorted = first.clone();
+        sorted.sort_by(|left, right| left.path.cmp(&right.path).then(left.pid.cmp(&right.pid)));
+        assert_eq!(
+            first, sorted,
+            "the snapshot must be sorted by path then pid"
+        );
+
+        assert!(
+            first
+                .iter()
+                .any(|document| document.path == path && document.pid == Some(std::process::id())),
+            "the held-open fixture is missing from the snapshot: {first:?}"
+        );
+    }
+
+    #[test]
+    fn a_deleted_descriptor_target_is_recognised_by_its_suffix() {
+        assert!(is_deleted(Path::new("/tmp/report.pdf (deleted)")));
+        assert!(!is_deleted(Path::new("/tmp/report.pdf")));
+        // A file whose *name* contains the marker but does not end with it is not deleted.
+        assert!(!is_deleted(Path::new("/tmp/report (deleted).pdf")));
+    }
+
+    #[test]
+    fn only_a_pdf_extension_is_accepted_and_case_does_not_matter() {
+        assert!(is_pdf(Path::new("/tmp/report.pdf")));
+        assert!(is_pdf(Path::new("/tmp/REPORT.PDF")));
+        assert!(is_pdf(Path::new("/tmp/report.Pdf")));
+        assert!(!is_pdf(Path::new("/tmp/report.pdf.txt")));
+        assert!(!is_pdf(Path::new("/tmp/pdf")));
+        assert!(!is_pdf(Path::new("/tmp/report")));
+        assert!(!is_pdf(Path::new("/")));
+    }
+
+    #[test]
+    fn the_viewer_falls_back_from_cmdline_to_comm() {
+        // The `cmdline` path wins: the basename of `argv[0]`.
+        assert_eq!(
+            viewer_name(Some(b"/usr/bin/evince\0--page-index\0five\0"), Some(b"evince\n")),
+            Some("evince".to_owned())
+        );
+        // A missing or empty `cmdline` falls back to `comm`, with the kernel's newline removed.
+        assert_eq!(
+            viewer_name(None, Some(b"zathura\n")),
+            Some("zathura".to_owned())
+        );
+        assert_eq!(
+            viewer_name(Some(b"\0"), Some(b"okular\n")),
+            Some("okular".to_owned())
+        );
+        // Neither readable: honest `None`, never the pid rendered as a string.
+        assert_eq!(viewer_name(None, None), None);
+        assert_eq!(viewer_name(Some(b""), None), None);
+        assert_eq!(viewer_name(None, Some(b"\n")), None);
+    }
+
+    #[test]
+    fn the_first_argument_basename_ignores_the_rest_of_the_command_line() {
+        assert_eq!(
+            first_argument_basename(b"/usr/bin/evince\0-i\0ten\0book.pdf\0"),
+            Some("evince".to_owned())
+        );
+        assert_eq!(
+            first_argument_basename(b"zathura\0"),
+            Some("zathura".to_owned())
+        );
+        assert_eq!(first_argument_basename(b""), None);
+        assert_eq!(first_argument_basename(b"\0--flag\0"), None);
     }
 
     // --- T7a: the watched-folder watcher -----------------------------------------------------
