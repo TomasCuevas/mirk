@@ -1315,3 +1315,34 @@ Verbatim, because these are requirements and not a wish list:
 5. **The folder chooser (item 1)**: a native picker needs Tauri's dialog plugin, which is a new dependency and therefore a decision to record rather than slip in. The manual path entry stays as the secondary, collapsed option the user asked for.
 
 **Not forgotten**: the string catalogue must gain every new label in both languages, and each new screen must keep the rule that reading progress is stated with its provenance rather than as a bare percentage.
+
+**L18 — The user's clarifications and two new requirements (2026-10-12):**
+
+- **The PNG mystery is closed, and it was not a bug.** The user clarified that the path in their
+  report was a screenshot they took *to show* the URL-as-title defect. That matches what the evidence
+  said — 42 documents in the database, all PDFs, and a scanner that filters by extension — and it is
+  why the second half of item 2 was asked about instead of being assumed into a fix. **Reproduce
+  first, and when the evidence says "not a bug", ask rather than patch.**
+- **Item 2's fix, as the user specified it**: a title with no embedded value comes from the file's own
+  name — everything after the last separator, minus the extension. Shipped with three tests pinning
+  the cases that bite: dots in a *directory* name, dots in the file's own name, no extension, and a
+  leading dot. The fallback is deliberately not badged on the card: the file's name is the ordinary
+  convention, and "this document has no title of its own" belongs in the title editor where the reader
+  can act on it.
+- **New requirement 1 — user-editable titles.** The reader can set a title from inside the app. This is
+  not a text field: a title extracted from the PDF and a title a person typed are **different facts**,
+  exactly like progress from Evince versus progress typed by hand. So it needs a migration (V3) and
+  the same provenance discipline the `progress` table already applies — otherwise the interface cannot
+  say whether it is showing the document's title or the reader's, and the first time it guesses wrong
+  the reader stops trusting every other field.
+- **New requirement 2 — covers, expanded.** The default cover is the document's first page, and the
+  user must be able to choose another page or upload an image of their own. That makes it three things
+  rather than one: a **rendering path** (pdfium's render API, never used in this project — R12 measured
+  pdf.js in a browser, not this), a **storage decision** (rendered and uploaded covers live somewhere,
+  and an uploaded image is user data that must survive a rescan), and another **migration** for the
+  per-document choice. The bounded measurement comes first, as it did for every uncertain capability
+  here.
+- **Sequencing unchanged**: the title defect first (done), then the structural UI (grid, folder action,
+  filtering, navbar, screens), then the home screen's numbers, then covers, then the folder chooser.
+  The two new requirements slot in as: editable titles with the structural UI (it is a per-card action),
+  and covers last with their measurement.
