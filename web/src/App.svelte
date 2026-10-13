@@ -236,6 +236,8 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    padding: 1rem 1.1rem 1.25rem;
+    /* R6 (L22): the layout padding was too generous for a phone-width window, so it is reduced here
+       and in the screens and cards together rather than one place at a time. */
+    padding: 0.7rem 0.8rem 0.9rem;
   }
 </style>

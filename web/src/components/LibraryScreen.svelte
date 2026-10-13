@@ -91,7 +91,7 @@
   .screen {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.75rem;
   }
 
   h1 {
@@ -112,8 +112,8 @@
     display: flex;
     flex-wrap: wrap;
     align-items: flex-end;
-    gap: 0.75rem 1.25rem;
-    padding: 0.9rem 1rem;
+    gap: 0.6rem 1rem;
+    padding: 0.7rem 0.8rem;
     background: #ffffff;
     border: 1px solid #e2e6eb;
     border-radius: 0.75rem;
@@ -152,15 +152,20 @@
     color: #5a6472;
   }
 
-  /* Cards wrap to as many columns as the fixed phone width allows — three when there is room,
-     two at the window's own width — instead of forcing a desktop three-column grid into it. */
+  /* The row gap is declared on its own and is wider than the column gap. R8 was **measured** from the
+     user's screenshot of the running build: the columns were separated by exactly 12 px of page
+     background and the rows by none at all, although this rule declared `gap: 0.75rem` for both axes
+     and the bundled CSS contained it. The card being pinned to its grid row by `height: 100%` is the
+     remaining suspect, so the row separation no longer rides on a shorthand and the user's own eyes on
+     the running application are the check. */
   .grid {
     list-style: none;
     margin: 0;
     padding: 0;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
-    gap: 0.75rem;
+    column-gap: 0.75rem;
+    row-gap: 1.25rem;
   }
 
   .grid li {

@@ -153,7 +153,7 @@
   .screen {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.75rem;
   }
 
   h1 {
@@ -173,7 +173,7 @@
     background: #ffffff;
     border: 1px solid #e2e6eb;
     border-radius: 0.75rem;
-    padding: 1rem 1.25rem;
+    padding: 0.7rem 0.9rem;
   }
 
   .state {
@@ -249,7 +249,7 @@
   }
 
   button {
-    padding: 0.5rem 1rem;
+    padding: 0.45rem 0.8rem;
     border: 1px solid #24506b;
     border-radius: 0.4rem;
     background: #24506b;

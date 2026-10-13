@@ -38,7 +38,7 @@
     flex: none;
     display: flex;
     gap: 0.25rem;
-    padding: 0.5rem 0.6rem;
+    padding: 0.4rem 0.5rem;
     background: #ffffff;
     border-top: 1px solid #e2e6eb;
     box-shadow: 0 -1px 6px rgba(28, 32, 36, 0.05);
@@ -47,7 +47,7 @@
   button {
     flex: 1 1 0;
     min-width: 0;
-    padding: 0.6rem 0.5rem;
+    padding: 0.5rem 0.45rem;
     border: none;
     border-radius: 0.5rem;
     background: transparent;

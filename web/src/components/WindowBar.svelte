@@ -63,7 +63,7 @@
     justify-content: space-between;
     gap: 0.5rem;
     height: 2.5rem;
-    padding: 0 0.35rem 0 0.9rem;
+    padding: 0 0.25rem 0 0.7rem;
     background: #1c2024;
     color: #f6f7f9;
     user-select: none;

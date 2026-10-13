@@ -27,7 +27,7 @@
   .screen {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.75rem;
   }
 
   h1 {
@@ -53,7 +53,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
-    padding: 0.9rem 1rem;
+    padding: 0.7rem 0.8rem;
     background: #ffffff;
     border: 1px solid #e2e6eb;
     border-radius: 0.75rem;

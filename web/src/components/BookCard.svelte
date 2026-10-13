@@ -60,9 +60,12 @@
   article {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    height: 100%;
-    padding: 0.9rem;
+    gap: 0.35rem;
+    /* `min-height`, not `height`: the card follows its own content instead of being pinned to its grid
+       row. Pinning it is the remaining suspect behind R8 — the rows of the library grid touching while
+       the columns were properly separated (L22). */
+    min-height: 100%;
+    padding: 0.7rem;
     background: #ffffff;
     border: 1px solid #e2e6eb;
     border-radius: 0.75rem;
@@ -104,7 +107,7 @@
 
   button {
     margin-top: auto;
-    padding: 0.45rem 0.7rem;
+    padding: 0.4rem 0.6rem;
     border: 1px solid #ccd2da;
     border-radius: 0.4rem;
     background: #ffffff;

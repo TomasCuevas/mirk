@@ -134,7 +134,7 @@ const spanish: Catalogue = {
   "nav.ariaLabel": "Pantallas",
   "nav.home": "Inicio",
   "nav.library": "Biblioteca",
-  "nav.settings": "Configuración",
+  "nav.settings": "Ajustes",
 
   "home.heading": "Inicio",
   "home.placeholder":
@@ -194,7 +194,7 @@ const spanish: Catalogue = {
     "necesita el comando gio y una instalación de Evince o Papers",
   "provider.reason.unknown": "no está presente en esta máquina",
 
-  "settings.heading": "Configuración",
+  "settings.heading": "Ajustes",
   "settings.language.heading": "Idioma",
   "settings.folders.heading": "Carpetas vigiladas",
   "settings.folders.loading": "Leyendo las carpetas que el almacén tiene registradas…",
