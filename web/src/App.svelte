@@ -11,6 +11,7 @@
     type Provider,
     type ScanReport,
   } from "./lib/library";
+  import { titleFromPath } from "./lib/library";
   import { invoke, runningInTauri } from "./lib/tauri";
 
   const inTauri = runningInTauri();
@@ -113,7 +114,7 @@
       <ul class="library">
         {#each entries as entry (entry.id)}
           <li>
-            <span class="title">{entry.title ?? entry.path}</span>
+            <span class="title">{entry.title ?? titleFromPath(entry.path)}</span>
             {#if entry.author !== null}
               <span class="author">{t("library.author", { author: entry.author })}</span>
             {/if}

@@ -6,6 +6,7 @@ import {
   describeProvider,
   describeProviderRegistry,
   describeScanSummary,
+  titleFromPath,
   type LibraryEntry,
   type Progress,
 } from "./library";
@@ -163,5 +164,29 @@ describe("i18n", () => {
     ).not.toBe(
       describeEntryProgress(progress({ page: 11, total: 80, source: "evince-gvfs" }), english),
     );
+  });
+});
+
+describe("title fallback", () => {
+  it("shows the file's own name, never the path", () => {
+    expect(titleFromPath("/home/u/libros/Cosmos - Carl Sagan.pdf")).toBe("Cosmos - Carl Sagan");
+    expect(titleFromPath("/home/u/Comparación de Métodos.pdf")).toBe("Comparación de Métodos");
+    // A path with a directory that also contains dots must not be truncated at the wrong dot.
+    expect(titleFromPath("/home/u/libros.v2/report.pdf")).toBe("report");
+    expect(titleFromPath("/home/u/libros.v2/report.v2.pdf")).toBe("report.v2");
+  });
+
+  it("keeps a name that has no extension, and a leading dot", () => {
+    expect(titleFromPath("/home/u/no-extension")).toBe("no-extension");
+    expect(titleFromPath("/home/u/.hidden")).toBe(".hidden");
+    expect(titleFromPath("report.pdf")).toBe("report");
+  });
+
+  it("is what the card shows when the document has no title of its own", () => {
+    // The defect this replaced: the card rendered the absolute path where a title belongs, for the
+    // 12 of the maintainer's 42 documents whose PDFs carry no embedded title.
+    const path = "/home/u/libros/Programación/gentleman-programming-book-es.pdf";
+    expect(titleFromPath(path)).toBe("gentleman-programming-book-es");
+    expect(titleFromPath(path)).not.toContain("/");
   });
 });

@@ -155,6 +155,25 @@ export function describeProvider(provider: Provider, t: Translate): string {
 
 /** The message shown when the platform exposes no providers at all, or `null` when it does. */
 /**
+ * The name to show when a document carries no embedded title.
+ *
+ * Everything after the last separator, minus the extension — the file's own name, which is what the
+ * reader sees in their file manager and what they will recognise. A path is not a title: rendering
+ * `/home/u/libros/report.pdf` where a title belongs tells the reader nothing they cannot already see
+ * and reads like a mistake.
+ *
+ * It is deliberately **not** marked on the card. The card shows the file's name as its title, which is
+ * the ordinary convention, and the distinction that matters — "this document has no title of its own"
+ * — belongs where the reader can act on it, in the title editor, not as a badge on every cover.
+ */
+export function titleFromPath(path: string): string {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const extension = name.lastIndexOf(".");
+  // `> 0` rather than `>= 0`, so a leading-dot name like `.hidden` keeps its dot.
+  return extension > 0 ? name.slice(0, extension) : name;
+}
+
+/**
  * What to say about the provider registry.
  *
  * `null` means the registry has not arrived yet, which is **not** the same as "there are none": a
