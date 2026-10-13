@@ -396,7 +396,7 @@ further down; this block is what a worker reads to know what is done and what is
 - [x] **T5** SQLite schema, migrations and the queries behind them — done (`c2a059d`); specs below
 - [x] **T6** Watched-folder scanner with real page counting via `pdfium` — done (`a5b3ea5`); resolves R2; specs below
 - [x] **T7** inotify watcher over watched folders (Linux; per-OS backend later) — done (T7a `8355b2d`, T7b `41e11c6`); specs below
-- [ ] **T8** `/proc/*/fd` open-document detector — Linux backend of axis B
+- [x] **T8** `/proc/*/fd` open-document detector — done (`bfcd234`); Linux backend of axis B
 - [ ] **T12** `RecentDocumentsSource` for `recently-used.xbel` — Linux backend of axis A
 - [ ] **T9** Progress provider registry plus Evince GVFS adapter — the first real `ProgressProvider` (`Live`), and the first caller of `Launcher`
 - [ ] **T10, T13–T16** Tray, library and UI, manual override, capabilities screen, suggestion queue
@@ -628,6 +628,7 @@ layer, range streaming), content-bound render cost, and the unproven `willReadFr
 | T6 | **Done** | `57f8c4a` + `a5b3ea5` | Watched-folder scanner with `pdfium` page counting, plus the `folders` API and the project's **first migration (V2)**. 69 tests pass (was 47), clippy clean. Full-library cross-check run independently by the parent *and* by the verifier: **42/42 page counts agree with `pdfinfo`**, 0 documents without a count, 0 extras, whole library in **1.5 s**. The parser was chosen by measurement, not assumption — `spike/parser/FINDINGS.md`, log entries L5 and L6. |
 | T7a | **Done** | `e6003e2` + `8355b2d` | The sixth trait `FolderWatcher` (with `WatchTarget`, `WatchEvent`, `WatchEventKind`) plus the Linux inotify backend and the honest `NotSupported` stub. **85 tests pass** (was 69), clippy clean, and both non-Linux targets type-check. Verified twice: attempt 1 found a blocking defect — a directory moved out of a target stayed watched, so events outside the tree were reported under stale paths — plus two should-fix; attempt 2 settled those and found the coalescing window surviving a subtree release. The verification cap was reached there, so the last delta is parent-checked and RED-pinned only — stated plainly in L9. |
 | T7b | **Done** | `41e11c6` | `WatchBridge` wires watcher events into the library: added/changed files counted and persisted, removals reported with the row and its reading progress deliberately kept, `Lost` rescanned, `Unwatchable` reported without pretending a recovery. **93 tests pass** (was 85), clippy clean, `oct-scan` still free of any `oct-platform` dependency, and independent verification marked **S1–S6 all satisfied with no findings**. |
+| T8 | **Done** | `bfcd234` | The axis-B stub became a real `/proc` snapshot: held-open PDFs are reported with their process id and name, deleted targets skipped, output deduplicated and sorted. **102 tests pass** (was 93), clippy clean, both non-Linux targets type-check, `std` only. Independent verification marked **S1–S7 all satisfied with no findings**. The parent rewrote the determinism assertion (whole-system snapshot equality cannot be reliable) and the verifier confirmed it still fails on duplicates, unsorted output or a dropped controlled entry. |
 
 ## Phase 1 — what T4 established
 
@@ -1069,3 +1070,27 @@ read failure). It is deliberately **uncommitted**, because its parser may be rep
   mechanism's last delta is parent-checked and RED-pinned but was never independently re-verified,
   because the two-attempt cap was reached. Everything built after it — this task — was verified
   normally.
+
+**L12 — T8 closed (2026-10-12):**
+
+- T8 landed: `ProcOpenDocuments::open_documents` is a real `/proc` snapshot. **102 tests pass** (was
+  93), clippy clean, the non-Linux stub still returns `NotSupported` and type-checks for both non-Linux
+  targets, and independent verification marked **S1–S7 all satisfied with no findings**.
+- **The tests can be deterministic because the test process can hold a file open itself**: the detector
+  is asked for a snapshot while the test holds a PDF fixture, and must report *its own* path and pid.
+  Containment, not equality — other applications on this machine may legitimately have PDFs open, so an
+  exact-vector assertion would have been a flake dressed up as a test.
+- **The parent rewrote one assertion, and the reason is worth keeping**: the determinism test compared
+  two whole-system snapshots. That cannot be made reliable — sibling tests in the same binary hold PDFs
+  open while they run, and so does anything else on the machine. Deduplication and ordering are now
+  asserted over the **full** snapshot (both deterministic), and stability over the paths the test
+  controls. The verifier confirmed this did not weaken it: duplicates, unsorted output, or a dropped
+  controlled entry all still fail.
+- **Decisions recorded rather than left implicit**: a deleted descriptor target is skipped, because
+  reporting it would suggest a path that no longer exists; the noise is reported rather than filtered
+  (R4); a `.pdf` name must also resolve to a regular file, so a symlink called `report.pdf` pointing at
+  a directory cannot slip through; and an unreadable `/proc` root is an error while per-process failures
+  are skips, because an empty snapshot is indistinguishable from a system with nothing open.
+- **Phase 1 has two tasks left**: T9 (the provider registry plus the Evince GVFS adapter — the first
+  real `ProgressProvider`, `Live`, and the first caller of `Launcher`) and T12 (`recently-used.xbel`,
+  axis A). Then the tray and the UI.
