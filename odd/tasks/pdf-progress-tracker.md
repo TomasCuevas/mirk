@@ -635,6 +635,39 @@ panics, and no call blocks longer than one `gio` invocation.
 any caching layer over `gio` — the trait's per-document shape is what the plan locked, and a cache would
 be a workaround for a cost that is already acceptable at library scale.
 
+
+## Specs — UI slice (the first vertical slice)
+
+Written because the user wants to judge the architecture by using it, and because the store has no
+library query at all — T5 deferred listing and filtering explicitly, "because nothing called them
+yet". The caller now exists, which is the whole reason this slice goes before T12 and the tray.
+
+- **S1 — The store gains the listing it never had.** A query returning documents with their **latest
+  progress and its provenance** — page, total, source, confidence, when it was recorded — ordered
+  deterministically. This is the contract T5 deliberately deferred; it is now written by its first
+  caller rather than guessed in advance.
+- **S2 — Three Tauri commands, and nothing speculative**: list the library, scan a folder and return
+  the report, and report the progress-provider registry (id, capability, availability). Each one
+  exists because a pixel of the screen needs it.
+- **S3 — One screen, over the existing `web/` scaffold, in Svelte 5**: the library with its page
+  counts and reading progress, where the progress is **stated with its provenance in words** — "p. 12
+  of 80, recorded by Evince" — and never as a bare percentage. That sentence is the product; a
+  precise-looking 40% that means "the file was closed four months ago" is the lie the provenance
+  columns exist to prevent.
+- **S4 — Honest states, no invented data.** An empty library says it is empty; a missing provider says
+  which capability is missing and why; a scan failure shows the failure. The screen must never render
+  a fabricated `0%`, and never a page count it does not have.
+- **S5 — It actually runs.** `bun run build` succeeds, the Tauri app launches and exits cleanly with
+  the frontend talking to the commands over real IPC — verified the way T4 verified the shell, by
+  process, not by assertion.
+- **S6 — Strings are externalised from this first screen**, which the plan locked as a constraint
+  because the maintainer works in Spanish and an open-source product cannot assume it: one catalogue,
+  no literals scattered through components, English by default with Spanish available.
+
+**Deliberately not in this slice**: filters, sorting, manual override, the capabilities screen, the
+suggestion queue, the tray, and the first-party reader. They are their own tasks, and the slice exists
+to prove the spine end to end — store to provider to IPC to pixels — before more is built on it.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
@@ -643,10 +676,13 @@ be a workaround for a cost that is already acceptable at library scale.
 - **Git layout**: an independent repository at the project root, default branch **`main`**.
   Bootstrapped in commit `66f299a`; Phase 1 work proceeds on `feat/phase-1-core`.
 
-**Non-blocking, deferred**: the **frontend framework**. The T4 scaffold deliberately uses plain
-TypeScript + Vite with no framework, so nothing is locked in. React / Svelte / Solid is a real
-choice with long-term consequences — the contributor pool matters for an open-source project — and
-it must be settled before the UI phase (T12 onward), not during a scaffold task.
+**RESOLVED: the frontend framework is Svelte 5.** The T4 scaffold deliberately shipped plain
+TypeScript + Vite so nothing was locked in, and the choice was held open until a screen actually
+existed to judge it against. Decided by the user, who owns it: Svelte 5 over React and Solid, with
+their stated experience being React — recorded here because that tension is real and worth seeing,
+not because it changes the decision. The measured argument that *doesn't* apply: bundle size is noise
+next to pdf.js, so the framework's weight was never the deciding factor; the contributor pool and the
+ecosystem were, and the user chose ergonomics and less code for a UI of this size.
 
 ## Task log / evidence
 
@@ -1204,3 +1240,22 @@ read failure). It is deliberately **uncommitted**, because its parser may be rep
   with a pure parser, and the real end-to-end read is the parent's check instead of a fake.
 - **Phase 1 is complete**: all six platform traits now have their Linux implementations. What remains
   before a first usable product is the UI slice — next, ahead of T12 and the tray — and then T12 itself.
+
+**L15 — The framework is decided, and the UI slice is specified (2026-10-12):**
+
+- **The user chose Svelte 5**, and their stated experience is React. Both are recorded, because the
+  tension between them is real: the plan says the contributor pool matters for an open-source project,
+  and the person maintaining this code has not used Svelte in anger. The decision is theirs and it
+  stands; it is written down so that a later session sees it was a deliberate choice rather than an
+  accident.
+- **The argument that did *not* decide it**: bundle size. A framework's few tens of kilobytes are noise
+  next to pdf.js, which this product will ship anyway for the first-party reader. The real criteria
+  were the contributor pool, the component ecosystem, and ergonomics for a UI of this size — and the
+  user weighed them toward less code.
+- **The UI slice moves ahead of T12 and the tray**, for the reason given in L13: the store has no
+  library query, and the first screen is what forces that contract into existence. Writing it now means
+  discovering whether the schema and the domain types are enough, while the cost of changing them is
+  still small.
+- **What the slice deliberately leaves out** is as important as what it includes: filters, the
+  capabilities screen, manual override, the suggestion queue, the tray and the reader. The slice proves
+  the spine end to end — store, provider, IPC, pixels — and nothing more.
