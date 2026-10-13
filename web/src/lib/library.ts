@@ -273,8 +273,15 @@ export const sortKeys: readonly SortKey[] = ["title", "pages", "progress"];
  * It counts pages **read**, not the zero-based index stored: the card says "p. 12 of 80" for page
  * `11`, so the fraction is `12 / 80`. Keeping the two in step matters — a sort that disagreed with
  * the sentence above it would be the same class of lie the provenance columns exist to prevent.
- * The result is not clamped: a position beyond the stored total is shown as it is rather than
- * quietly rounded to 100 %.
+ *
+ * **This deliberately differs from `StoredProgress::fraction()` in the domain, which divides
+ * `page / total`.** The domain answers "how many pages are behind the reader"; this answers "which
+ * page is the reader on", which is the number the card prints. Aligning them would make the sort
+ * disagree with the label beside it, so the divergence is the point — do not "fix" it without
+ * changing the sentence too.
+ *
+ * The result **is** clamped: a position beyond the stored total means finished (`1.0`), matching the
+ * domain, rather than a fraction above one that would outrank a completed document.
  *
  * `null` means unknown, and it covers all three ways of not knowing: no recorded position, a
  * position whose source never knew the total, and a stored total of zero (which cannot be divided
