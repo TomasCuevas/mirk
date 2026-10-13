@@ -27,15 +27,17 @@ use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 
 use oct_core::{
-    FolderWatcher, LaunchOutcome, Launcher, OctError, OpenDocument, OpenDocumentDetector, Platform,
-    ProgressProvider, RecentDocument, RecentDocumentsSource, WatchEvent, WatchEventKind,
-    WatchTarget,
+    Availability, Confidence, Document, FolderWatcher, LaunchOutcome, Launcher, OctError,
+    OpenDocument, OpenDocumentDetector, Platform, ProgressCapability, ProgressProvider,
+    ProgressSource, RecentDocument, RecentDocumentsSource, StoredProgress, WatchEvent,
+    WatchEventKind, WatchTarget,
 };
 
 use crate::{not_supported, Backends};
@@ -47,7 +49,7 @@ pub(super) fn backends() -> Backends {
     Backends {
         recent_documents: Box::new(XbelRecentDocuments),
         open_documents: Box::new(ProcOpenDocuments),
-        launcher: Box::new(XdgLauncher),
+        launcher: Box::new(XdgLauncher::new()),
         file_identity: Box::new(PosixFileIdentity),
         folder_watcher: Box::new(LinuxFolderWatcher),
     }
@@ -55,13 +57,209 @@ pub(super) fn backends() -> Backends {
 
 /// Linux progress providers.
 ///
-/// Empty until T9. The first real entry is the Evince adapter, reading
-/// `metadata::evince::page` from the GVFS store at `~/.local/share/gvfs-metadata/`. It is
-/// `ProgressCapability::Live` — measured, not assumed: the store updates within roughly three
-/// seconds of a page change while the document is still open.
+/// The first real entry is the Evince adapter, reading `metadata::evince::page` from the GVFS store
+/// at `~/.local/share/gvfs-metadata/`. It is `ProgressCapability::Live` — measured, not assumed:
+/// the store updates within roughly three seconds of a page change while the document is still
+/// open.
 pub(super) fn progress_providers() -> Vec<Box<dyn ProgressProvider>> {
-    // TODO(T9): register EvinceGvfsProvider here.
-    Vec::new()
+    vec![Box::new(EvinceGvfsProvider::new())]
+}
+
+/// The frozen provider id. Stored progress rows reference this string, so it must never change.
+const EVINCE_PROVIDER_ID: &str = "evince-gvfs";
+
+/// The GVFS metadata attribute Evince writes its **zero-based** page index into.
+const EVINCE_PAGE_ATTRIBUTE: &str = "metadata::evince::page";
+
+/// `evince`'s one-based page flag (long form `--page-index`), shared with Papers.
+const PAGE_INDEX_FLAG: &str = "-i";
+
+/// Viewers that share the GVFS metadata store and accept a page on the command line, in preference
+/// order. Papers is Evince's successor and uses the same flag.
+const PAGE_VIEWERS: &[&str] = &["evince", "papers"];
+
+/// The GVFS command-line tool.
+const GIO: &str = "gio";
+
+/// The system's "open this with the desktop default" helper.
+const XDG_OPEN: &str = "xdg-open";
+
+/// Reads reading position out of the GVFS metadata store Evince (and Papers) write to.
+///
+/// # Why a subprocess
+///
+/// The store at `~/.local/share/gvfs-metadata/home` is a log-structured format that is
+/// undocumented and version-fragile; parsing it directly would be exactly the adapter fragility
+/// this project treats as a liability (R10). `gio info -a metadata::evince::page` is the supported
+/// way in, and it was measured at roughly 9 ms per document, which is affordable at library scale.
+///
+/// # The off-by-one
+///
+/// The stored value is a **zero-based** page index, and that is what [`read`](ProgressProvider::read)
+/// returns. [`resume`](ProgressProvider::resume) hands the same zero-based page to a [`Launcher`],
+/// whose command line converts to `evince`'s one-based flag exactly once. The conversion lives in
+/// exactly one place, [`viewer_page_arguments`].
+pub struct EvinceGvfsProvider {
+    launcher: Box<dyn Launcher>,
+    search_path: Vec<PathBuf>,
+}
+
+impl EvinceGvfsProvider {
+    /// The production provider: the real Linux launcher and this process's own `PATH`.
+    pub fn new() -> Self {
+        Self {
+            launcher: Box::new(XdgLauncher::new()),
+            search_path: environment_search_path(),
+        }
+    }
+
+    /// The injectable core. `launcher` lets a test observe where a resume was sent, and
+    /// `search_path` makes the `gio`/viewer lookup deterministic, exactly as `oct-store`'s
+    /// `user_data_dir_for` takes its environment as parameters instead of reading it.
+    #[cfg(test)]
+    fn with_launcher(launcher: Box<dyn Launcher>, search_path: Vec<PathBuf>) -> Self {
+        Self {
+            launcher,
+            search_path,
+        }
+    }
+}
+
+impl Default for EvinceGvfsProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProgressProvider for EvinceGvfsProvider {
+    fn id(&self) -> &'static str {
+        EVINCE_PROVIDER_ID
+    }
+
+    fn platform(&self) -> Platform {
+        PLATFORM
+    }
+
+    fn viewer_ids(&self) -> &'static [&'static str] {
+        &["evince", "org.gnome.Evince", "papers", "org.gnome.Papers"]
+    }
+
+    fn capability(&self) -> ProgressCapability {
+        // T1 measured the store updating within ~3 s of a page change with the document still open,
+        // and surviving SIGTERM: this is a live source, not a close-time one.
+        ProgressCapability::Live
+    }
+
+    fn detect(&self) -> Availability {
+        // Without `gio` there is nothing to read, and without a viewer there is nothing to resume
+        // into, so either one missing means the provider cannot work at all (S1).
+        let has_gio = find_program(GIO, &self.search_path).is_some();
+        let has_viewer = find_viewer(&self.search_path).is_some();
+        if has_gio && has_viewer {
+            Availability::Installed
+        } else {
+            Availability::Missing
+        }
+    }
+
+    fn read(&self, doc: &Document) -> Result<Option<StoredProgress>, OctError> {
+        let Some(output) = gio_metadata_output(&self.search_path, &doc.path)? else {
+            return Ok(None);
+        };
+        let Some(page) = parse_gio_page(&output) else {
+            return Ok(None);
+        };
+        Ok(Some(StoredProgress::new(
+            page,
+            doc.pages,
+            ProgressSource::External(EVINCE_PROVIDER_ID),
+            Confidence::Exact,
+        )))
+    }
+
+    fn resume(&self, doc: &Document, page: u32) -> Result<LaunchOutcome, OctError> {
+        self.launcher.launch(&doc.path, Some(page))
+    }
+}
+
+/// Runs `gio info -a metadata::evince::page <path>` and returns its standard output.
+///
+/// `Ok(None)` means there is no readable record: `gio` is not installed, or it ran and refused the
+/// path. Both are normal answers for a provider whose job is to report only a position it is sure
+/// about. Failing to *start* `gio` is an error, because that is a broken environment rather than a
+/// missing record.
+fn gio_metadata_output(search_path: &[PathBuf], path: &Path) -> Result<Option<String>, OctError> {
+    let Some(gio) = find_program(GIO, search_path) else {
+        return Ok(None);
+    };
+    let output = Command::new(&gio)
+        .arg("info")
+        .arg("-a")
+        .arg(EVINCE_PAGE_ATTRIBUTE)
+        .arg(path)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| OctError::Adapter {
+            provider: EVINCE_PROVIDER_ID,
+            message: format!("could not run `{}`: {error}", gio.display()),
+        })?;
+    if !output.status.success() {
+        // `gio` exits nonzero for a path whose metadata it cannot read, which is "no record" from
+        // this provider's point of view, not an adapter failure.
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
+}
+
+/// Extracts the stored zero-based page index from `gio info` output.
+///
+/// Pure, so the value path is tested against real `gio` output without running it or writing any
+/// metadata. Returns `None` when the attribute is absent, when its value is not a plain
+/// non-negative integer, or when it does not fit a page index. It never guesses (contract rule 2).
+fn parse_gio_page(output: &str) -> Option<u32> {
+    output.lines().find_map(|line| {
+        let value = line
+            .trim()
+            .strip_prefix(EVINCE_PAGE_ATTRIBUTE)?
+            .trim_start_matches(':')
+            .trim();
+        value.parse::<u32>().ok()
+    })
+}
+
+/// Finds an executable `program` in `search_path`.
+///
+/// Pure: the search path is a parameter, so the lookup is tested against a temporary directory
+/// without mutating the process environment or consulting the machine's real `PATH` — the same
+/// injection pattern `oct-store::user_data_dir_for` uses for its environment.
+fn find_program(program: &str, search_path: &[PathBuf]) -> Option<PathBuf> {
+    search_path.iter().find_map(|directory| {
+        let candidate = directory.join(program);
+        is_executable_file(&candidate).then_some(candidate)
+    })
+}
+
+/// Whether `path` is a regular file with at least one execute bit set.
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+/// The first page-capable viewer found in `search_path`.
+fn find_viewer(search_path: &[PathBuf]) -> Option<PathBuf> {
+    PAGE_VIEWERS
+        .iter()
+        .find_map(|program| find_program(program, search_path))
+}
+
+/// This process's own `PATH`, split into directories.
+fn environment_search_path() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default()
 }
 
 /// Axis A — the freedesktop recent-documents list.
@@ -237,7 +435,83 @@ fn comm_name(comm: &[u8]) -> Option<String> {
 }
 
 /// Axis C — opening documents through the desktop's own association mechanism.
-pub struct XdgLauncher;
+///
+/// `launch(path, None)` hands the document to `xdg-open`, the desktop default. `launch(path,
+/// Some(page))` starts a page-capable viewer's command line. The zero-to-one-based conversion
+/// lives in exactly one place, [`viewer_page_arguments`]; nothing else adds or subtracts one.
+pub struct XdgLauncher {
+    spawner: Box<dyn ProcessSpawner>,
+    search_path: Vec<PathBuf>,
+}
+
+impl XdgLauncher {
+    /// The production launcher: spawns real processes and looks programs up on this process's
+    /// `PATH`.
+    pub fn new() -> Self {
+        Self {
+            spawner: Box::new(SystemSpawner),
+            search_path: environment_search_path(),
+        }
+    }
+
+    /// The injectable core: a recording spawner and an explicit search path.
+    #[cfg(test)]
+    fn with_spawner(spawner: Box<dyn ProcessSpawner>, search_path: Vec<PathBuf>) -> Self {
+        Self {
+            spawner,
+            search_path,
+        }
+    }
+
+    /// Opens `path` with the desktop's default handler.
+    fn launch_default(&self, path: &Path) -> Result<LaunchOutcome, OctError> {
+        let Some(program) = find_program(XDG_OPEN, &self.search_path) else {
+            return Err(missing_program(XDG_OPEN, "open the document"));
+        };
+        self.spawn(&program, &[path.as_os_str().to_os_string()])?;
+        Ok(LaunchOutcome::Delegated {
+            viewer: XDG_OPEN.to_string(),
+        })
+    }
+
+    /// Opens `path` at `page` with the first page-capable viewer installed.
+    ///
+    /// When no page-capable viewer is installed the document is **still opened** with the desktop's
+    /// default handler, because [`Launcher::launch`]'s contract is explicit: landing on page one is a
+    /// degraded success, not an error, and refusing to open anything would be worse for the user than
+    /// opening at the start. The returned `Delegated { viewer }` names whichever program actually
+    /// ran, so a caller can tell the two cases apart. An error remains honest when *nothing* can open
+    /// the document at all, which is [`Self::launch_default`]'s own case.
+    ///
+    /// Known limitation, recorded rather than hidden: `LaunchOutcome` cannot say "opened, but not at
+    /// the page you asked for". The viewer name is the only signal. Adding a variant is additive and
+    /// cheap, and should happen when a caller actually needs to tell the user that their viewer
+    /// cannot be asked for a page.
+    fn launch_at_page(&self, path: &Path, page: u32) -> Result<LaunchOutcome, OctError> {
+        let Some(program) = find_viewer(&self.search_path) else {
+            // Degraded and named as such: the program that runs cannot be asked for a page.
+            return self.launch_default(path);
+        };
+        let viewer = program_name(&program);
+        self.spawn(&program, &viewer_page_arguments(page, path))?;
+        Ok(LaunchOutcome::Delegated { viewer })
+    }
+
+    fn spawn(&self, program: &Path, args: &[OsString]) -> Result<(), OctError> {
+        self.spawner.spawn(program, args).map_err(|error| {
+            OctError::Io(io::Error::other(format!(
+                "could not start `{}`: {error}",
+                program.display()
+            )))
+        })
+    }
+}
+
+impl Default for XdgLauncher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Launcher for XdgLauncher {
     fn id(&self) -> &'static str {
@@ -248,10 +522,81 @@ impl Launcher for XdgLauncher {
         PLATFORM
     }
 
-    fn launch(&self, _path: &Path, _page: Option<u32>) -> Result<LaunchOutcome, OctError> {
-        // TODO(T7): `xdg-open` for the plain case; a viewer CLI (`evince -i N`, remembering the
-        // one-based conversion) when a page is requested and that viewer is known.
-        Err(not_supported("launching documents", PLATFORM))
+    fn launch(&self, path: &Path, page: Option<u32>) -> Result<LaunchOutcome, OctError> {
+        match page {
+            None => self.launch_default(path),
+            Some(page) => self.launch_at_page(path, page),
+        }
+    }
+}
+
+/// The honest error for a program a launch needs but cannot find.
+fn missing_program(program: &str, purpose: &str) -> OctError {
+    OctError::Io(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("cannot {purpose}: `{program}` is not installed"),
+    ))
+}
+
+/// The plain file name of a program path, for the [`LaunchOutcome`].
+fn program_name(program: &Path) -> String {
+    program
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| program.display().to_string())
+}
+
+/// The argument list for a page-capable viewer, with the **one and only** zero-to-one-based
+/// conversion in the adapter.
+///
+/// `metadata::evince::page` is zero-based; `evince -i` (`--page-index`) is one-based. T1 confirmed
+/// the mismatch three times, so the conversion happens here, at the command-line boundary, and the
+/// round-trip test pins it. `u64` arithmetic keeps a corrupt `u32::MAX` page from overflowing and
+/// panicking.
+fn viewer_page_arguments(page: u32, path: &Path) -> Vec<OsString> {
+    let one_based = u64::from(page) + 1;
+    vec![
+        OsString::from(PAGE_INDEX_FLAG),
+        OsString::from(one_based.to_string()),
+        path.as_os_str().to_os_string(),
+    ]
+}
+
+/// Starts a program without waiting for it to finish.
+///
+/// Injected so a test can observe the exact program and arguments a launch would use without
+/// starting a viewer. The real implementation reaps the child on a detached thread: a viewer such
+/// as Evince stays alive for as long as the document is open, so waiting here would block the
+/// caller for minutes.
+trait ProcessSpawner: Send + Sync {
+    fn spawn(&self, program: &Path, args: &[OsString]) -> io::Result<()>;
+}
+
+/// Spawns real processes with [`std::process::Command`].
+struct SystemSpawner;
+
+impl ProcessSpawner for SystemSpawner {
+    fn spawn(&self, program: &Path, args: &[OsString]) -> io::Result<()> {
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        // Reap the child on a thread of its own, because waiting here would block until the viewer
+        // exits — that is, until the reader closes the document. `Builder::spawn` rather than
+        // `thread::spawn` because the latter panics when the OS cannot create a thread, and nothing
+        // on this path may panic.
+        //
+        // A reaper that cannot be created is deliberately **not** an error: the document did open,
+        // and reporting otherwise would be a lie about what the user sees. The only cost is that the
+        // child is not reaped until this process exits.
+        let _ = std::thread::Builder::new()
+            .name("oct-launch-reaper".to_string())
+            .spawn(move || {
+                let _ = child.wait();
+            });
+        Ok(())
     }
 }
 
@@ -822,10 +1167,424 @@ mod tests {
         assert!(ProcOpenDocuments.open_documents().is_ok());
     }
 
+    // --- T9: the Evince GVFS progress provider and the Linux launcher -----------------------
+
+    const EVINCE_ID: &str = "evince-gvfs";
+
+    /// Writes an executable file named `name` into `dir`.
+    fn make_executable(dir: &TempDir, name: &str, contents: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.path.join(name);
+        std::fs::write(&path, contents).expect("write the fake program");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the fake program executable");
+        path
+    }
+
+    /// A fake `gio` that answers with a record line, so `read` can be exercised end to end without
+    /// writing to the user's GVFS metadata. Only `gio set` can create a real record, and the tests
+    /// must never run it, so the record is produced by a stand-in program instead.
+    fn fake_gio(dir: &TempDir, page: u32) -> PathBuf {
+        make_executable(
+            dir,
+            "gio",
+            &format!(
+                "#!/bin/sh\n\
+                 echo \"uri: file:///tmp/document.pdf\"\n\
+                 echo \"local path: /tmp/document.pdf\"\n\
+                 echo \"unix mount: /dev/x / ext4 rw,relatime\"\n\
+                 echo \"attributes:\"\n\
+                 echo \"  metadata::evince::page: {page}\"\n"
+            ),
+        )
+    }
+
+    /// The calls a recording spawner or launcher observed, shared with the test that asserts on
+    /// them.
+    type SpawnCalls = Arc<Mutex<Vec<(PathBuf, Vec<OsString>)>>>;
+    type LaunchCalls = Arc<Mutex<Vec<(PathBuf, Option<u32>)>>>;
+
+    #[derive(Clone, Default)]
+    struct RecordingSpawner {
+        calls: SpawnCalls,
+    }
+    impl ProcessSpawner for RecordingSpawner {
+        fn spawn(&self, program: &Path, args: &[OsString]) -> io::Result<()> {
+            self.calls
+                .lock()
+                .expect("recording spawner poisoned")
+                .push((program.to_path_buf(), args.to_vec()));
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingLauncher {
+        calls: LaunchCalls,
+    }
+    impl Launcher for RecordingLauncher {
+        fn id(&self) -> &'static str {
+            "recording-launcher"
+        }
+
+        fn platform(&self) -> Platform {
+            PLATFORM
+        }
+
+        fn launch(&self, path: &Path, page: Option<u32>) -> Result<LaunchOutcome, OctError> {
+            self.calls
+                .lock()
+                .expect("recording launcher poisoned")
+                .push((path.to_path_buf(), page));
+            Ok(LaunchOutcome::Delegated {
+                viewer: "recording".to_string(),
+            })
+        }
+    }
+
     #[test]
-    fn the_launcher_reports_not_supported_instead_of_pretending_to_open() {
-        let outcome = XdgLauncher.launch(Path::new("/tmp/does-not-matter.pdf"), Some(0));
-        assert!(matches!(outcome, Err(OctError::NotSupported { .. })));
+    fn the_evince_provider_identity_and_capability_are_frozen() {
+        let provider = EvinceGvfsProvider::new();
+        assert_eq!(provider.id(), EVINCE_ID);
+        assert_eq!(provider.platform(), Platform::Linux);
+        assert_eq!(provider.capability(), ProgressCapability::Live);
+        assert_eq!(
+            provider.viewer_ids(),
+            &["evince", "org.gnome.Evince", "papers", "org.gnome.Papers"][..]
+        );
+    }
+
+    #[test]
+    fn detect_is_missing_when_gio_is_absent() {
+        let dir = TempDir::new("t9-no-gio");
+        make_executable(&dir, "evince", "#!/bin/sh\n");
+        let provider = EvinceGvfsProvider::with_launcher(
+            Box::new(RecordingLauncher::default()),
+            vec![dir.path.clone()],
+        );
+        assert_eq!(provider.detect(), Availability::Missing);
+    }
+
+    #[test]
+    fn detect_is_missing_when_no_viewer_is_present() {
+        let dir = TempDir::new("t9-no-viewer");
+        fake_gio(&dir, 4);
+        let provider = EvinceGvfsProvider::with_launcher(
+            Box::new(RecordingLauncher::default()),
+            vec![dir.path.clone()],
+        );
+        assert_eq!(provider.detect(), Availability::Missing);
+    }
+
+    #[test]
+    fn detect_is_installed_when_both_gio_and_a_viewer_are_present() {
+        let dir = TempDir::new("t9-installed");
+        fake_gio(&dir, 4);
+        make_executable(&dir, "evince", "#!/bin/sh\n");
+        let provider = EvinceGvfsProvider::with_launcher(
+            Box::new(RecordingLauncher::default()),
+            vec![dir.path.clone()],
+        );
+        assert_eq!(provider.detect(), Availability::Installed);
+    }
+
+    #[test]
+    fn detect_is_missing_for_an_empty_search_path() {
+        let provider = EvinceGvfsProvider::with_launcher(
+            Box::new(RecordingLauncher::default()),
+            Vec::new(),
+        );
+        assert_eq!(provider.detect(), Availability::Missing);
+    }
+
+    #[test]
+    fn the_gio_parser_reads_a_stored_page_and_its_absence() {
+        let with_record = concat!(
+            "uri: file:///home/u/libros/Comparaci%C3%B3n.pdf\n",
+            "local path: /home/u/libros/Comparación.pdf\n",
+            "unix mount: /dev/nvme0n1p2 / ext4 rw,relatime\n",
+            "attributes:\n",
+            "  metadata::evince::page: 72\n",
+        );
+        assert_eq!(parse_gio_page(with_record), Some(72));
+
+        let without_record = concat!(
+            "uri: file:///tmp/document.pdf\n",
+            "local path: /tmp/document.pdf\n",
+            "unix mount: /dev/nvme0n1p2 / ext4 rw,relatime\n",
+            "attributes:\n",
+        );
+        assert_eq!(parse_gio_page(without_record), None);
+    }
+
+    #[test]
+    fn the_gio_parser_refuses_anything_it_cannot_understand() {
+        assert_eq!(parse_gio_page(""), None);
+        assert_eq!(parse_gio_page("attributes:\n"), None);
+        assert_eq!(parse_gio_page("attributes:\n  metadata::evince::page:\n"), None);
+        assert_eq!(
+            parse_gio_page("attributes:\n  metadata::evince::page: later\n"),
+            None
+        );
+        assert_eq!(
+            parse_gio_page("attributes:\n  metadata::evince::page: -1\n"),
+            None
+        );
+        // A lookalike attribute must not be mistaken for the real one.
+        assert_eq!(
+            parse_gio_page("attributes:\n  metadata::evince::page_number: 5\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn read_returns_the_stored_zero_based_page_with_its_provenance() {
+        let dir = TempDir::new("t9-read");
+        fake_gio(&dir, 72);
+        make_executable(&dir, "evince", "#!/bin/sh\n");
+        let provider = EvinceGvfsProvider::with_launcher(
+            Box::new(RecordingLauncher::default()),
+            vec![dir.path.clone()],
+        );
+        let mut doc = Document::new("/home/u/libros/Comparación.pdf");
+        doc.pages = Some(436);
+
+        let progress = provider
+            .read(&doc)
+            .expect("read must not fail")
+            .expect("a record exists");
+        assert_eq!(
+            progress.page, 72,
+            "the stored page is zero-based and must not be shifted"
+        );
+        assert_eq!(progress.total, Some(436));
+        assert_eq!(progress.source, ProgressSource::External(EVINCE_ID));
+        assert_eq!(progress.confidence, Confidence::Exact);
+    }
+
+    #[test]
+    fn read_returns_none_for_a_file_with_no_record() {
+        // A real `gio` invocation against a real file with no metadata: the subprocess and the
+        // parsing are exercised without writing anything anywhere.
+        let dir = TempDir::new("t9-no-record");
+        let path = dir.path.join("plain.pdf");
+        std::fs::write(&path, b"%PDF-1.7 no metadata").expect("write the file");
+        let doc = Document::new(&path);
+
+        let progress = EvinceGvfsProvider::new()
+            .read(&doc)
+            .expect("a missing record is not an error");
+        assert_eq!(progress, None, "no record must be Ok(None), never a zero");
+    }
+
+    #[test]
+    fn resume_from_a_read_position_hands_the_cli_the_one_based_index() {
+        // A full round trip through a real `gio` subprocess: the stand-in `gio` returns a stored
+        // page, `read` turns it into a `StoredProgress`, and `resume` routes it through an
+        // `XdgLauncher` whose spawner records the exact arguments the viewer CLI would receive.
+        // This is the off-by-one round-trip test S3 demands, and it writes no metadata.
+        let dir = TempDir::new("t9-round-trip");
+        fake_gio(&dir, 72);
+        make_executable(&dir, "evince", "#!/bin/sh\n");
+        let spawner = RecordingSpawner::default();
+        let launcher =
+            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+        let provider =
+            EvinceGvfsProvider::with_launcher(Box::new(launcher), vec![dir.path.clone()]);
+
+        let doc = Document::new("/home/u/libros/Comparación.pdf");
+        let stored = provider
+            .read(&doc)
+            .expect("read must not fail")
+            .expect("a record exists");
+        provider.resume(&doc, stored.page).expect("resume");
+
+        let calls = spawner.calls.lock().expect("spawner poisoned");
+        assert_eq!(calls.len(), 1, "expected one viewer invocation: {calls:?}");
+        let (program, args) = &calls[0];
+        assert_eq!(program.file_name().and_then(|name| name.to_str()), Some("evince"));
+        assert_eq!(args[0], OsString::from(PAGE_INDEX_FLAG));
+        assert_eq!(
+            args[1],
+            OsString::from("73"),
+            "stored page 72 must reach the CLI as 73"
+        );
+        assert_eq!(args[2], doc.path.as_os_str().to_os_string());
+    }
+
+    #[test]
+    fn resume_forwards_the_zero_based_page_unchanged() {
+        // The provider must not pre-convert: the one conversion belongs to the launcher's command
+        // line, so handing a one-based page onward would resume one page past the target.
+        let recorder = RecordingLauncher::default();
+        let provider =
+            EvinceGvfsProvider::with_launcher(Box::new(recorder.clone()), Vec::new());
+        let doc = Document::new("/tmp/document.pdf");
+
+        provider.resume(&doc, 72).expect("the recording launcher accepts");
+
+        let calls = recorder.calls.lock().expect("launcher poisoned");
+        assert_eq!(calls.as_slice(), &[(doc.path.clone(), Some(72))]);
+    }
+
+    #[test]
+    fn launching_without_a_page_uses_xdg_open() {
+        let dir = TempDir::new("t9-xdg-open");
+        let xdg_open = make_executable(&dir, "xdg-open", "#!/bin/sh\n");
+        let spawner = RecordingSpawner::default();
+        let launcher =
+            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+
+        let path = Path::new("/home/u/libros/Comparación.pdf");
+        let outcome = launcher.launch(path, None).expect("xdg-open exists");
+        assert_eq!(
+            outcome,
+            LaunchOutcome::Delegated {
+                viewer: "xdg-open".to_string()
+            }
+        );
+
+        let calls = spawner.calls.lock().expect("spawner poisoned");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, xdg_open);
+        assert_eq!(calls[0].1, vec![path.as_os_str().to_os_string()]);
+    }
+
+    #[test]
+    fn launching_at_a_page_uses_the_viewer_cli_with_the_one_based_index() {
+        let dir = TempDir::new("t9-page");
+        let evince = make_executable(&dir, "evince", "#!/bin/sh\n");
+        let spawner = RecordingSpawner::default();
+        let launcher =
+            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+
+        let path = Path::new("/home/u/libros/Comparación.pdf");
+        let outcome = launcher.launch(path, Some(71)).expect("evince exists");
+        assert_eq!(
+            outcome,
+            LaunchOutcome::Delegated {
+                viewer: "evince".to_string()
+            }
+        );
+
+        let calls = spawner.calls.lock().expect("spawner poisoned");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, evince);
+        assert_eq!(
+            calls[0].1,
+            vec![
+                OsString::from("-i"),
+                OsString::from("72"),
+                path.as_os_str().to_os_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_page_launch_prefers_evince_over_papers() {
+        let dir = TempDir::new("t9-prefer");
+        make_executable(&dir, "evince", "#!/bin/sh\n");
+        make_executable(&dir, "papers", "#!/bin/sh\n");
+        let spawner = RecordingSpawner::default();
+        let launcher =
+            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+
+        launcher
+            .launch(Path::new("/tmp/doc.pdf"), Some(0))
+            .expect("a viewer exists");
+        let calls = spawner.calls.lock().expect("spawner poisoned");
+        assert_eq!(
+            calls[0].0.file_name().and_then(|name| name.to_str()),
+            Some("evince")
+        );
+    }
+
+    #[test]
+    fn a_missing_program_is_an_honest_error_not_a_silent_success() {
+        let dir = TempDir::new("t9-missing");
+        let spawner = RecordingSpawner::default();
+        let launcher =
+            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+
+        assert!(launcher.launch(Path::new("/tmp/doc.pdf"), None).is_err());
+        // A page request is no different when *nothing* can open the document: the fallback to the
+        // default handler is tried, and it fails too. That is the honest error — not "no page
+        // viewer", which is a degraded success the trait's contract requires us to deliver.
+        assert!(launcher.launch(Path::new("/tmp/doc.pdf"), Some(3)).is_err());
+        assert!(
+            spawner.calls.lock().expect("spawner poisoned").is_empty(),
+            "a failed launch must not attempt to start a program"
+        );
+    }
+
+    #[test]
+    fn a_page_request_without_a_page_capable_viewer_still_opens_the_document() {
+        // The `Launcher` contract is explicit: a launcher that cannot honour a page request must
+        // still open the document, because landing on page one is a degraded success and refusing to
+        // open anything is worse for the user. The outcome names the program that actually ran, so
+        // the caller can tell which of the two happened.
+        let dir = TempDir::new("t9-degraded");
+        let xdg_open = make_executable(&dir, XDG_OPEN, "#!/bin/sh\n");
+        let spawner = RecordingSpawner::default();
+        let launcher =
+            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+
+        let path = Path::new("/home/u/libros/Comparación.pdf");
+        let outcome = launcher
+            .launch(path, Some(71))
+            .expect("a missing page-capable viewer is a degraded success, not an error");
+        assert_eq!(
+            outcome,
+            LaunchOutcome::Delegated {
+                viewer: XDG_OPEN.to_string()
+            }
+        );
+
+        let calls = spawner.calls.lock().expect("spawner poisoned");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, xdg_open);
+        assert_eq!(
+            calls[0].1,
+            vec![path.as_os_str().to_os_string()],
+            "the default handler gets the path alone: it cannot be asked for a page"
+        );
+    }
+
+    #[test]
+    fn the_page_argument_conversion_happens_once() {
+        assert_eq!(
+            viewer_page_arguments(0, Path::new("/tmp/doc.pdf")),
+            vec![
+                OsString::from("-i"),
+                OsString::from("1"),
+                OsString::from("/tmp/doc.pdf")
+            ]
+        );
+        assert_eq!(
+            viewer_page_arguments(72, Path::new("/tmp/doc.pdf"))[1],
+            OsString::from("73")
+        );
+        // A corrupt maximum page must not overflow and panic.
+        assert_eq!(
+            viewer_page_arguments(u32::MAX, Path::new("/tmp/doc.pdf"))[1],
+            OsString::from((u64::from(u32::MAX) + 1).to_string())
+        );
+    }
+
+    #[test]
+    fn a_non_executable_file_is_not_a_program() {
+        let dir = TempDir::new("t9-not-exec");
+        std::fs::write(dir.path.join("gio"), b"#!/bin/sh\n").expect("write non-executable");
+        assert_eq!(find_program(GIO, std::slice::from_ref(&dir.path)), None);
+    }
+
+    #[test]
+    fn progress_providers_registers_the_evince_adapter() {
+        let providers = progress_providers();
+        assert_eq!(providers.len(), 1, "exactly the Evince adapter is registered");
+        assert_eq!(providers[0].id(), EVINCE_ID);
+        assert_eq!(providers[0].capability(), ProgressCapability::Live);
     }
 
     #[test]

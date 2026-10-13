@@ -66,8 +66,8 @@ pub fn backends() -> Backends {
 
 /// Reading-progress providers available on this platform.
 ///
-/// Empty until T9 lands the first real adapter. The registry built on top of this is the product's
-/// extensibility point: one adapter per viewer, added without touching the core.
+/// One provider today — the Evince GVFS adapter (T9). The registry built on top of this is the
+/// product's extensibility point: one adapter per viewer, added without touching the core.
 pub fn progress_providers() -> Vec<Box<dyn ProgressProvider>> {
     #[cfg(target_os = "linux")]
     {
@@ -124,8 +124,8 @@ mod tests {
 
     #[test]
     fn progress_providers_are_unique_and_trackable() {
-        // Empty today (T9 adds the first one). The invariant has to hold from the start, because
-        // a duplicate id would corrupt stored provenance once real adapters arrive.
+        // One provider today — the Evince GVFS adapter (T9) — and the invariant has to hold from the
+        // start, because a duplicate id would corrupt stored provenance once more adapters arrive.
         let providers = progress_providers();
         let mut ids: Vec<&str> = providers.iter().map(|provider| provider.id()).collect();
         let total = ids.len();
