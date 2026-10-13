@@ -69,7 +69,8 @@
     {#if visible.length === 0}
       <p class="state">{t("library.noMatches", { query })}</p>
     {:else}
-      <!-- Three columns (S2). Each card reserves its cover space without pretending to have one. -->
+      <!-- Responsive columns: two at phone width (the shell is 390 px) and more if the window ever grows.
+   The later phone-shape request wins over the earlier three-column one here, deliberately (S2). Each card reserves its cover space without pretending to have one. -->
       <ul class="grid">
         {#each visible as entry (entry.id)}
           <li>

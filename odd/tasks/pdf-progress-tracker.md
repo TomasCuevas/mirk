@@ -713,7 +713,13 @@ is a decision recorded in L20, not a unit of its own.
   maximise button the user does not want), a fixed size with phone-like proportions, `resizable: false`,
   no fullscreen. The shape is a product statement, not a limitation to apologise for.
 - **A2 — A custom top bar with exactly minimise, hide and close.** No maximise control anywhere, and
-  the window must not be maximisable by any other route either (double-click on the bar, keyboard).
+  no route the *application* can close: no button, no double-click on the bar (its drag is an
+  application command rather than Tauri's drag region), and `maximizable: false` in the configuration.
+  **Corrected after verification: on Linux that flag is a no-op.** Tao's GTK backend implements
+  `set_maximizable` as an empty function, so a window-manager shortcut such as GNOME's Super+Up can
+  still maximise the window and the application cannot prevent it. The criterion therefore covers the
+  application's own affordances plus the flag **where the platform honours it** — not an absolute claim
+  the platform cannot deliver.
 - **A3 — "Hide" is only honest with a tray, so the minimal tray lands here.** An icon with show/hide and
   quit. **A hide button without a tray makes the application vanish with no way back**, which is a trap
   rather than a feature — this is the reason the tray is in this unit and not deferred to Phase 3.
@@ -1465,3 +1471,27 @@ feasible here.
   confident nonsense.
 - **Every category states its own definition on screen**, because "finished" and "in progress" are
   readings of a stored position rather than facts the document carries.
+
+**L21 — Unit A verified, and one criterion was over-promised (2026-10-12):**
+
+- Unit A landed (`1f60948`): the 390x844 undecorated fixed window, the custom top bar with exactly
+  minimise/hide/close, the minimal tray, and one quit path. **138 workspace tests, 49 vitest tests**,
+  clippy clean.
+- **Verification marked A1 and A3 satisfied, A4 unverifiable, and A2 unsatisfied — correctly.** The spec
+  said the window "must not be maximisable by any other route", and on Linux that is not something the
+  application can deliver: Tao's GTK backend implements `set_maximizable` as an **empty function**, so
+  `maximizable: false` takes effect on Windows and macOS only, and a window-manager shortcut such as
+  GNOME's Super+Up still maximises the window. **The spec promised what the platform cannot give, so the
+  spec is what changed** — the criterion now covers the application's own affordances plus the flag
+  where it is honoured, and the limitation is recorded instead of restated as a guarantee.
+- **A claim that stayed single-sourced, and is recorded as such**: the implementer's runtime probe
+  reported `inner == outer == 390x844` and `is_resizable() == false`. The verifier did not reproduce it
+  and said so plainly, and the configuration plus the runtime re-application are not a substitute for a
+  live probe. Its status is therefore *reported, not independently reproduced* — which is the honest
+  label rather than promoting a single report to evidence.
+- **A stale comment, fixed**: the library grid's comment still said "Three columns" while the rule below
+  it is responsive and renders two at phone width. The prioritisation — the later phone-shape request
+  wins over the earlier three-column one at 390 px — is now recorded where the rule lives.
+- **What still needs a human's eyes**: the tray icon actually appearing, that the shape reads as a
+  phone, that the graceful close and the tray's Quit leave no process behind, and whether Super+Up
+  maximises. None of that is testable from inside this repository, and saying so is part of the record.
