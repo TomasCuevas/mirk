@@ -693,3 +693,174 @@ fn the_schema_refuses_a_second_row_for_the_same_folder() {
     assert!(!folders[0].recursive);
     assert!(folders[0].enabled, "the user's enabled flag must survive");
 }
+
+// --- UI slice: the library listing (S1) ------------------------------------------------------
+
+#[test]
+fn the_library_returns_the_latest_progress_with_its_provenance() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let doc_id = store
+        .upsert_document(&document(
+            "/library/read.pdf",
+            FileId::Posix { dev: 1, ino: 10 },
+        ))
+        .expect("insert");
+
+    // Three rows, deliberately out of page order, so "latest" cannot be confused with "largest".
+    let opened = StoredProgress::new(
+        3,
+        Some(80),
+        ProgressSource::External("evince-gvfs"),
+        Confidence::Exact,
+    );
+    let corrected = StoredProgress::new(40, Some(80), ProgressSource::Manual, Confidence::Manual);
+    let latest = StoredProgress::new(
+        12,
+        Some(80),
+        ProgressSource::External("evince-gvfs"),
+        Confidence::Exact,
+    );
+    store.record_progress(doc_id, &opened).expect("record");
+    store.record_progress(doc_id, &corrected).expect("record");
+    store.record_progress(doc_id, &latest).expect("record");
+
+    let library = store.library().expect("list the library");
+    assert_eq!(library.len(), 1);
+    let entry = &library[0];
+    assert_eq!(entry.document.id, doc_id);
+    assert_eq!(
+        entry.progress.as_ref(),
+        Some(&latest),
+        "the listing must return the most recently recorded row, provenance intact"
+    );
+    assert!(
+        entry.progress_recorded_at.is_some(),
+        "the listing must carry when the latest progress was recorded"
+    );
+}
+
+#[test]
+fn the_library_keeps_two_documents_with_the_same_page_distinguishable_by_provenance() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+
+    let viewer_doc = store
+        .upsert_document(&document(
+            "/library/by-viewer.pdf",
+            FileId::Posix { dev: 1, ino: 11 },
+        ))
+        .expect("insert");
+    let manual_doc = store
+        .upsert_document(&document(
+            "/library/by-hand.pdf",
+            FileId::Posix { dev: 1, ino: 12 },
+        ))
+        .expect("insert");
+
+    // Same page, same total, different provenance: the listing must not flatten the distinction.
+    store
+        .record_progress(
+            viewer_doc,
+            &StoredProgress::new(
+                5,
+                Some(80),
+                ProgressSource::External("evince-gvfs"),
+                Confidence::Exact,
+            ),
+        )
+        .expect("record");
+    store
+        .record_progress(
+            manual_doc,
+            &StoredProgress::new(5, Some(80), ProgressSource::Manual, Confidence::Manual),
+        )
+        .expect("record");
+
+    let library = store.library().expect("list the library");
+    let from_viewer = library
+        .iter()
+        .find(|entry| entry.document.id == viewer_doc)
+        .expect("viewer document");
+    let by_hand = library
+        .iter()
+        .find(|entry| entry.document.id == manual_doc)
+        .expect("manual document");
+
+    assert_eq!(
+        from_viewer.progress.as_ref().map(|progress| &progress.source),
+        Some(&ProgressSource::External("evince-gvfs"))
+    );
+    assert_eq!(
+        from_viewer.progress.as_ref().map(|progress| progress.confidence),
+        Some(Confidence::Exact)
+    );
+    assert_eq!(
+        by_hand.progress.as_ref().map(|progress| &progress.source),
+        Some(&ProgressSource::Manual)
+    );
+    assert_eq!(
+        by_hand.progress.as_ref().map(|progress| progress.confidence),
+        Some(Confidence::Manual)
+    );
+}
+
+#[test]
+fn a_document_with_no_progress_is_listed_without_inventing_one() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let doc_id = store
+        .upsert_document(&Document::new("/library/unread.pdf"))
+        .expect("insert");
+
+    let library = store.library().expect("list the library");
+    assert_eq!(library.len(), 1);
+    assert_eq!(library[0].document.id, doc_id);
+    assert_eq!(
+        library[0].progress, None,
+        "no progress is `None`, never a zero that would render as \"0% read\""
+    );
+    assert_eq!(library[0].progress_recorded_at, None);
+}
+
+#[test]
+fn an_empty_store_has_an_empty_library() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    assert!(store.library().expect("list the library").is_empty());
+}
+
+#[test]
+fn the_library_is_ordered_deterministically_by_path() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    for (index, name) in ["/library/b.pdf", "/library/a.pdf", "/library/c.pdf"]
+        .into_iter()
+        .enumerate()
+    {
+        store
+            .upsert_document(&document(
+                name,
+                FileId::Posix {
+                    dev: 1,
+                    ino: index as u64 + 20,
+                },
+            ))
+            .expect("insert");
+    }
+
+    let paths: Vec<PathBuf> = store
+        .library()
+        .expect("list the library")
+        .into_iter()
+        .map(|entry| entry.document.document.path)
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/library/a.pdf"),
+            PathBuf::from("/library/b.pdf"),
+            PathBuf::from("/library/c.pdf"),
+        ]
+    );
+}

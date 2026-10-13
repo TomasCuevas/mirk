@@ -2392,6 +2392,9 @@ version = "0.0.1"
 dependencies = [
  "oct-core",
  "oct-platform",
+ "oct-scan",
+ "oct-store",
+ "serde",
  "tauri",
  "tauri-build",
 ]

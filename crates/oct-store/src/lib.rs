@@ -54,7 +54,9 @@
 //! **intentionally absent because nothing calls them yet**; they arrive with their callers rather
 //! than as speculative SQL:
 //!
-//! - library listing, filtering and sorting over `documents`;
+//! - filtering and sorting over `documents`: [`Store::library`] returns every document with its
+//!   latest progress, ordered by path, and nothing narrower — the first screen needed exactly that
+//!   and no more;
 //! - writes and reads for `open_events`, `viewers` and `suggestions`; the `folders` table has only
 //!   what the scanner (T6) needs: [`Store::record_folder`], [`Store::folders`] and
 //!   [`WatchedFolder`];
@@ -193,6 +195,23 @@ pub struct DocumentRecord {
     pub id: i64,
     /// The document as stored.
     pub document: Document,
+}
+
+/// One row of the library view: a document and its most recent reading position.
+///
+/// This is the contract T5 deferred until a caller existed. It deliberately carries
+/// [`StoredProgress`] whole rather than flattening it to a page number, so the screen that
+/// renders it can state the position *with its provenance* — `p. 12 of 80, recorded by Evince` —
+/// instead of a percentage that hides where the number came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryEntry {
+    /// The document row, including the database id needed to record progress against it.
+    pub document: DocumentRecord,
+    /// The most recent reading position, with `source` and `confidence` intact, or [`None`] when
+    /// the document has never held one. It is never a zero standing in for "unknown".
+    pub progress: Option<StoredProgress>,
+    /// Unix seconds when `progress` was recorded, or [`None`] alongside a [`None`] progress.
+    pub progress_recorded_at: Option<i64>,
 }
 
 /// A watched folder as stored.
@@ -578,6 +597,130 @@ impl Store {
                 Ok(self.connection.last_insert_rowid())
             }
         }
+    }
+
+    /// Every document in the library, each with its most recent reading position and provenance.
+    ///
+    /// Ordered deterministically by path (then row id, to break a tie when two rows briefly share
+    /// a path — see [`Store::upsert_document`]), so two consecutive calls return the same order.
+    /// The newest progress row is the one with the highest id, matching
+    /// [`Store::progress_for_document`] and the order rows are written in.
+    ///
+    /// A document that has never held progress is listed with `progress: None`; a document with
+    /// several progress rows is listed once, with the latest. Filtering and sorting are
+    /// deliberately absent: the first screen needs the whole library in a stable order and
+    /// nothing narrower.
+    pub fn library(&self) -> Result<Vec<LibraryEntry>, OctError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT d.id, d.path, d.file_id_kind, d.volume_id, d.file_index, d.content_hash, \
+                        d.pages, d.title, d.author, \
+                        p.page, p.total, p.source, p.confidence, p.updated_at \
+                 FROM documents d \
+                 LEFT JOIN progress p ON p.id = (\
+                     SELECT p2.id FROM progress p2 WHERE p2.doc_id = d.id \
+                     ORDER BY p2.id DESC LIMIT 1\
+                 ) \
+                 ORDER BY d.path ASC, d.id ASC",
+            )
+            .map_err(storage_error)?;
+
+        let rows = statement
+            .query_map([], |row| {
+                let kind: Option<String> = row.get(2)?;
+                let volume: Option<String> = row.get(3)?;
+                let index: Option<String> = row.get(4)?;
+                let hash: Option<String> = row.get(5)?;
+                let pages: Option<i64> = row.get(6)?;
+                let title: Option<String> = row.get(7)?;
+                let author: Option<String> = row.get(8)?;
+                // The LEFT JOIN leaves every `progress` column NULL for a document with none, so
+                // `p.page` is the presence check: it is NOT NULL whenever the row exists.
+                let progress: Option<(i64, Option<i64>, String, String, i64)> =
+                    match row.get::<_, Option<i64>>(9)? {
+                        Some(page) => {
+                            Some((page, row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?))
+                        }
+                        None => None,
+                    };
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    kind,
+                    volume,
+                    index,
+                    hash,
+                    pages,
+                    title,
+                    author,
+                    progress,
+                ))
+            })
+            .map_err(storage_error)?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            let (
+                id,
+                path,
+                kind,
+                volume,
+                index,
+                hash,
+                pages,
+                title,
+                author,
+                progress,
+            ) = row.map_err(storage_error)?;
+
+            let identity = decode_identity(
+                kind.as_deref(),
+                volume.as_deref(),
+                index.as_deref(),
+                hash.as_deref(),
+            )?;
+            let pages = pages.map(u32::try_from).transpose().map_err(|_| {
+                OctError::Storage("stored page count is not a valid page number".into())
+            })?;
+
+            let (progress, progress_recorded_at) = match progress {
+                Some((page, total, source, confidence, updated_at)) => {
+                    let page = u32::try_from(page).map_err(|_| {
+                        OctError::Storage(format!("stored page {page} is not a page number"))
+                    })?;
+                    let total = total.map(u32::try_from).transpose().map_err(|_| {
+                        OctError::Storage("stored total is not a valid page count".into())
+                    })?;
+                    (
+                        Some(StoredProgress::new(
+                            page,
+                            total,
+                            parse_progress_source(&source),
+                            parse_confidence(&confidence)?,
+                        )),
+                        Some(updated_at),
+                    )
+                }
+                None => (None, None),
+            };
+
+            entries.push(LibraryEntry {
+                document: DocumentRecord {
+                    id,
+                    document: Document {
+                        path: PathBuf::from(path),
+                        identity,
+                        pages,
+                        title,
+                        author,
+                    },
+                },
+                progress,
+                progress_recorded_at,
+            });
+        }
+        Ok(entries)
     }
 
     /// Every watched folder, oldest first.
