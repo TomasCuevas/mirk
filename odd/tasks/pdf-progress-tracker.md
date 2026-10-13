@@ -1286,3 +1286,32 @@ read failure). It is deliberately **uncommitted**, because its parser may be rep
   the right direction to fail in.
 - **What the slice deliberately leaves out** stays out: filters, the capabilities screen, manual
   override, the suggestion queue, the tray and the reader. What it proves is the spine, end to end.
+
+**L17 — The user judged the slice, and asked for eight changes (2026-10-12):**
+
+Verbatim, because these are requirements and not a wish list:
+
+> 1. No me gusta que el usuario tenga que pegar la URL de la carpeta. Deberia abrirse un explorador con un boton, ahi es donde el usuario navegaria hacia su carpeta y pondria "ok". El colocar la URL quedaria como una opcion secundaria que se desplegaria cuando el usuario haga click en algun boton que indique "Colocar URL manualmente" o similar.
+> 2. Hay archivos que no muestran correctamente su titulo y en su caso, aparece la URL completa del archivo: /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-13 12-39-52.png
+> 3. El listado de libros deberia ser una grilla de 3 columnas.
+> 4. No se muestran las portadas de los libros.
+> 5. Tendria que haber un boton en la card que te lleve directamente a la carpeta donde esta el PDF en cuestion.
+> 6. Se tendria que poder filtrar, ordenar.
+> 7. Tendria que haber varias pantallas. Una inicial donde se podrian mostrar los 3/4/5/6 libros que uno tenga en progreso junto con otros datos como libros que hayas completado al 100%, libros que hace tiempo no se leen y asi.
+> 8. Debe haber un navbar inferior para navegar entre las diferentes pantallas (Inicio, Biblioteca, Configuracion)
+
+**Diagnosis, done before designing anything (reproduce first):**
+
+- **Item 2's first half is a real defect, found in the code**: the card renders `{entry.title ?? entry.path}`, so a document whose PDF carries no embedded title — **12 of the maintainer's 42** — shows its **absolute path where a title belongs**. A path is not a title, and the honest rendering is the file's own name, marked as having no embedded title.
+- **Item 2's second half could not be reproduced, and is not being assumed either way**: the app's database holds **42 documents, all PDFs under `Libros`** — no PNG, and the scanner filters by `.pdf` extension, so a `.png` cannot enter through a scan. The example path is a GNOME screenshot taken today, so the likely explanations are something typed or pasted into the folder field (the error message quotes the path) or a screenshot of the app itself. **The user's repro is needed before this half is called a bug**, and it is asked for rather than guessed at.
+- **The round is a requirement change, not a polish pass**, and it is tracked as such: several items need capabilities that do not exist yet (item 1 a native folder chooser, item 4 page rendering to images, item 7 queries for completion and staleness), and item 2 is a defect to fix first.
+
+**Sequencing, and why:**
+
+1. **The defect first (item 2's first half)**: a path shown as a title is a lie about the data, and it is cheap.
+2. **The structural UI (items 3, 5, 6, 8 and the screens of item 7)**: a three-column grid, a card action that opens the containing folder, filtering and sorting, and a bottom navbar across Inicio / Biblioteca / Configuración. This forces the store's listing to grow — the plan deferred filtering and sorting "because nothing called them", and now something does.
+3. **The home screen's numbers (item 7)**: what is in progress, what is finished, what has not been read in a long time. Note what the data can and cannot say today: `progress.updated_at` is real and written, so "not read in a long time" is answerable; `documents.last_opened_at` **exists but nothing ever writes it**, so it must not be used as if it meant something.
+4. **Covers (item 4) last, and measured before it is built**: rendering page one needs pdfium's *render* path, which this project has never used — R12 measured pdf.js in a browser, not pdfium's render API. So it gets the treatment every uncertain capability has had here: a bounded measurement first, then the feature. Caching and where the images live are part of that task.
+5. **The folder chooser (item 1)**: a native picker needs Tauri's dialog plugin, which is a new dependency and therefore a decision to record rather than slip in. The manual path entry stays as the secondary, collapsed option the user asked for.
+
+**Not forgotten**: the string catalogue must gain every new label in both languages, and each new screen must keep the rule that reading progress is stated with its provenance rather than as a bare percentage.
