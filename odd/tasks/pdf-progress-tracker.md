@@ -398,7 +398,7 @@ further down; this block is what a worker reads to know what is done and what is
 - [x] **T7** inotify watcher over watched folders (Linux; per-OS backend later) — done (T7a `8355b2d`, T7b `41e11c6`); specs below
 - [x] **T8** `/proc/*/fd` open-document detector — done (`bfcd234`); Linux backend of axis B
 - [ ] **T12** `RecentDocumentsSource` for `recently-used.xbel` — Linux backend of axis A
-- [ ] **T9** Progress provider registry plus Evince GVFS adapter — the first real `ProgressProvider` (`Live`), and the first caller of `Launcher`
+- [x] **T9** Progress provider registry plus Evince GVFS adapter — done (`9bc6d9f`); the first real `ProgressProvider` (`Live`), and the first caller of `Launcher`
 - [ ] **T10, T13–T16** Tray, library and UI, manual override, capabilities screen, suggestion queue
 
 Still unnumbered, implied by the scope change: first-party reader (pdf.js), i18n scaffolding,
@@ -614,12 +614,19 @@ treats as a liability (R10). The per-document cost is inherent to the trait's sh
 a bulk path would need a bulk trait method, which the plan does not have.
 - **S5 — `resume` goes through the Linux `Launcher` (axis C), implemented here because this adapter is
 its first caller.** `launch(path, None)` opens with the system default (`xdg-open`);
-`launch(path, Some(page))` uses a viewer CLI that accepts a page. `LaunchOutcome` must say what actually
-happened, and a missing viewer is an honest error — never a silent success that leaves the user staring
-at nothing.
+`launch(path, Some(page))` uses a viewer CLI that accepts a page, and `LaunchOutcome` names whichever
+program actually ran. **A missing page-capable viewer is a degraded success, not an error**: the
+document is still opened with the default handler, because `Launcher`'s own documented contract says
+landing on page one is better than refusing to open anything. An error is reserved for the case where
+*nothing* can open the document at all. *(Corrected during T9: this clause first said a missing viewer
+is an error, which contradicted the trait's documented contract — the worker followed the spec and
+flagged the conflict instead of silently picking one.)* Known limitation, recorded: `LaunchOutcome`
+cannot yet say "opened, but not at the page you asked for"; the viewer name is the only signal, and
+adding a variant is cheap whenever a caller needs to tell the user their viewer cannot be asked for a
+page.
 - **S6 — Registered, and the registry's existing invariant still holds.** `oct-platform::progress_providers()`
-returns the adapter on Linux (it returns an empty vector today), and the test that asserts provider ids
-are unique and trackable keeps passing — it was written for exactly this moment.
+returns the adapter on Linux — it returned an empty vector until T9 — and the test that asserts
+provider ids are unique and trackable keeps passing, because it was written for exactly this moment.
 - **S7 — Layering and honesty.** The adapter lives in `oct-platform` behind `#[cfg(target_os = "linux")]`,
 `oct-core` stays dependency-free, **no new dependency** (a subprocess and `std` are enough), nothing
 panics, and no call blocks longer than one `gio` invocation.
@@ -673,6 +680,7 @@ layer, range streaming), content-bound render cost, and the unproven `willReadFr
 | T7a | **Done** | `e6003e2` + `8355b2d` | The sixth trait `FolderWatcher` (with `WatchTarget`, `WatchEvent`, `WatchEventKind`) plus the Linux inotify backend and the honest `NotSupported` stub. **85 tests pass** (was 69), clippy clean, and both non-Linux targets type-check. Verified twice: attempt 1 found a blocking defect — a directory moved out of a target stayed watched, so events outside the tree were reported under stale paths — plus two should-fix; attempt 2 settled those and found the coalescing window surviving a subtree release. The verification cap was reached there, so the last delta is parent-checked and RED-pinned only — stated plainly in L9. |
 | T7b | **Done** | `41e11c6` | `WatchBridge` wires watcher events into the library: added/changed files counted and persisted, removals reported with the row and its reading progress deliberately kept, `Lost` rescanned, `Unwatchable` reported without pretending a recovery. **93 tests pass** (was 85), clippy clean, `oct-scan` still free of any `oct-platform` dependency, and independent verification marked **S1–S6 all satisfied with no findings**. |
 | T8 | **Done** | `bfcd234` | The axis-B stub became a real `/proc` snapshot: held-open PDFs are reported with their process id and name, deleted targets skipped, output deduplicated and sorted. **102 tests pass** (was 93), clippy clean, both non-Linux targets type-check, `std` only. Independent verification marked **S1–S7 all satisfied with no findings**. The parent rewrote the determinism assertion (whole-system snapshot equality cannot be reliable) and the verifier confirmed it still fails on duplicates, unsorted output or a dropped controlled entry. |
+| T9 | **Done** | `9bc6d9f` | The Evince GVFS adapter and the Linux `Launcher`: reading progress read through `gio`, the off-by-one converted once at the CLI boundary, and a missing page-capable viewer treated as a degraded success rather than an error. **120 tests pass** (was 102), clippy clean, `oct-core` untouched, no new dependency. Verified twice — attempt 1 found a panic path and marked S7 unsatisfied, attempt 2 marked **S1–S7 all satisfied**. Real end-to-end read over the library: **26 of 42 documents hold a position, 26/26 agree with raw `gio` output, 0 errors**. |
 
 ## Phase 1 — what T4 established
 
@@ -1169,3 +1177,30 @@ read failure). It is deliberately **uncommitted**, because its parser may be rep
   that, so they exercise the real subprocess against a file with no record (`Ok(None)`), cover the
   value path with the pure parser, and the real end-to-end read is checked by the parent against the
   maintainer's library instead of being faked.
+
+**L14 — T9 closed, and the product's headline claim is real (2026-10-12):**
+
+- T9 landed: the Evince GVFS adapter and the Linux `Launcher`. **120 tests pass** (was 102), clippy
+  clean, both non-Linux targets type-check, `oct-core` untouched, no new dependency. Verified twice:
+  attempt 1 found a panic path (`std::thread::spawn` in the child reaper, which panics when the OS
+  cannot create a thread) and marked S7 unsatisfied; after the fix, attempt 2 marked **S1–S7 all
+  satisfied with no blocking or should-fix findings**.
+- **The empirical check, run by the parent with the user's explicit consent and metadata only**: 42
+  PDFs, **26 with a recorded position**, the adapter read all 26 with **0 errors**, and **26/26 agree
+  exactly with raw `gio` output** — 0 mismatches, 0 missing, 0 extra. That also pins the *read* side of
+  the off-by-one: had the adapter added one, all 26 would have failed. Three documents legitimately
+  store page `0` and come back as `Some(0)`, never as `None`.
+- **The spec was wrong again, and the worker caught it again.** S5 said a missing page-capable viewer is
+  an honest error; the `Launcher` trait's own documented contract says the opposite — a launcher that
+  cannot honour a page must still open the document, because landing on page one is a degraded success.
+  The worker followed the spec and **flagged the conflict instead of quietly choosing**, which is the
+  behaviour this project wants. The fallback was restored with a test whose RED run showed it missing,
+  and S5 was rewritten.
+- **A limitation recorded rather than hidden**: `LaunchOutcome` cannot yet say "opened, but not at the
+  page you asked for" — the viewer name is the only signal. Adding a variant is additive and cheap, and
+  should happen whenever a caller needs to tell the user their viewer cannot be asked for a page.
+- **The tests cannot create a real GVFS record without writing to the user's own metadata store**
+  (`gio set`), so they exercise the real subprocess against a file with no record, cover the value path
+  with a pure parser, and the real end-to-end read is the parent's check instead of a fake.
+- **Phase 1 is complete**: all six platform traits now have their Linux implementations. What remains
+  before a first usable product is the UI slice — next, ahead of T12 and the tray — and then T12 itself.
