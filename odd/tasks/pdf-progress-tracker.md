@@ -741,6 +741,74 @@ is a decision recorded in L20, not a unit of its own.
 - **B4 — Every category states its own definition on screen**, because "finished" and "in progress" are
   readings of stored positions, not facts the document carries.
 
+## Specs — UI adjustments (round 2, L22)
+
+Eleven items the user listed after using unit A, in their order, one criterion each. The verbatim request
+is `L22`. Where an item changes something already specified, the newer request wins and the older
+criterion is corrected here rather than silently contradicted.
+
+- **R1 — The tray follows the interface language.** Choosing Spanish must also change the tray: "Show",
+  "Hide" and "Quit" become "Mostrar", "Ocultar" and "Salir". The tray is built by the desktop process,
+  so its labels come from the **stored** language setting — the same single source the interface reads —
+  and a language change updates the tray without restarting the application. Verbatim: *"Cuando coloco
+  el idioma en español, las opciones del tray siguen en ingles."*
+- **R2 — Nothing in the Inicio header but what names the screen.** The explanatory prose goes away.
+  Verbatim: *"No me gusta todo el texto que hay en el header de la pantalla 'Inicio'."*
+- **R3 — Spanish says "Ajustes", not "Configuraciones".** English stays "Settings". Verbatim: *"En
+  español, no me gusta que diga 'Configuraciones' prefiero 'Ajustes', ya que es mas corta."*
+- **R4 — Inicio ships the carousels.** This is `B1`–`B4` moving from "later" into this round, and it is
+  the item the user reports as missing. Verbatim: *"Falta implementar los carruseles en la pantalla
+  inicio."*
+- **R5 — A wider window: 430×844** (was 390×844), with the same undecorated fixed shape. Verbatim: *"El
+  viewport de la aplicacion debe ser un poco más ancho."* **The width and the column count are linked,
+  and the arithmetic is recorded so the number can be chosen rather than guessed**: with tiles at a
+  minimum of `8.5rem` (136 px), three columns need roughly `3×136 + 2×12 + ~32 = 464 px`, so 430 px still
+  renders two columns and only about 470 px renders three.
+- **R6 — Smaller paddings.** The shell's and the screens' paddings are reduced to values that leave the
+  content room on a 430 px window. Verbatim: *"Debes adaptar los padding tambien, tienes que reducirlos y
+  no hacerlos tan grandes como estan actualmente."*
+- **R7 — Progress is a line with the number on it.** Each card draws a bar standing for the fraction
+  read, with the percentage number placed **over the bar, at the position that fraction corresponds to**.
+  The sentence *"No hay progreso de lectura registrado"* goes away. Verbatim: *"No me gusta que diga 'No
+  hay progreso registrado', prefiero que muestres el porcentaje, osea, tiene que haber una linea que
+  represente el porcentaje y superpuesta a esta debe estar el numero que indica el porcentaje en la
+  posicion que le corresponda."* **One limit survives the change**: a document with **no reading record**
+  must not be drawn as 0 %. The application would be claiming the user has read nothing, when what is
+  true is that it has no record at all — they may be on page 100 of a document it has never seen. So:
+  with a record, bar plus number at its position; without one, an empty bar and no number. The earlier
+  honesty rule is not repealed by this item, it is restated: never a percentage the store cannot support.
+- **R8 — Rows in Biblioteca are separated vertically.** The user's screenshot shows the containing-folder
+  button of one row touching the card of the next: the rows need the same separation the columns have.
+  Verbatim: *"No hay separacion vertical entre los elementos en la pantalla 'Biblioteca', puedes verlo en
+  esta captura: /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-13 16-44-17.png"*.
+- **R9 — The containing-folder action is an icon, at the top.** Icon only, no text label, moved away from
+  the bottom of the card to the top, with an accessible name because an icon alone is not a name.
+  Verbatim: *"El boton para ir a la carpeta contenedora solamente debe tener un icono y debe estar
+  situado arriba en alguna parte, no me gusta donde esta actualmente."*
+- **R10 — Biblioteca is paginated, 10 per page.** The user's number. Page controls state where the reader
+  is and how many documents there are, filtering and sorting still apply to the whole listing before it
+  is cut into pages, and changing the page does not quietly drop the reader's filters.
+  Verbatim: *"Debes agregar paginacion en la pantalla 'Biblioteca', queda feo que esten todos los
+  elementos ahi, tal vez deban ser 10 elementos por paginacion."*
+- **R11 — The user can browse for the folder instead of pasting a path.** A native folder chooser, with
+  the manual entry kept as the secondary option. This is the dialog plugin of the desktop shell, so it
+  is **a dependency decision recorded rather than a detail slipped in**. Verbatim: *"Sigue sin
+  implementarse el boton para abrir el explorador de archivos para permitir al usuario navegar para
+  encontrar la carpeta donde estan sus PDFs para no obligarlo a pegar la ruta."*
+
+### Tasks — round 2
+
+- **U1** R3, R6, R8 — one string, the paddings, the row gap: small enough to make inline, committed with
+  these specs
+- **U2** R7 — the card's progress line (and its limit: no record means no number)
+- **U3** R9, R10 — the library screen: the icon-only folder action at the top, pagination at 10
+- **U4** R2, R4 — Inicio: the header cleaned, the three carousels, and the queries behind them (`B1`–`B4`)
+- **U5** R1, R5 — the desktop process: tray labels from the stored language, window 430×844
+- **U6** R11 — the native folder chooser, with the plugin decision recorded
+
+Each unit closes with at least one work-unit commit with its tests and docs; every unit runs its own
+checks, and a unit whose risk tier requires it gets an independent verification before it is reported.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
@@ -1495,3 +1563,30 @@ feasible here.
 - **What still needs a human's eyes**: the tray icon actually appearing, that the shape reads as a
   phone, that the graceful close and the tray's Quit leave no process behind, and whether Super+Up
   maximises. None of that is testable from inside this repository, and saying so is part of the record.
+
+**L22 — The round-2 UI adjustments, in the user's words (2026-10-13):**
+
+> Voy a escribirte algunas cosas que no me gustan y deberian cambiarse:
+>
+> 1. Cuando coloco el idioma en español, las opciones del tray siguen en ingles.
+> 2. No me gusta todo el texto que hay en el header de la pantalla "Inicio".
+> 3. En español, no me gusta que diga "Configuraciones" prefiero "Ajustes", ya que es mas corta.
+> 4. Falta implementar los carruseles en la pantalla inicio.
+> 5. El viewport de la aplicacion debe ser un poco más ancho.
+> 6. Debes adaptar los padding tambien, tienes que reducirlos y no hacerlos tan grandes como estan actualmente.
+> 7. No me gusta que diga "No hay progreso registrado", prefiero que muestres el porcentaje, osea, tiene que haber una linea que represente el porcentaje y superpuesta a esta debe estar el numero que indica el porcentaje en la posicion que le corresponda.
+> 8. No hay separacion vertical entre los elementos en la pantalla "Biblioteca", puedes verlo en esta captura: /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-13 16-44-17.png
+> 9. El boton para ir a la carpeta contenedora solamente debe tener un icono y debe estar situado arriba en alguna parte, no me gusta donde esta actualmente.
+> 10. Debes agregar paginacion en la pantalla "Biblioteca", queda feo que esten todos los elementos ahi, tal vez deban ser 10 elementos por paginacion.
+> 11. Sigue sin implementarse el boton para abrir el explorador de archivos para permitir al usuario navegar para encontrar la carpeta donde estan sus PDFs para no obligarlo a pegar la ruta.
+>
+> Hay otras cosas mas por ajustar de la UI, pero por el momento, esto es todo.
+
+Recorded as `R1`–`R11` and split into units `U1`–`U6` (specs above). Two notes from the same round:
+**the application stealing focus when it launches is now its own task**, reported by the user as the reason
+they kept closing it ("me molestaba que saltara la aplicacion sobre lo que estaba haciendo"), and **the
+self-exit defect is withdrawn** — with the exit paths instrumented the application survived 120 s
+untouched with zero exit-path logs, and the user confirmed they were the one closing it. The screenshot
+cited in item 8 was checked before any code changed: it is from the running build (binary written
+16:36:21, process started 16:36:22, screenshot taken 16:44), so the feedback is about the current tree
+twice over — and it shows the rows of the library grid touching, which is `R8`.
