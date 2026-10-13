@@ -549,6 +549,41 @@ counts a document in about a millisecond (T6's measured 1.5 s for a 42-document 
 per-event processing is not a bottleneck worth a second buffering window. Also deferred: the UI that
 shows these outcomes, and `documents.status` for representing absence.
 
+## Specs — T8 (`/proc` open-document detector, axis B)
+
+Same rule as every other spec here. This axis is the plan's acknowledged **heuristic** (R4), and these
+criteria keep it honest about that rather than pretending it is exact.
+
+- **S1 — A real snapshot, not a stub.** `ProcOpenDocuments::open_documents()` walks `/proc/<pid>/fd` for
+every process, resolves each descriptor's target, keeps targets that are regular files whose name ends
+in `.pdf` (case-insensitive), and returns `OpenDocument { path, pid: Some(pid), viewer }`. On Linux it
+no longer returns `NotSupported`.
+- **S2 — The viewer is the process's real name.** Derived from the basename of the first argument in
+`/proc/<pid>/cmdline`, falling back to `/proc/<pid>/comm`, and `None` when neither is readable. Never
+invented, never the pid rendered as a string.
+- **S3 — Noise is reported, not hidden (R4).** The detector reports what is *open*, including files
+held by indexers, backups and antivirus, and it does not pretend to know that a process is *reading*:
+that judgement belongs to the review queue this axis feeds. Two noise sources are documented rather
+than filtered — the detector's own process, which may legitimately hold a PDF (the first-party reader
+will), and the scanner's own transient opens while it counts pages.
+- **S4 — A deleted file is not an open document.** A descriptor whose target ends in ` (deleted)`, or
+whose target cannot be resolved, is skipped: reporting it would create a suggestion pointing at a path
+that no longer exists. This is a deliberate skip, recorded here because the trait has no channel to
+report it through — see S5.
+- **S5 — Best effort is the contract, and it is written down.** A process whose `/proc/<pid>` cannot be
+listed (another user's, `EACCES`) or that exits mid-scan is skipped without failing the call and
+without panicking. The trait has no per-process failure channel, so the honest statement is that this
+axis is a best-effort snapshot whose narrowness and noise are exactly why it feeds a reviewable queue
+instead of the library (R4) — not a defect to be silently patched later.
+- **S6 — Deterministic and deduplicated.** One entry per `(path, pid)`, deduplicated and sorted by path
+then pid, so two consecutive calls on an unchanged system return identical vectors and a caller can
+diff snapshots.
+- **S7 — Layering, and no new dependency.** The implementation lives in `oct-platform` behind
+`#[cfg(target_os = "linux")]`, the non-Linux stub keeps returning `NotSupported` rather than an empty
+success, and `oct-core` stays dependency-free. `/proc` is read with `std` alone: a few `read_dir` and
+`read_link` calls do not justify a `procfs` dependency in a project that already ships a native
+library and a SQLite build.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
