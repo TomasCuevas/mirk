@@ -700,6 +700,41 @@ editable titles, item 4's covers and item 1's folder chooser are separate units 
 - **S7 — It runs**: the frontend builds, the workspace builds, and the app launches with the new screens
   reachable. Verified by process, as always.
 
+
+## Specs — UI mobile shell (window chrome, tray, carousels, category screens)
+
+Items 1, 2 and 3 of L20, in two units so each is reviewable: **(A) the window chrome and the tray**,
+**(B) the home carousels and the category screens**. Item 4 (covers live in the app's data directory)
+is a decision recorded in L20, not a unit of its own.
+
+### A — Window chrome and tray
+
+- **A1 — A phone-shaped window, deliberately.** Undecorated (native decorations would bring the
+  maximise button the user does not want), a fixed size with phone-like proportions, `resizable: false`,
+  no fullscreen. The shape is a product statement, not a limitation to apologise for.
+- **A2 — A custom top bar with exactly minimise, hide and close.** No maximise control anywhere, and
+  the window must not be maximisable by any other route either (double-click on the bar, keyboard).
+- **A3 — "Hide" is only honest with a tray, so the minimal tray lands here.** An icon with show/hide and
+  quit. **A hide button without a tray makes the application vanish with no way back**, which is a trap
+  rather than a feature — this is the reason the tray is in this unit and not deferred to Phase 3.
+  Tray support on the reference host was verified in Phase 0.
+- **A4 — Closing really closes**, and the tray's quit is the same path. Nothing may leave a process
+  behind: this project has already been bitten by a grandchild surviving its parent.
+
+### B — Home carousels and category screens
+
+- **B1 — Three carousels on Inicio**: documents in progress, finished, and not opened for a long time,
+  each scrolling horizontally. **A carousel with nothing in it says so** rather than showing an empty
+  strip — the honesty rule, applied to a component that invites fake filler.
+- **B2 — A button at the top of each carousel opens the full list for that category**, a screen of its
+  own with the same cards as the library.
+- **B3 — The queries the categories need, written by their first caller.** "In progress" is a position
+  recorded and not at the end; "finished" is a position at the end; "not opened for a long time" is
+  answered by `progress.updated_at`, which is real and written. **`documents.last_opened_at` must not be
+  used**: it exists but nothing writes it, and a query built on it would return confident nonsense.
+- **B4 — Every category states its own definition on screen**, because "finished" and "in progress" are
+  readings of stored positions, not facts the document carries.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
@@ -1395,3 +1430,38 @@ Verbatim, because these are requirements and not a wish list:
   unit. **A screen that says "not yet" is better than one that shows invented statistics.**
 - **Covers keep their placeholder in the grid** rather than a stand-in image, so the layout is real and
   nothing pretends to be a cover that is not.
+
+**L20 — The user asks for a mobile-shaped shell, a home of carousels, and the tray (2026-10-12):**
+
+Verbatim:
+
+> 1. En la pantalla principal, se deben colocar 3 carruseles con PDFs para cada seccion "Documentos en curso", "Documentos terminados" y "Documentos sin abrir durante mucho tiempo". Aparte, debe haber un boton arriba que envie a una pantalla que liste todos los PDFs de la categoria.
+> 2. La UI de la aplicacion deberia tirar más para una UI tipo mobile, ya que para este tipo de aplicacion lo veo más convincente. Por el momento, no se podra abrir la aplicacion en pantalla completa ni expandir, tendra un ancho y alto maximo que respeten la proporcion.
+> 3. En la parte superior, tendra el boton para minimizar, esconder en el tray y cerrar la aplicacion, no esta el boton para expandir a pantalla completa.
+> 4. Las portadas viviran en la carpeta que haz recomendado.
+
+**The trap, said before anything is built**: "esconder en el tray" needs a tray, and this project has
+none — the tray is Phase 3 and unbuilt. **A hide button with no tray makes the application vanish with
+no way to bring it back**, which is not a feature but a trap. So the minimal tray (icon, show/hide,
+quit) lands with the window chrome, in the same unit. It is not decoration; it is what makes the
+requested button honest. Phase 0 verified that the reference host supports app indicators, so this is
+feasible here.
+
+**Other implications, recorded rather than discovered later:**
+
+- **A custom title bar.** Native decorations carry a maximise button, which the user explicitly does
+  not want, so the window is undecorated and the application draws its own top bar. "Not maximisable by
+  any route" is part of the criterion, because a window that refuses the button but still maximises on
+  a double-click has not honoured the request.
+- **A fixed, phone-shaped window.** No fullscreen, no resize: a size that respects a phone's
+  proportions. This is a product statement — a phone-shaped companion in the tray, not a desktop window
+  that happens to be small.
+- **Covers live in `~/.local/share/oct/covers/`** (item 4, the recommendation accepted): inside the
+  application's data directory, so a rescan cannot touch them and moving the PDF does not lose them.
+- **Inicio stops being a placeholder.** Its three carousels need exactly the queries item 7 always
+  needed, and each category gets its own screen. Note what the data can and cannot answer:
+  `progress.updated_at` is real and written, so "not opened for a long time" is answerable;
+  **`documents.last_opened_at` exists but nothing ever writes it**, so a query built on it would return
+  confident nonsense.
+- **Every category states its own definition on screen**, because "finished" and "in progress" are
+  readings of a stored position rather than facts the document carries.
