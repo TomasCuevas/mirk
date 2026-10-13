@@ -47,6 +47,17 @@ export interface LibraryEntry {
   progress: Progress | null;
 }
 
+/** What the `open_containing_folder` command returns when the folder is opened. */
+export interface OpenedFolder {
+  folder: string;
+  viewer: string;
+}
+
+/** The result of a card's "open containing folder" action, so the card can report it. */
+export type FolderActionStatus =
+  | { id: number; kind: "ok"; folder: string; viewer: string }
+  | { id: number; kind: "error"; message: string };
+
 /** A progress provider and whether this machine can use it. */
 export interface Provider {
   id: string;
@@ -200,6 +211,147 @@ export function describeScanSummary(report: ScanReport, t: Translate): string {
     discovered: report.discovered.length,
     root: report.root,
   });
+}
+
+/**
+ * The title a card shows.
+ *
+ * The embedded title when the document has one, and the file's own name otherwise — never the
+ * path. This is the rule L18 shipped as a fix for real documents whose PDFs carry no title, and it
+ * is the one place the fallback lives so no screen can render a path where a title belongs.
+ *
+ * A blank or whitespace-only embedded title counts as no title: PDF metadata can hold an empty
+ * string, and a blank card is no more helpful than a path.
+ */
+export function displayTitle(entry: LibraryEntry): string {
+  const title = entry.title?.trim() ?? "";
+  return title === "" ? titleFromPath(entry.path) : title;
+}
+
+// --- Filtering and sorting ------------------------------------------------------------------
+//
+// Both run over the listing the screen already holds. The decision is recorded in L19 with its
+// own expiry: 42 documents — or a few thousand — do not need SQL, and the day a library is large
+// enough for that to change is the day the store grows instead.
+
+/**
+ * Whether a document matches a free-text query.
+ *
+ * Case-insensitive, and it searches both the title a reader sees and the path, because a reader
+ * looking for a document may remember either. An empty or whitespace-only query matches
+ * everything, so clearing the box restores the whole listing.
+ */
+export function matchesQuery(entry: LibraryEntry, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") {
+    return true;
+  }
+  return (
+    displayTitle(entry).toLowerCase().includes(needle) ||
+    entry.path.toLowerCase().includes(needle)
+  );
+}
+
+/** The documents matching `query`, in the order they arrived. */
+export function filterEntries(
+  entries: readonly LibraryEntry[],
+  query: string,
+): LibraryEntry[] {
+  return entries.filter((entry) => matchesQuery(entry, query));
+}
+
+/** The orders the screen offers. */
+export type SortKey = "title" | "pages" | "progress";
+
+/** Every sort key, in the order the screen lists them. */
+export const sortKeys: readonly SortKey[] = ["title", "pages", "progress"];
+
+/**
+ * How far through a document the reader is, as pages read divided by the total, or `null` when
+ * that cannot be known.
+ *
+ * It counts pages **read**, not the zero-based index stored: the card says "p. 12 of 80" for page
+ * `11`, so the fraction is `12 / 80`. Keeping the two in step matters — a sort that disagreed with
+ * the sentence above it would be the same class of lie the provenance columns exist to prevent.
+ * The result is not clamped: a position beyond the stored total is shown as it is rather than
+ * quietly rounded to 100 %.
+ *
+ * `null` means unknown, and it covers all three ways of not knowing: no recorded position, a
+ * position whose source never knew the total, and a stored total of zero (which cannot be divided
+ * by and is not a real page count).
+ */
+export function progressFraction(entry: LibraryEntry): number | null {
+  const progress = entry.progress;
+  if (progress === null || progress.total === null || progress.total === 0) {
+    return null;
+  }
+  return (progress.page + 1) / progress.total;
+}
+
+/**
+ * The listing in the requested order, as a new array.
+ *
+ * The three orders and their tie-breaks:
+ *
+ * - **title** — ascending, compared with the reader's locale so accented titles sort where they
+ *   belong rather than by code point.
+ * - **pages** — fewest first, with an unknown page count **last**. An absent count is not zero
+ *   pages, and sorting it as if it were would put documents with no known length at the top.
+ * - **progress** — furthest along first, with a document whose position is unknown **last**. This
+ *   is deliberately not "unread at the top": `null` is not `0%`, and a document opened but never
+ *   advanced holds a real position of its own.
+ *
+ * Every order falls back to the title and then to the row id, so two documents that share a
+ * primary key come out in the same order on every render instead of depending on the sort
+ * algorithm's mood. The input array is never reordered in place.
+ */
+export function sortEntries(
+  entries: readonly LibraryEntry[],
+  key: SortKey,
+  locale = "en",
+): LibraryEntry[] {
+  const byTitle = (a: LibraryEntry, b: LibraryEntry): number =>
+    displayTitle(a).localeCompare(displayTitle(b), locale);
+
+  const byKey = (a: LibraryEntry, b: LibraryEntry): number => {
+    switch (key) {
+      case "title":
+        return byTitle(a, b);
+      case "pages":
+        return compareOptionalNumber(a.pages, b.pages);
+      case "progress": {
+        const aFraction = progressFraction(a);
+        const bFraction = progressFraction(b);
+        if (aFraction === null && bFraction === null) {
+          return 0;
+        }
+        if (aFraction === null) {
+          return 1;
+        }
+        if (bFraction === null) {
+          return -1;
+        }
+        // Furthest along first.
+        return bFraction - aFraction;
+      }
+    }
+  };
+
+  return [...entries].sort((a, b) => byKey(a, b) || byTitle(a, b) || a.id - b.id);
+}
+
+/** Ascending numeric comparison with `null` sorting last, because unknown is not zero. */
+function compareOptionalNumber(a: number | null, b: number | null): number {
+  if (a === null && b === null) {
+    return 0;
+  }
+  if (a === null) {
+    return 1;
+  }
+  if (b === null) {
+    return -1;
+  }
+  return a - b;
 }
 
 /** A human name for a source or provider id, falling back to the id when none is catalogued. */

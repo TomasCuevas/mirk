@@ -28,6 +28,21 @@ const english: Catalogue = {
   "app.name": "oct",
   "app.outsideTauri": "The interface is running outside the desktop shell; nothing is connected.",
 
+  "nav.ariaLabel": "Screens",
+  "nav.home": "Home",
+  "nav.library": "Library",
+  "nav.settings": "Settings",
+
+  "home.heading": "Home",
+  "home.placeholder":
+    "Home will summarise your reading. These summaries need queries that do not exist yet, so nothing here is estimated.",
+  "home.inProgress.title": "Documents in progress",
+  "home.inProgress.detail": "Documents you have started and not finished.",
+  "home.finished.title": "Documents you finished",
+  "home.finished.detail": "Documents you have read to the last page.",
+  "home.stale.title": "Documents you have not opened in a long time",
+  "home.stale.detail": "Documents whose recorded reading position has not moved in a while.",
+
   "language.label": "Language",
   "language.en": "English",
   "language.es": "Español",
@@ -39,6 +54,19 @@ const english: Catalogue = {
   "library.pages": "{count} pages",
   "library.pagesUnknown": "Page count unknown",
   "library.author": "by {author}",
+  "library.filterLabel": "Filter",
+  "library.filterPlaceholder": "Filter by title or path",
+  "library.sortLabel": "Sort by",
+  "library.sort.title": "Title",
+  "library.sort.pages": "Page count",
+  "library.sort.progress": "Reading progress",
+  "library.noMatches": "No document matches “{query}”.",
+  "library.count": "{shown} of {total} documents",
+
+  "card.cover": "No cover yet",
+  "card.openFolder": "Open containing folder",
+  "card.openedFolder": "Opened {folder} with {viewer}.",
+  "card.openFolderError": "Could not open the folder: {message}",
 
   "progress.none": "No reading progress recorded",
   "progress.position": "p. {page}",
@@ -61,6 +89,17 @@ const english: Catalogue = {
   "provider.reason.evince-gvfs": "it needs the gio command and an installed Evince or Papers",
   "provider.reason.unknown": "it is not present on this machine",
 
+  "settings.heading": "Settings",
+  "settings.language.heading": "Language",
+  "settings.folders.heading": "Watched folders",
+  "settings.folders.loading": "Reading the folders the store has recorded…",
+  "settings.folders.empty": "No folder has been recorded yet. A scan records one.",
+  "settings.folders.error": "Could not read the watched folders: {message}",
+  "settings.folders.recursive": "includes subfolders",
+  "settings.folders.notRecursive": "top level only",
+  "settings.folders.enabled": "watcher enabled",
+  "settings.folders.disabled": "watcher disabled",
+
   "capability.live": "live reading position",
   "capability.close-time": "progress recorded when the viewer closes",
   "capability.none": "no reading position",
@@ -81,6 +120,22 @@ const spanish: Catalogue = {
   "app.outsideTauri":
     "La interfaz se está ejecutando fuera del entorno de escritorio; no hay nada conectado.",
 
+  "nav.ariaLabel": "Pantallas",
+  "nav.home": "Inicio",
+  "nav.library": "Biblioteca",
+  "nav.settings": "Configuración",
+
+  "home.heading": "Inicio",
+  "home.placeholder":
+    "Inicio resumirá tu lectura. Esos resúmenes necesitan consultas que todavía no existen, así que aquí no hay nada estimado.",
+  "home.inProgress.title": "Documentos en curso",
+  "home.inProgress.detail": "Documentos que empezaste y no terminaste.",
+  "home.finished.title": "Documentos terminados",
+  "home.finished.detail": "Documentos que leíste hasta la última página.",
+  "home.stale.title": "Documentos sin abrir durante mucho tiempo",
+  "home.stale.detail":
+    "Documentos cuya posición de lectura registrada no se movió en un tiempo.",
+
   "language.label": "Idioma",
   "language.en": "English",
   "language.es": "Español",
@@ -92,6 +147,19 @@ const spanish: Catalogue = {
   "library.pages": "{count} páginas",
   "library.pagesUnknown": "Número de páginas desconocido",
   "library.author": "de {author}",
+  "library.filterLabel": "Filtrar",
+  "library.filterPlaceholder": "Filtrar por título o ruta",
+  "library.sortLabel": "Ordenar por",
+  "library.sort.title": "Título",
+  "library.sort.pages": "Número de páginas",
+  "library.sort.progress": "Progreso de lectura",
+  "library.noMatches": "Ningún documento coincide con «{query}».",
+  "library.count": "{shown} de {total} documentos",
+
+  "card.cover": "Sin portada todavía",
+  "card.openFolder": "Abrir la carpeta contenedora",
+  "card.openedFolder": "Se abrió {folder} con {viewer}.",
+  "card.openFolderError": "No se pudo abrir la carpeta: {message}",
 
   "progress.none": "No hay progreso de lectura registrado",
   "progress.position": "pág. {page}",
@@ -114,6 +182,17 @@ const spanish: Catalogue = {
   "provider.reason.evince-gvfs":
     "necesita el comando gio y una instalación de Evince o Papers",
   "provider.reason.unknown": "no está presente en esta máquina",
+
+  "settings.heading": "Configuración",
+  "settings.language.heading": "Idioma",
+  "settings.folders.heading": "Carpetas vigiladas",
+  "settings.folders.loading": "Leyendo las carpetas que el almacén tiene registradas…",
+  "settings.folders.empty": "Todavía no hay ninguna carpeta registrada. Un escaneo registra una.",
+  "settings.folders.error": "No se pudieron leer las carpetas vigiladas: {message}",
+  "settings.folders.recursive": "incluye subcarpetas",
+  "settings.folders.notRecursive": "solo el primer nivel",
+  "settings.folders.enabled": "vigilancia activada",
+  "settings.folders.disabled": "vigilancia desactivada",
 
   "capability.live": "posición de lectura en vivo",
   "capability.close-time": "progreso registrado al cerrar el visor",

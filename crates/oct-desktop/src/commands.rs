@@ -1,4 +1,4 @@
-//! The three commands the first screen calls, with their logic in plain functions.
+//! The commands the screens call, with their logic in plain functions.
 //!
 //! The Tauri wrappers in `main.rs` are deliberately thin: they open the production database, call
 //! one of the functions here, and render an [`oct_core::OctError`] into a string an IPC caller can
@@ -6,14 +6,16 @@
 //! collaborators as arguments, and is therefore testable without starting a Tauri application —
 //! the same injection pattern the scanner and the provider adapters already use.
 //!
-//! There are exactly three commands because there are exactly three things the screen asks for:
-//! the library, a folder scan, and the progress-provider registry. Anything else is a later task.
+//! Each command exists because a pixel of a screen needs it: the library, a folder scan, the
+//! progress-provider registry, the watched folders Configuración lists, and the card action that
+//! opens a document's containing folder. Anything else is a later task.
 
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-use oct_core::{FileIdentity, OctError, StoredProgress};
+use oct_core::{FileIdentity, LaunchOutcome, Launcher, OctError, StoredProgress};
 use oct_scan::{ScanReport, Scanner};
-use oct_store::{LibraryEntry, Store};
+use oct_store::{LibraryEntry, Store, WatchedFolder};
 use serde::Serialize;
 
 /// A reading position serialised for the interface, provenance included.
@@ -146,6 +148,34 @@ pub struct ProviderView {
     pub availability: String,
 }
 
+/// A watched folder as Configuración lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchedFolderView {
+    pub id: i64,
+    pub path: String,
+    pub recursive: bool,
+    pub enabled: bool,
+}
+
+impl From<WatchedFolder> for WatchedFolderView {
+    fn from(folder: WatchedFolder) -> Self {
+        Self {
+            id: folder.id,
+            path: display_path(&folder.path),
+            recursive: folder.recursive,
+            enabled: folder.enabled,
+        }
+    }
+}
+
+/// The folder a card action opened, and the program that opened it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpenedFolderView {
+    pub folder: String,
+    pub viewer: String,
+}
+
 /// The library listing: every document with its latest progress and provenance.
 pub fn library_entries(store: &Store) -> Result<Vec<LibraryEntryView>, OctError> {
     Ok(store
@@ -180,6 +210,73 @@ pub fn provider_registry() -> Vec<ProviderView> {
         .collect()
 }
 
+/// Every folder the store has recorded, oldest first.
+pub fn watched_folders(store: &Store) -> Result<Vec<WatchedFolderView>, OctError> {
+    Ok(store
+        .folders()?
+        .into_iter()
+        .map(WatchedFolderView::from)
+        .collect())
+}
+
+/// Opens the folder that contains `path` with the platform launcher.
+///
+/// The document's own path is deliberately not opened: the reader asked for its folder. A folder
+/// that is gone is an honest error rather than a silent no-op — the store can hold a document whose
+/// directory was deleted or moved since the last scan, and "nothing happened" would be the least
+/// useful report of that. The launcher's own failure (no `xdg-open`, say) travels back unchanged.
+///
+/// `launcher` is injected so this can be tested without starting a file manager, exactly as the
+/// scanner takes its identity and the adapters take their spawner.
+pub fn open_containing_folder(
+    launcher: &dyn Launcher,
+    path: &Path,
+) -> Result<OpenedFolderView, OctError> {
+    let folder = containing_folder(path)?;
+
+    match fs::metadata(&folder) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            return Err(OctError::InvalidPath(format!(
+                "the containing path is not a folder: {}",
+                display_path(&folder)
+            )))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(OctError::InvalidPath(format!(
+                "the folder no longer exists: {}",
+                display_path(&folder)
+            )))
+        }
+        Err(error) => return Err(OctError::Io(error)),
+    }
+
+    let viewer = match launcher.launch(&folder, None)? {
+        LaunchOutcome::Delegated { viewer } => viewer,
+        // `oct`'s own reader is a legitimate answer rather than a failure, once it exists.
+        LaunchOutcome::OpenedInternally => "oct".to_string(),
+    };
+
+    Ok(OpenedFolderView {
+        folder: display_path(&folder),
+        viewer,
+    })
+}
+
+/// The directory a document lives in.
+///
+/// `Path::parent` returns `None` only for a path with no parent (a bare `/`), and an empty parent
+/// for a bare file name; neither is a path a stored document can meaningfully have.
+fn containing_folder(path: &Path) -> Result<PathBuf, OctError> {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => Ok(parent.to_path_buf()),
+        _ => Err(OctError::InvalidPath(format!(
+            "the document path has no folder: {}",
+            display_path(path)
+        ))),
+    }
+}
+
 /// The stable string a [`oct_core::Confidence`] is persisted under.
 fn confidence_id(confidence: oct_core::Confidence) -> String {
     match confidence {
@@ -200,8 +297,9 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oct_core::{Confidence, Document, FileId, ProgressSource, StoredProgress};
+    use oct_core::{Confidence, Document, FileId, LaunchOutcome, Launcher, Platform, ProgressSource, StoredProgress};
     use std::path::PathBuf;
+    use std::sync::Mutex;
 
     fn in_memory_store() -> Store {
         Store::open_in_memory().expect("open an in-memory store")
@@ -329,5 +427,171 @@ mod tests {
             1,
             "the Linux build registers exactly the Evince adapter"
         );
+    }
+
+    // --- The UI shell's two new commands -----------------------------------------------------
+
+    /// A launcher that records what it was asked to open instead of opening anything.
+    struct RecordingLauncher {
+        calls: Mutex<Vec<(PathBuf, Option<u32>)>>,
+    }
+
+    impl RecordingLauncher {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Launcher for RecordingLauncher {
+        fn id(&self) -> &'static str {
+            "test-recorder"
+        }
+
+        fn platform(&self) -> Platform {
+            Platform::current()
+        }
+
+        fn launch(&self, path: &Path, page: Option<u32>) -> Result<LaunchOutcome, OctError> {
+            self.calls
+                .lock()
+                .expect("the recording lock")
+                .push((path.to_path_buf(), page));
+            Ok(LaunchOutcome::Delegated {
+                viewer: "test-file-manager".to_string(),
+            })
+        }
+    }
+
+    /// A unique temporary directory that removes itself on drop, including on panic.
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "oct-desktop-{label}-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create the temporary directory");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn watched_folders_lists_what_the_store_recorded() {
+        let store = in_memory_store();
+        assert!(
+            watched_folders(&store).expect("list folders").is_empty(),
+            "a fresh store has recorded nothing"
+        );
+
+        store.record_folder("/library", true).expect("record");
+        store.record_folder("/library/short", false).expect("record");
+
+        let folders = watched_folders(&store).expect("list folders");
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].path, "/library");
+        assert!(folders[0].recursive);
+        assert!(folders[0].enabled);
+        assert_eq!(folders[1].path, "/library/short");
+        assert!(!folders[1].recursive);
+    }
+
+    #[test]
+    fn opening_the_containing_folder_asks_the_launcher_for_the_folder() {
+        let dir = TempDir::new("open-folder");
+        let folder = dir.path.join("libros");
+        let document = folder.join("Cosmos.pdf");
+        std::fs::create_dir_all(&folder).expect("create the document's folder");
+        std::fs::write(&document, b"not really a pdf").expect("write the file");
+
+        let launcher = RecordingLauncher::new();
+        let opened = open_containing_folder(&launcher, &document).expect("open the folder");
+
+        assert_eq!(opened.folder, display_path(&folder));
+        assert_eq!(opened.viewer, "test-file-manager");
+
+        let calls = launcher.calls.lock().expect("the recording lock");
+        assert_eq!(calls.len(), 1, "exactly one launch");
+        assert_eq!(calls[0].0, folder, "the folder, not the document");
+        assert_eq!(calls[0].1, None, "opening a folder is not a page request");
+    }
+
+    #[test]
+    fn a_folder_that_no_longer_exists_is_an_honest_error() {
+        let dir = TempDir::new("gone-folder");
+        let folder = dir.path.join("libros");
+        let document = folder.join("Cosmos.pdf");
+        std::fs::create_dir_all(&folder).expect("create the document's folder");
+        std::fs::write(&document, b"not really a pdf").expect("write the file");
+        // The library keeps a document whose folder was deleted after the last scan.
+        std::fs::remove_dir_all(&folder).expect("remove the folder");
+
+        let launcher = RecordingLauncher::new();
+        let result = open_containing_folder(&launcher, &document);
+
+        match result {
+            Err(OctError::InvalidPath(message)) => {
+                assert!(message.contains("libros"), "names the folder: {message}");
+            }
+            other => panic!("expected an InvalidPath error, got {other:?}"),
+        }
+        assert!(
+            launcher.calls.lock().expect("the recording lock").is_empty(),
+            "a folder that is gone must not be launched"
+        );
+    }
+
+    #[test]
+    fn a_path_with_no_folder_is_an_honest_error() {
+        let launcher = RecordingLauncher::new();
+        let result = open_containing_folder(&launcher, Path::new("/"));
+
+        assert!(
+            matches!(result, Err(OctError::InvalidPath(_))),
+            "got {result:?}"
+        );
+        assert!(launcher.calls.lock().expect("the recording lock").is_empty());
+    }
+
+    #[test]
+    fn a_launcher_failure_travels_back_unchanged() {
+        struct FailingLauncher;
+
+        impl Launcher for FailingLauncher {
+            fn id(&self) -> &'static str {
+                "test-failing"
+            }
+
+            fn platform(&self) -> Platform {
+                Platform::current()
+            }
+
+            fn launch(&self, _path: &Path, _page: Option<u32>) -> Result<LaunchOutcome, OctError> {
+                Err(OctError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no xdg-open",
+                )))
+            }
+        }
+
+        let dir = TempDir::new("launcher-failure");
+        let file = dir.path.join("Cosmos.pdf");
+        std::fs::write(&file, b"not really a pdf").expect("write the file");
+
+        let result = open_containing_folder(&FailingLauncher, &file);
+        match result {
+            Err(OctError::Io(error)) => assert!(error.to_string().contains("no xdg-open")),
+            other => panic!("expected an io error, got {other:?}"),
+        }
     }
 }

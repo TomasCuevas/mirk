@@ -1,18 +1,18 @@
 //! The `oct` desktop application.
 //!
-//! This is the first vertical slice: the library listing, a folder scan and the progress-provider
-//! registry, reached from the screen over Tauri IPC. The three commands below are deliberately
-//! thin — they open the production database and delegate to the plain functions in [`commands`],
-//! which take their collaborators as arguments and are tested without a Tauri application.
+//! This is the shell a person uses: Inicio, Biblioteca and Configuración, reached from the bottom
+//! navbar. The commands below are deliberately thin — they open the production database and
+//! delegate to the plain functions in [`commands`], which take their collaborators as arguments
+//! and are tested without a Tauri application.
 //!
-//! The first-party reader, the tray, filters and the suggestion queue arrive in later tasks.
+//! The first-party reader, the tray, covers and the suggestion queue arrive in later tasks.
 
 // Prevents an extra console window from appearing alongside the app on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::Path;
 
-use commands::{LibraryEntryView, ProviderView, ScanReportView};
+use commands::{LibraryEntryView, OpenedFolderView, ProviderView, ScanReportView, WatchedFolderView};
 use oct_core::OctError;
 use oct_store::{database_path, Store};
 
@@ -39,6 +39,21 @@ fn progress_providers() -> Vec<ProviderView> {
     commands::provider_registry()
 }
 
+/// Lists the folders the store has recorded as sources of truth.
+#[tauri::command]
+fn watched_folders() -> Result<Vec<WatchedFolderView>, String> {
+    let store = open_store()?;
+    commands::watched_folders(&store).map_err(error_message)
+}
+
+/// Opens the folder that contains the document at `path`, reporting an honest error when the
+/// folder is gone or nothing can open it.
+#[tauri::command]
+fn open_containing_folder(path: String) -> Result<OpenedFolderView, String> {
+    let launcher = oct_platform::backends().launcher;
+    commands::open_containing_folder(launcher.as_ref(), Path::new(&path)).map_err(error_message)
+}
+
 /// Opens the production database at its per-platform user data location.
 ///
 /// Each command opens its own connection; the store is cheap to open and `oct` currently runs one
@@ -59,7 +74,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             list_library,
             scan_folder,
-            progress_providers
+            progress_providers,
+            watched_folders,
+            open_containing_folder
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the oct desktop application");

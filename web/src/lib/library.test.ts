@@ -6,9 +6,14 @@ import {
   describeProvider,
   describeProviderRegistry,
   describeScanSummary,
+  displayTitle,
+  filterEntries,
+  progressFraction,
+  sortEntries,
   titleFromPath,
   type LibraryEntry,
   type Progress,
+  type SortKey,
 } from "./library";
 
 const english = translate("en");
@@ -164,6 +169,122 @@ describe("i18n", () => {
     ).not.toBe(
       describeEntryProgress(progress({ page: 11, total: 80, source: "evince-gvfs" }), english),
     );
+  });
+});
+
+describe("card titles", () => {
+  it("prefers the document's own title when it has one", () => {
+    expect(displayTitle(entry({ title: "Cosmos" }))).toBe("Cosmos");
+  });
+
+  it("falls back to the file's own name, never the path", () => {
+    const card = displayTitle(
+      entry({ path: "/home/u/libros/Cosmos - Carl Sagan.pdf", title: null }),
+    );
+    expect(card).toBe("Cosmos - Carl Sagan");
+    expect(card).not.toContain("/");
+  });
+
+  it("treats a blank embedded title as no title at all", () => {
+    // PDF metadata can hold an empty title. Rendering a blank card would be as unhelpful as
+    // rendering a path, so the file's own name is used instead.
+    expect(displayTitle(entry({ path: "/u/report.pdf", title: "   " }))).toBe("report");
+  });
+});
+
+describe("filtering the listing", () => {
+  const entries = [
+    entry({ id: 1, path: "/library/Cosmos.pdf", title: "Cosmos" }),
+    entry({ id: 2, path: "/library/Deep Work.pdf", title: null }),
+    entry({ id: 3, path: "/library/Programación/SICP.pdf", title: "Structures" }),
+  ];
+
+  it("returns the whole listing for an empty query", () => {
+    expect(filterEntries(entries, "")).toEqual(entries);
+    expect(filterEntries(entries, "   ")).toEqual(entries);
+  });
+
+  it("matches a title without caring about case", () => {
+    expect(filterEntries(entries, "cosmos").map((e) => e.id)).toEqual([1]);
+    expect(filterEntries(entries, "COSMOS").map((e) => e.id)).toEqual([1]);
+  });
+
+  it("matches the file's own name when the document has no embedded title", () => {
+    expect(filterEntries(entries, "deep work").map((e) => e.id)).toEqual([2]);
+  });
+
+  it("matches anywhere in the path, including a directory", () => {
+    expect(filterEntries(entries, "programación").map((e) => e.id)).toEqual([3]);
+  });
+
+  it("returns nothing when nothing matches", () => {
+    expect(filterEntries(entries, "nothing like this")).toEqual([]);
+  });
+});
+
+describe("sorting the listing", () => {
+  function withProgress(page: number, total: number | null): Progress {
+    return progress({ page, total, source: "evince-gvfs", confidence: "exact" });
+  }
+
+  const entries = [
+    entry({ id: 3, title: "Charlie", pages: 10, progress: withProgress(0, 10) }),
+    entry({ id: 1, title: "Alpha", pages: 300, progress: null }),
+    entry({ id: 2, title: "Bravo", pages: null, progress: withProgress(4, 5) }),
+  ];
+
+  it("sorts by title", () => {
+    expect(sortEntries(entries, "title").map((e) => e.title)).toEqual([
+      "Alpha",
+      "Bravo",
+      "Charlie",
+    ]);
+  });
+
+  it("sorts by page count and puts an unknown count last", () => {
+    // An absent page count is not zero pages; it must not be sorted as if it were.
+    expect(sortEntries(entries, "pages").map((e) => e.id)).toEqual([3, 1, 2]);
+  });
+
+  it("sorts by reading progress, most complete first, with unread last", () => {
+    // Bravo is finished (5 of 5), Charlie has read page 1 of 10, and Alpha has no recorded
+    // position at all — which is not the same fact as 0%.
+    expect(sortEntries(entries, "progress").map((e) => e.id)).toEqual([2, 3, 1]);
+  });
+
+  it("treats a position without a total as unknown, and sorts it last", () => {
+    const unknownTotal = entry({ id: 9, title: "Zulu", progress: withProgress(3, null) });
+    const known = entry({ id: 8, title: "Yankee", progress: withProgress(1, 4) });
+    expect(sortEntries([unknownTotal, known], "progress").map((e) => e.id)).toEqual([8, 9]);
+  });
+
+  it("breaks ties on the title and then on the id, so the order is stable", () => {
+    const ties = [
+      entry({ id: 5, title: "Same", pages: 100 }),
+      entry({ id: 2, title: "Same", pages: 100 }),
+      entry({ id: 9, title: "Aaa", pages: 100 }),
+    ];
+    expect(sortEntries(ties, "pages").map((e) => e.id)).toEqual([9, 2, 5]);
+  });
+
+  it("never mutates the listing it was given", () => {
+    const original = [...entries];
+    sortEntries(entries, "title");
+    expect(entries).toEqual(original);
+  });
+
+  it("offers every sort the screen can choose from", () => {
+    const keys: SortKey[] = ["title", "pages", "progress"];
+    for (const key of keys) {
+      expect(sortEntries(entries, key)).toHaveLength(entries.length);
+    }
+  });
+
+  it("computes a fraction that agrees with the sentence the card shows", () => {
+    // The card says "p. 12 of 80" for page 11, so 12 pages of 80 have been read.
+    expect(progressFraction(entry({ progress: withProgress(11, 80) }))).toBeCloseTo(12 / 80);
+    expect(progressFraction(entry({ progress: null }))).toBeNull();
+    expect(progressFraction(entry({ progress: withProgress(3, null) }))).toBeNull();
   });
 });
 
