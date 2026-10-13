@@ -9,10 +9,21 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "oct",
-        "width": 960,
-        "height": 640,
-        "resizable": true
+        "width": 390,
+        "height": 844,
+        "minWidth": 390,
+        "minHeight": 844,
+        "maxWidth": 390,
+        "maxHeight": 844,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": true,
+        "closable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "center": true
       }
     ],
     "security": {

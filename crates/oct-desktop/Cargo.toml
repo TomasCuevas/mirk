@@ -17,7 +17,7 @@ oct-core = { workspace = true }
 oct-platform = { workspace = true }
 oct-store = { workspace = true }
 oct-scan = { workspace = true }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 # `serde` is already a workspace dependency (and already in `Cargo.lock` as a transitive dependency
 # of `tauri`); the commands need it directly to derive `Serialize` for the values they return over
 # IPC. No new crate enters the dependency graph.

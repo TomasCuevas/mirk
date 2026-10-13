@@ -15,10 +15,12 @@
     type WatchedFolder,
   } from "./lib/screens";
   import { invoke, runningInTauri } from "./lib/tauri";
+  import { type WindowControl } from "./lib/window";
   import HomeScreen from "./components/HomeScreen.svelte";
   import LibraryScreen from "./components/LibraryScreen.svelte";
   import Navbar from "./components/Navbar.svelte";
   import SettingsScreen from "./components/SettingsScreen.svelte";
+  import WindowBar from "./components/WindowBar.svelte";
 
   const inTauri = runningInTauri();
 
@@ -110,6 +112,33 @@
     window.location.hash = hashForScreen(next);
   }
 
+  // Window chrome actions are fire-and-forget: the top bar has nowhere to render an error, and a
+  // failed window operation is a program error rather than user state. It goes to the console
+  // instead of being silently discarded.
+  async function runWindowAction(control: WindowControl): Promise<void> {
+    if (!inTauri) {
+      return;
+    }
+    try {
+      await invoke(control.command);
+    } catch (error) {
+      console.error(`window action ${control.action} failed`, error);
+    }
+  }
+
+  // Pressing the top bar starts moving the undecorated window. This is an application command, not
+  // Tauri's drag-region attribute, so a double-click has nowhere to go (A2).
+  async function startDrag(): Promise<void> {
+    if (!inTauri) {
+      return;
+    }
+    try {
+      await invoke("start_drag");
+    } catch (error) {
+      console.error("window drag failed", error);
+    }
+  }
+
   onMount(() => {
     screen = screenFromHash(window.location.hash);
     const sync = (): void => {
@@ -131,15 +160,13 @@
 </script>
 
 <div class="app">
-  <header>
-    <span class="brand">{t("app.name")}</span>
-  </header>
-
-  {#if !inTauri}
-    <p class="state">{t("app.outsideTauri")}</p>
-  {/if}
+  <WindowBar {t} {inTauri} onAction={runWindowAction} onDrag={startDrag} />
 
   <main>
+    {#if !inTauri}
+      <p class="state">{t("app.outsideTauri")}</p>
+    {/if}
+
     {#if screen === "home"}
       <HomeScreen {t} />
     {:else if screen === "library"}
@@ -173,42 +200,42 @@
 </div>
 
 <style>
+  :global(html),
   :global(body) {
     margin: 0;
+    height: 100%;
+  }
+
+  :global(body) {
     background: #f6f7f9;
     color: #1c2024;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     line-height: 1.5;
   }
 
+  :global(#app) {
+    height: 100%;
+  }
+
+  /* The window is a fixed phone shape, so the layout fills it exactly: the top bar and the navbar
+     stay put and only the screen between them scrolls. */
   .app {
-    max-width: 68rem;
-    margin: 0 auto;
-    padding: 1.5rem 1.5rem 6rem;
+    height: 100vh;
     display: flex;
     flex-direction: column;
-    gap: 1.25rem;
-  }
-
-  header {
-    display: flex;
-    align-items: baseline;
-  }
-
-  .brand {
-    font-size: 1.1rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: lowercase;
   }
 
   .state {
-    margin: 0;
+    margin: 0 0 0.75rem;
     color: #5a6472;
   }
 
   main {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
+    padding: 1rem 1.1rem 1.25rem;
   }
 </style>

@@ -28,6 +28,11 @@ const english: Catalogue = {
   "app.name": "oct",
   "app.outsideTauri": "The interface is running outside the desktop shell; nothing is connected.",
 
+  "window.controls": "Window controls",
+  "window.minimize": "Minimise",
+  "window.hide": "Hide to the tray",
+  "window.close": "Close oct",
+
   "nav.ariaLabel": "Screens",
   "nav.home": "Home",
   "nav.library": "Library",
@@ -120,6 +125,11 @@ const spanish: Catalogue = {
   "app.name": "oct",
   "app.outsideTauri":
     "La interfaz se está ejecutando fuera del entorno de escritorio; no hay nada conectado.",
+
+  "window.controls": "Controles de la ventana",
+  "window.minimize": "Minimizar",
+  "window.hide": "Ocultar en la bandeja",
+  "window.close": "Cerrar oct",
 
   "nav.ariaLabel": "Pantallas",
   "nav.home": "Inicio",

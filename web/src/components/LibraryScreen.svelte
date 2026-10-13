@@ -120,6 +120,7 @@
 
   .controls label {
     display: flex;
+    flex: 1 1 8rem;
     flex-direction: column;
     gap: 0.25rem;
     font-size: 0.8rem;
@@ -135,10 +136,13 @@
     font: inherit;
     font-size: 0.9rem;
     color: #1c2024;
+    box-sizing: border-box;
+    max-width: 100%;
   }
 
   input {
-    min-width: 16rem;
+    width: 100%;
+    min-width: 0;
   }
 
   .count {
@@ -147,13 +151,15 @@
     color: #5a6472;
   }
 
+  /* Cards wrap to as many columns as the fixed phone width allows — three when there is room,
+     two at the window's own width — instead of forcing a desktop three-column grid into it. */
   .grid {
     list-style: none;
     margin: 0;
     padding: 0;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+    gap: 0.75rem;
   }
 
   .grid li {

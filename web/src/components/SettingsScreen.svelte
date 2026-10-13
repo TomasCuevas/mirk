@@ -187,6 +187,7 @@
 
   .inline {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.6rem;
     font-size: 0.85rem;
@@ -231,6 +232,8 @@
     font: inherit;
     font-size: 0.9rem;
     color: #1c2024;
+    box-sizing: border-box;
+    max-width: 100%;
   }
 
   form {
@@ -241,7 +244,8 @@
   }
 
   form input {
-    flex: 1 1 18rem;
+    flex: 1 1 10rem;
+    min-width: 0;
   }
 
   button {

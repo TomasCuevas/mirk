@@ -32,21 +32,22 @@
 </nav>
 
 <style>
+  /* The navbar is the last child of the full-height shell, so it sits at the bottom of the fixed
+     window without a fixed-position overlay or a padding hack. */
   nav {
-    position: fixed;
-    inset: auto 0 0 0;
+    flex: none;
     display: flex;
-    justify-content: center;
     gap: 0.25rem;
-    padding: 0.5rem 1rem;
+    padding: 0.5rem 0.6rem;
     background: #ffffff;
     border-top: 1px solid #e2e6eb;
     box-shadow: 0 -1px 6px rgba(28, 32, 36, 0.05);
   }
 
   button {
-    min-width: 7rem;
-    padding: 0.6rem 1rem;
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0.6rem 0.5rem;
     border: none;
     border-radius: 0.5rem;
     background: transparent;
