@@ -397,6 +397,7 @@ further down; this block is what a worker reads to know what is done and what is
 - [x] **T6** Watched-folder scanner with real page counting via `pdfium` — done (`a5b3ea5`); resolves R2; specs below
 - [x] **T7** inotify watcher over watched folders (Linux; per-OS backend later) — done (T7a `8355b2d`, T7b `41e11c6`); specs below
 - [x] **T8** `/proc/*/fd` open-document detector — done (`bfcd234`); Linux backend of axis B
+- [x] **UI slice** the first vertical slice over the store — done (`59f542c`); pulled ahead of T12 and the tray (L13, L15)
 - [ ] **T12** `RecentDocumentsSource` for `recently-used.xbel` — Linux backend of axis A
 - [x] **T9** Progress provider registry plus Evince GVFS adapter — done (`9bc6d9f`); the first real `ProgressProvider` (`Live`), and the first caller of `Launcher`
 - [ ] **T10, T13–T16** Tray, library and UI, manual override, capabilities screen, suggestion queue
@@ -1259,3 +1260,29 @@ read failure). It is deliberately **uncommitted**, because its parser may be rep
 - **What the slice deliberately leaves out** is as important as what it includes: filters, the
   capabilities screen, manual override, the suggestion queue, the tray and the reader. The slice proves
   the spine end to end — store, provider, IPC, pixels — and nothing more.
+
+**L16 — The first UI slice is built, and the user can look at it (2026-10-12):**
+
+- The slice landed: `Store::library()` — the listing T5 deferred until a caller existed — three Tauri
+  commands over plain testable functions, and one Svelte 5 screen. **129 workspace tests plus 13 vitest
+  tests pass**, clippy clean, the frontend builds to ~19 KB gzip, and the app launches.
+- **The product-critical rule is enforced in code, not in a comment**: the screen states progress with
+  its provenance in words — "p. 12 of 80, recorded by Evince" — and no path can render a bare
+  percentage or a fabricated `0%`. A row with no total renders without an "of" clause rather than
+  inventing a denominator, and the stored 0-based page becomes 1-based only for display.
+- **Verification found one should-fix, and it was this project's own principle aimed at a screen**: the
+  provider list started empty, so the UI announced "no progress providers are available" **before the
+  registry answered** — asserting something it did not know. `null` (still checking) and `[]` (genuinely
+  none) are now different facts, each with its own message, and a test asserts both. The second
+  verification round settled it.
+- **S5 is recorded as unverifiable, and the cause is this session's own doing**: the parent launched the
+  app for the user to look at *while the verifier ran*, so the verifier could not tell its own launch
+  apart from the pre-existing process. The worker's isolated launch check had established it beforehand
+  (exit 124 under `timeout`, empty stderr, no process left behind, and a database created only by the
+  mount-time IPC invoke). The lesson is cheap and general: **do not run the artifact while its
+  verification is running.**
+- **A caveat worth knowing**: outside Tauri — a plain browser — `onMount` returns before the provider
+  request, so the screen keeps showing "checking…" rather than falsely claiming there are none. That is
+  the right direction to fail in.
+- **What the slice deliberately leaves out** stays out: filters, the capabilities screen, manual
+  override, the suggestion queue, the tray and the reader. What it proves is the spine, end to end.
