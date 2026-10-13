@@ -669,6 +669,37 @@ yet". The caller now exists, which is the whole reason this slice goes before T1
 suggestion queue, the tray, and the first-party reader. They are their own tasks, and the slice exists
 to prove the spine end to end — store to provider to IPC to pixels — before more is built on it.
 
+
+## Specs — UI shell (grid, navbar, screens, filter and sort)
+
+Items 3, 5, 6 and 8 of L17, plus the parts of item 7 that need no new data. Item 7's numbers, item 2b's
+editable titles, item 4's covers and item 1's folder chooser are separate units with their own specs.
+
+- **S1 — A bottom navbar across Inicio / Biblioteca / Configuración**, with the current screen
+  unmistakable, and **no invented content**: a screen with nothing to show yet says what it will show
+  rather than filling the space with plausible-looking numbers.
+- **S2 — Biblioteca is a three-column grid of cards.** Each card carries the document's title (the
+  embedded one, or the file's own name — the rule shipped in L18), its page count, and its reading
+  progress **with provenance in words**. Covers arrive later (item 4), so the grid reserves their space
+  with an obvious placeholder rather than a fake image.
+- **S3 — Filter and sort, decided here rather than left open.** Filtering by title/path text and sorting
+  by title, page count or reading progress are done **over the listing the store already returns**, not
+  in SQL. The reasoning: the plan deferred store-side filtering "because nothing called it", and now
+  something does — but 42 documents, or a few thousand, do not need a query language, and a listing the
+  screen already holds is the smallest thing that works. **The known limit is recorded with it**: the
+  listing is not paginated, so a library large enough to matter will need the store to grow, and that
+  day is what should trigger it.
+- **S4 — A card action that opens the containing folder**, through the launcher, with the logic in a
+  testable function and an honest error when it fails. A path that no longer exists must say so rather
+  than silently doing nothing.
+- **S5 — Configuración shows what genuinely exists**: the progress-provider registry (id, capability,
+  availability, and why a missing one is missing), the language selector, and the watched folders the
+  store has recorded. **No invented settings** — an empty section says it is empty.
+- **S6 — Every new string goes through the catalogue in both languages**, the progress-with-provenance
+  rule holds on every screen, and no screen shows a path where a title belongs.
+- **S7 — It runs**: the frontend builds, the workspace builds, and the app launches with the new screens
+  reachable. Verified by process, as always.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
@@ -1346,3 +1377,21 @@ Verbatim, because these are requirements and not a wish list:
   filtering, navbar, screens), then the home screen's numbers, then covers, then the folder chooser.
   The two new requirements slot in as: editable titles with the structural UI (it is a per-card action),
   and covers last with their measurement.
+
+**L19 — The UI shell is specified, and one open question is decided (2026-10-12):**
+
+- Items 3, 5, 6 and 8 of L17 are one work unit: the app shell. The navbar and screens, the library as a
+  three-column grid, the per-card action that opens the containing folder, and a Configuración screen
+  that shows real state instead of a settings list nobody has implemented.
+- **Decided, because the plan left it open: filtering and sorting happen over the listing the screen
+  already holds, not in SQL.** The plan deferred store-side filtering "because nothing called it"; now
+  something does, and the honest answer is still that 42 documents — or a few thousand — do not need a
+  query language. **The limit is recorded with the decision**: the listing is not paginated, so the day
+  a library is big enough to matter, the store grows and that is what triggers it. A decision that
+  states its own expiry is worth more than one that pretends to be permanent.
+- **The home screen is split on purpose.** The navbar needs an Inicio destination now, but its numbers
+  (in progress, finished, long unread) need queries and a decision about `last_opened_at` that nothing
+  writes — so Inicio ships as an honest placeholder saying what it will show, and item 7 becomes its own
+  unit. **A screen that says "not yet" is better than one that shows invented statistics.**
+- **Covers keep their placeholder in the grid** rather than a stand-in image, so the layout is real and
+  nothing pretends to be a cover that is not.
