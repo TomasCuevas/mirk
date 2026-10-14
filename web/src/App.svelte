@@ -3,6 +3,7 @@
   import { translate, type Locale } from "./lib/i18n";
   import {
     type FolderActionStatus,
+    type HomeCategory,
     type LibraryEntry,
     type OpenedFolder,
     type Provider,
@@ -10,12 +11,15 @@
   } from "./lib/library";
   import {
     hashForScreen,
-    screenFromHash,
+    hashForView,
+    viewFromHash,
     type Screen,
+    type View,
     type WatchedFolder,
   } from "./lib/screens";
   import { invoke, runningInTauri } from "./lib/tauri";
   import { type WindowControl } from "./lib/window";
+  import CategoryScreen from "./components/CategoryScreen.svelte";
   import HomeScreen from "./components/HomeScreen.svelte";
   import LibraryScreen from "./components/LibraryScreen.svelte";
   import Navbar from "./components/Navbar.svelte";
@@ -29,8 +33,8 @@
 
   // Navigation is a hash so a reload keeps the reader on the screen they were looking at. The
   // initial value is Inicio; `onMount` reads the real hash and a `hashchange` listener keeps
-  // back/forward working.
-  let screen = $state<Screen>("home");
+  // back/forward working. A view is either a navbar screen or one home category's own list (B2).
+  let view = $state<View>({ kind: "screen", screen: "home" });
 
   let entries = $state<LibraryEntry[]>([]);
   let libraryLoading = $state(true);
@@ -108,8 +112,15 @@
   }
 
   function selectScreen(next: Screen): void {
-    screen = next;
+    view = { kind: "screen", screen: next };
     window.location.hash = hashForScreen(next);
+  }
+
+  // B2: a carousel's button opens that category's full list on a screen of its own.
+  function selectCategory(category: HomeCategory): void {
+    const next: View = { kind: "category", category };
+    view = next;
+    window.location.hash = hashForView(next);
   }
 
   // Window chrome actions are fire-and-forget: the top bar has nowhere to render an error, and a
@@ -140,9 +151,9 @@
   }
 
   onMount(() => {
-    screen = screenFromHash(window.location.hash);
+    view = viewFromHash(window.location.hash);
     const sync = (): void => {
-      screen = screenFromHash(window.location.hash);
+      view = viewFromHash(window.location.hash);
     };
     window.addEventListener("hashchange", sync);
 
@@ -167,9 +178,17 @@
       <p class="state">{t("app.outsideTauri")}</p>
     {/if}
 
-    {#if screen === "home"}
-      <HomeScreen {t} />
-    {:else if screen === "library"}
+    {#if view.kind === "screen" && view.screen === "home"}
+      <HomeScreen
+        {entries}
+        loading={libraryLoading}
+        error={libraryError}
+        {t}
+        {folderStatus}
+        onOpenFolder={openContainingFolder}
+        onOpenCategory={selectCategory}
+      />
+    {:else if view.kind === "screen" && view.screen === "library"}
       <LibraryScreen
         {entries}
         loading={libraryLoading}
@@ -179,7 +198,7 @@
         {folderStatus}
         onOpenFolder={openContainingFolder}
       />
-    {:else}
+    {:else if view.kind === "screen"}
       <SettingsScreen
         {providers}
         {providerError}
@@ -193,10 +212,23 @@
         onScan={scan}
         onLocale={(next) => (locale = next)}
       />
+    {:else}
+      <CategoryScreen
+        category={view.category}
+        {entries}
+        loading={libraryLoading}
+        error={libraryError}
+        {t}
+        {folderStatus}
+        onOpenFolder={openContainingFolder}
+        onBack={() => selectScreen("home")}
+      />
     {/if}
   </main>
 
-  <Navbar {screen} {t} onSelect={selectScreen} />
+  <!-- A category list belongs to Inicio, so the navbar keeps Inicio marked while the reader is on
+       one, rather than marking nothing. -->
+  <Navbar screen={view.kind === "screen" ? view.screen : "home"} {t} onSelect={selectScreen} />
 </div>
 
 <style>

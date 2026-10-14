@@ -38,7 +38,7 @@
        nothing to belong to (L27); anchored here it reads as an action on the document's own body, and
        it will still read that way once real covers replace the placeholder. -->
   <div class="cover-wrap">
-    <div class="cover" aria-hidden="true">{t("card.cover")}</div>
+    <div class="cover" style="aspect-ratio: 9 / 11" aria-hidden="true">{t("card.cover")}</div>
 
     <!-- R9 (L22): an icon rather than a full-width text button. An icon is not a name, so the accessible
          name comes from the catalogue through `aria-label`, and the drawing is hidden from assistive
@@ -67,30 +67,45 @@
     </button>
   </div>
 
-  <h2 class="title" title={displayTitle(entry)}>{displayTitle(entry)}</h2>
-
-  {#if entry.author !== null}
-    <p class="author">{t("library.author", { author: entry.author })}</p>
-  {/if}
-
   <p class="pages">
     {entry.pages === null
       ? t("library.pagesUnknown")
       : t("library.pages", { count: entry.pages })}
   </p>
 
-  <!-- R7: the bar stands for the fraction read and the number sits over it, at the position that
-       fraction corresponds to. The provenance stays in words underneath, because the rule that
-       progress is never stated as a bare percentage was the user's as well, and only the sentence for
-       a document with no record at all was asked to go. -->
-  <div class="progress">
-    <div class="bar">
-      <span class="fill" style="width: {view.fraction * 100}%"></span>
-      <span class="marker" style="--at: {view.markerAt * 100}%">{view.marker}</span>
-    </div>
-    {#if view.provenance !== null}
-      <p class="provenance">{view.provenance}</p>
+  <!-- The text block below the cover is a FIXED height, and that is the whole point: it is what makes
+       a tile with a real document and the empty placeholder end up exactly the same size, which is
+       the user's stated requirement. The title is clamped to two lines and two lines are reserved
+       here, so a one-line and a two-line title occupy the same slot; the progress block is pushed to
+       the bottom of the fixed block by its own `margin: auto 0 0`, so every bar sits at one height.
+       The title is only clipped visually — the element still holds the whole title for a screen
+       reader and offers it to the pointer through `title=`. -->
+  <div class="body">
+    <h2 class="title" title={displayTitle(entry)}>{displayTitle(entry)}</h2>
+
+    {#if entry.author !== null}
+      <p class="author">{t("library.author", { author: entry.author })}</p>
     {/if}
+
+    <p class="pages">
+      {entry.pages === null
+        ? t("library.pagesUnknown")
+        : t("library.pages", { count: entry.pages })}
+    </p>
+
+    <!-- R7: the bar stands for the fraction read and the number sits over it, at the position that
+         fraction corresponds to. The provenance stays in words underneath, because the rule that
+         progress is never stated as a bare percentage was the user's as well, and only the sentence for
+         a document with no record at all was asked to go. -->
+    <div class="progress">
+      <div class="bar">
+        <span class="fill" style="width: {view.fraction * 100}%"></span>
+        <span class="marker" style="--at: {view.markerAt * 100}%">{view.marker}</span>
+      </div>
+      {#if view.provenance !== null}
+        <p class="provenance">{view.provenance}</p>
+      {/if}
+    </div>
   </div>
 
   <!-- The folder action carries no status text at all (L27, L30): the user removed the green "folder
@@ -105,9 +120,10 @@
     flex-direction: column;
     /* The card fills its grid column. Without this its width follows its own text, because a flex item
        does not grow by default — and a card with a shorter title came out **narrower**, which made its
-       cover shorter too (the cover's height comes from its width, `aspect-ratio: 3/4`), pushed every
-       line above the bar and left the hole the user reported twice. Measured in one row before the fix:
-       covers of 186.2 and 146.0 px, a 40.2 px difference that had nothing to do with the gap (L29). */
+       cover shorter too (the cover's height comes from its width, `aspect-ratio`), pushed every line
+       above the bar and left the hole the user reported twice. Measured in one row before the fix, at
+       the then-current 3/4 ratio: covers of 186.2 and 146.0 px, a 40.2 px difference that had nothing
+       to do with the gap (L29). */
     flex: 1;
     gap: 0.35rem;
     /* `box-sizing: border-box` is what R8 turned out to need, and the reason is measurable. With the
@@ -126,17 +142,24 @@
   }
 
   /* The action is positioned against the cover, which is what keeps it anchored to the document
-     instead of sitting in a row of its own (L27). */
+     instead of sitting in a row of its own (L27). No bottom margin: the article's `gap` already
+     separates the cover from the text block, and the empty placeholder uses the same single gap so the
+     two stay the same height. */
   .cover-wrap {
     position: relative;
-    margin-bottom: 0.35rem;
   }
 
+  /* The cover takes the 9/11 ratio the user asked for, and it applies here for the library too — one
+     card, one shape. The ratio is declared inline on the element rather than in this rule, so the
+     empty placeholder in `HomeScreen` can carry the identical declaration and a test can prove the
+     two are the same shape without a browser. */
   .cover {
     display: flex;
     align-items: center;
     justify-content: center;
-    aspect-ratio: 3 / 4;
+    /* `border-box` so the 9/11 ratio describes the visible cover rectangle, border included, rather
+       than its content box. The placeholder sets the same so the two rectangles are identical. */
+    box-sizing: border-box;
     border: 1px dashed #ccd2da;
     border-radius: 0.4rem;
     background: repeating-linear-gradient(45deg, #f6f7f9, #f6f7f9 8px, #eef0f3 8px, #eef0f3 16px);
@@ -145,16 +168,32 @@
     text-align: center;
   }
 
+  /* The fixed height of the text block. Like the cover ratio, the height is declared inline on the
+     element so the placeholder can declare the identical 11rem and a test can compare the two. The
+     value fits the tallest realistic content: two title lines (2.94rem), an author line (1.23rem),
+     the page line (1.23rem), the progress block with a TWO-line provenance (bar 1.6 + gap 0.25 +
+     2×1.125 = 4.1rem) and three 0.35rem gaps (1.05rem) = 10.55rem, rounded up to 11rem. A one-line
+     provenance — `recorded by oct`, `recorded by Evince` — simply leaves slack at the top, which the
+     progress block's `margin: auto 0 0` spends before the bar. The reserve is two provenance lines
+     rather than one because a close-time viewer says `recorded when Evince closed`, which wraps at
+     this width; a fixed height that a real string can overflow is not fixed. */
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
   .title {
     margin: 0;
     font-size: 0.98rem;
     overflow-wrap: anywhere;
-    /* Cards in a row are stretched to the tallest one, and the difference between their contents has to
-       go somewhere: that is the hole the user kept seeing in the shorter card (L28, L29). Pushing the
-       progress block to the bottom moved the hole instead of shrinking it. Clamping the title to two
-       lines is what shrinks it — to at most one line of difference — so a row reads as full. The text is
-       only clipped visually: the element still holds the whole title for a screen reader, and the full
-       title is offered to the pointer through `title=`. */
+    /* Clamped to two lines so a long title cannot run the card's height away: it holds the difference
+       between a one-line and a two-line title to a single line. It no longer makes every card the same
+       height — the fixed text block that did that was removed at the user's request, because reserving
+       it made the card read as stretched and left the text floating in the space it created (L31). The
+       text is only clipped visually: the element
+       still holds the whole title for a screen reader, and the full title is offered to the pointer
+       through `title=`. */
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
@@ -174,11 +213,10 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-    /* A card is as tall as the tallest card in its row, and the difference is the title's line count.
-       Pushing the progress block to the bottom spends that difference *inside* the card, instead of
-       leaving it as dead space after the last line, and it lines every bar in a row up at the same
-       height — which is the one comparison this screen exists to offer (L28). Measured in WebKitGTK
-       4.1 before the change: a one-line title left 119.7 px of dead space in a 439.1 px card. */
+    /* Inside the fixed-height body, pulling the bar to the bottom puts it at the same height in every
+       tile — the one comparison a progress screen exists to offer (L28). Before the body had a fixed
+       height this absorbed the title's line-count difference; now it simply anchors the bar to the
+       bottom of the reserved block. */
     margin: auto 0 0;
   }
 

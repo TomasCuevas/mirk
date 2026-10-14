@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { translate } from "./i18n";
 import {
+  STALE_AFTER_SECONDS,
+  categoryEntries,
   describeProgressView,
   describeProvenance,
   describeLibraryMessage,
@@ -356,6 +358,47 @@ describe("title fallback", () => {
     const path = "/home/u/libros/Programación/gentleman-programming-book-es.pdf";
     expect(titleFromPath(path)).toBe("gentleman-programming-book-es");
     expect(titleFromPath(path)).not.toContain("/");
+  });
+});
+
+describe("the home categories", () => {
+  // R4 / B3 (L20, L22). The three carousels on Inicio are readings of the stored position, so the
+  // selection is a pure function here and neither SQL nor markup decides it. "A long time" is
+  // measured from `progress.updated_at`, which the UI receives as `Progress.recordedAt`.
+  // `documents.last_opened_at` is deliberately absent from this file: it exists in the schema but
+  // nothing writes it, so it is not a field the interface can even see.
+  const now = 1_700_000_000;
+
+  function recorded(
+    page: number,
+    total: number | null,
+    recordedAt: number | null = now,
+  ): Progress {
+    return progress({ page, total, source: "evince-gvfs", confidence: "exact", recordedAt });
+  }
+
+  it("counts a recorded position that is not at the end as in progress", () => {
+    const reading = entry({ id: 1, progress: recorded(11, 80) });
+    const lastPage = entry({ id: 2, progress: recorded(79, 80) });
+
+    expect(categoryEntries([reading, lastPage], "inProgress", now).map((e) => e.id)).toEqual([1]);
+  });
+
+  it("counts a recorded position at the end as finished", () => {
+    const reading = entry({ id: 1, progress: recorded(11, 80) });
+    const done = entry({ id: 2, progress: recorded(79, 80) });
+
+    expect(categoryEntries([reading, done], "finished", now).map((e) => e.id)).toEqual([2]);
+  });
+
+  it("counts a stale record from the record's own timestamp, and has nothing to measure without one", () => {
+    const stale = entry({ id: 1, progress: recorded(11, 80, now - STALE_AFTER_SECONDS) });
+    const fresh = entry({ id: 2, progress: recorded(11, 80, now - 60) });
+    // A document with no reading record at all carries no timestamp, so it cannot be "stale" any
+    // more than it can be "in progress": it is not measured here rather than guessed at.
+    const never = entry({ id: 3, progress: null });
+
+    expect(categoryEntries([stale, fresh, never], "stale", now).map((e) => e.id)).toEqual([1]);
   });
 });
 

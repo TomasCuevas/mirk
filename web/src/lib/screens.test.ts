@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { catalogues, translate } from "./i18n";
+import { STALE_AFTER_DAYS, homeCategories } from "./library";
 import {
+  categoryDefinition,
   describeWatchedFolders,
   hashForScreen,
-  homeSections,
+  hashForView,
   isScreen,
   screenFromHash,
   screenLabel,
   screens,
+  viewFromHash,
   type WatchedFolder,
 } from "./screens";
 
@@ -50,34 +53,39 @@ describe("which screen is shown", () => {
       expect(screenLabel(screen, spanish)).not.toBe(label);
     }
   });
+
+  it("resolves the navbar screens to screen views", () => {
+    for (const screen of screens) {
+      expect(viewFromHash(hashForScreen(screen))).toEqual({ kind: "screen", screen });
+    }
+  });
 });
 
-describe("Inicio as an honest placeholder", () => {
-  it("says what it will show, naming all three summaries", () => {
-    const sections = homeSections(english);
-    expect(sections).toHaveLength(3);
-    const text = sections.map((section) => `${section.title} ${section.detail}`).join(" ");
-    expect(text).toMatch(/progress/i);
-    expect(text).toMatch(/finish/i);
-    expect(text).toMatch(/long time/i);
-  });
-
-  it("invents no number, because no query produces one yet", () => {
-    for (const section of homeSections(english)) {
-      expect(section.title).not.toMatch(/\d/);
-      expect(section.detail).not.toMatch(/\d/);
+describe("the home categories", () => {
+  it("gives every category a screen of its own that its hash round-trips", () => {
+    // B2: the carousel's button opens a full list on a screen of its own, so a category is a
+    // destination the hash can name and come back from.
+    for (const category of homeCategories) {
+      const view = { kind: "category", category } as const;
+      expect(viewFromHash(hashForView(view))).toEqual(view);
     }
   });
 
-  it("has every section in Spanish as well", () => {
-    const spanishText = homeSections(spanish)
-      .map((section) => `${section.title} ${section.detail}`)
-      .join(" ");
-    expect(spanishText).not.toBe(
-      homeSections(english)
-        .map((section) => `${section.title} ${section.detail}`)
-        .join(" "),
-    );
+  it("falls back to Inicio for an unknown category, like an unknown screen", () => {
+    expect(viewFromHash("#/category/nonsense")).toEqual({ kind: "screen", screen: "home" });
+  });
+
+  it("states every category's definition, and the stale threshold with it", () => {
+    // B4: each category says what it means on screen, and "a long time" is a number the reader can
+    // read rather than one hidden in the code (B3).
+    for (const category of homeCategories) {
+      expect(categoryDefinition(category, english).trim()).not.toBe("");
+      expect(categoryDefinition(category, spanish)).not.toBe(
+        categoryDefinition(category, english),
+      );
+    }
+    expect(categoryDefinition("stale", english)).toContain(String(STALE_AFTER_DAYS));
+    expect(categoryDefinition("stale", spanish)).toContain(String(STALE_AFTER_DAYS));
   });
 });
 

@@ -1,17 +1,20 @@
 /**
- * Which screen is shown, and what the two screens that are not the library say.
+ * Which screen is shown, and the wording the shell shows around it.
  *
  * The same discipline as `library.ts`: the decisions live here as plain values and functions, so
  * they can be tested without mounting a component and so no screen can invent its own wording.
  *
  * # Why this is separate from `library.ts`
  *
- * `library.ts` owns the honesty rule about reading progress. This module owns the shell: the three
- * destinations, the hash that names one, and the text of the screens that do not list documents.
- * Keeping them apart means the fairness rule has one home and the navigation has another.
+ * `library.ts` owns the honesty rule about reading progress — including which documents belong to
+ * each home category. This module owns the shell: the destinations and the hash that names one, the
+ * headings and definitions of the home categories, and the text of the screens that do not list
+ * documents. Keeping them apart means the fairness rule has one home and the navigation has
+ * another.
  */
 
 import type { Translate } from "./i18n";
+import { STALE_AFTER_DAYS, isHomeCategory, type HomeCategory } from "./library";
 
 /** The three destinations of the bottom navbar (S1). */
 export type Screen = "home" | "library" | "settings";
@@ -31,8 +34,13 @@ export function isScreen(value: string): value is Screen {
  * they were and an unknown or hand-typed hash lands somewhere honest instead of a blank page.
  */
 export function screenFromHash(hash: string): Screen {
-  const name = hash.startsWith("#/") ? hash.slice(2) : "";
+  const name = hashName(hash);
   return isScreen(name) ? name : "home";
+}
+
+/** The screen name inside a `#/...` hash, or an empty string when there is none. */
+function hashName(hash: string): string {
+  return hash.startsWith("#/") ? hash.slice(2) : "";
 }
 
 /** The hash that names a screen. The inverse of [`screenFromHash`]. */
@@ -40,31 +48,58 @@ export function hashForScreen(screen: Screen): string {
   return `#/${screen}`;
 }
 
+/**
+ * A hash-named view: one of the navbar screens, or one home category's list on a screen of its own
+ * (B2).
+ */
+export type View =
+  | { readonly kind: "screen"; readonly screen: Screen }
+  | { readonly kind: "category"; readonly category: HomeCategory };
+
+/**
+ * The view a hash names, defaulting to Inicio.
+ *
+ * A category list is a screen of its own rather than a flag on Inicio (B2), so a reload or a shared
+ * link lands on the list the reader was looking at. An unknown category falls back to Inicio, the
+ * same way [`screenFromHash`] falls back for an unknown screen.
+ */
+export function viewFromHash(hash: string): View {
+  const name = hashName(hash);
+  const prefix = "category/";
+  if (name.startsWith(prefix)) {
+    const category = name.slice(prefix.length);
+    if (isHomeCategory(category)) {
+      return { kind: "category", category };
+    }
+  }
+  return { kind: "screen", screen: isScreen(name) ? name : "home" };
+}
+
+/** The hash that names a view. The inverse of [`viewFromHash`]. */
+export function hashForView(view: View): string {
+  return view.kind === "category" ? `#/category/${view.category}` : hashForScreen(view.screen);
+}
+
 /** The navbar label for a screen. */
 export function screenLabel(screen: Screen, t: Translate): string {
   return t(`nav.${screen}`);
 }
 
-/** One summary Inicio promises to show once its queries exist. */
-export interface HomeSection {
-  title: string;
-  detail: string;
+/**
+ * The heading Inicio's carousel for `category` shows (B4).
+ *
+ * A category's definition is stated on screen because "finished" and "in progress" are readings of
+ * a stored position, not facts the document carries: a reader who disagrees with the list can see
+ * the rule that produced it. The stale definition carries the threshold itself, so "a long time" is
+ * a number the reader can read rather than one hidden in the code (B3/B4).
+ */
+export function categoryTitle(category: HomeCategory, t: Translate): string {
+  return t(`home.${category}.title`);
 }
 
-/**
- * What Inicio will show, as three sections with no numbers in them.
- *
- * The numbers — in progress, finished, not read in a long time — need queries that do not exist
- * yet, and one of them depends on `documents.last_opened_at`, which nothing writes. **A screen that
- * says "not yet" is better than one that shows invented statistics** (L19), so this placeholder
- * names the three summaries and stops there.
- */
-export function homeSections(t: Translate): HomeSection[] {
-  return [
-    { title: t("home.inProgress.title"), detail: t("home.inProgress.detail") },
-    { title: t("home.finished.title"), detail: t("home.finished.detail") },
-    { title: t("home.stale.title"), detail: t("home.stale.detail") },
-  ];
+/** The definition a category states about itself, threshold included for the stale category (B4). */
+export function categoryDefinition(category: HomeCategory, t: Translate): string {
+  return t(`home.${category}.definition`, { days: STALE_AFTER_DAYS });
 }
 
 /** A watched folder exactly as the store records it. */

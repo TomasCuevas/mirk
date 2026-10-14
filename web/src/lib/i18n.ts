@@ -39,14 +39,17 @@ const english: Catalogue = {
   "nav.settings": "Settings",
 
   "home.heading": "Home",
-  "home.placeholder":
-    "Home will summarise your reading. These summaries need queries that do not exist yet, so nothing here is estimated.",
   "home.inProgress.title": "Documents in progress",
-  "home.inProgress.detail": "Documents you have started and not finished.",
+  "home.inProgress.definition": "Documents whose recorded position is not at the end.",
   "home.finished.title": "Documents you finished",
-  "home.finished.detail": "Documents you have read to the last page.",
+  "home.finished.definition": "Documents whose recorded position is at the end.",
   "home.stale.title": "Documents you have not opened in a long time",
-  "home.stale.detail": "Documents whose recorded reading position has not moved in a while.",
+  "home.stale.definition":
+    "Documents whose recorded reading position is at least {days} days old.",
+  "home.openCategory": "Open full list",
+  "home.openCategoryLabel": "Open the full list of {category}",
+  "home.categoryEmpty": "Nothing here yet.",
+  "category.back": "Back",
 
   "language.label": "Language",
   "language.en": "English",
@@ -137,15 +140,17 @@ const spanish: Catalogue = {
   "nav.settings": "Ajustes",
 
   "home.heading": "Inicio",
-  "home.placeholder":
-    "Inicio resumirá tu lectura. Esos resúmenes necesitan consultas que todavía no existen, así que aquí no hay nada estimado.",
   "home.inProgress.title": "Documentos en curso",
-  "home.inProgress.detail": "Documentos que empezaste y no terminaste.",
+  "home.inProgress.definition": "Documentos cuya posición registrada no está al final.",
   "home.finished.title": "Documentos terminados",
-  "home.finished.detail": "Documentos que leíste hasta la última página.",
+  "home.finished.definition": "Documentos cuya posición registrada está al final.",
   "home.stale.title": "Documentos sin abrir durante mucho tiempo",
-  "home.stale.detail":
-    "Documentos cuya posición de lectura registrada no se movió en un tiempo.",
+  "home.stale.definition":
+    "Documentos cuya posición de lectura registrada tiene al menos {days} días.",
+  "home.openCategory": "Abrir la lista completa",
+  "home.openCategoryLabel": "Abrir la lista completa de {category}",
+  "home.categoryEmpty": "Todavía no hay nada.",
+  "category.back": "Volver",
 
   "language.label": "Idioma",
   "language.en": "English",

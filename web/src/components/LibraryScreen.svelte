@@ -10,7 +10,7 @@
     type LibraryEntry,
     type SortKey,
   } from "../lib/library";
-  import BookCard from "./BookCard.svelte";
+  import BookGrid from "./BookGrid.svelte";
 
   let {
     entries,
@@ -82,18 +82,7 @@
            snippet rendered twice, so the two copies cannot drift apart. -->
       {@render pager()}
 
-      <ul class="grid">
-        {#each paged.items as entry (entry.id)}
-          <li>
-            <BookCard
-              {entry}
-              {t}
-              {onOpenFolder}
-              status={folderStatus?.id === entry.id ? folderStatus : null}
-            />
-          </li>
-        {/each}
-      </ul>
+      <BookGrid entries={paged.items} {t} {folderStatus} {onOpenFolder} />
 
       {@render pager()}
     {/if}
@@ -184,24 +173,6 @@
     margin-left: auto;
     font-size: 0.8rem;
     color: #5a6472;
-  }
-
-  /* One gap for both axes, which is what the design asked for from the start: the rows looked
-     unseparated because the card overflowed its own grid row (see BookCard, where
-     `box-sizing: border-box` is the line that fixes it), not because the gap was missing. The
-     shorthand is honest again now that the real cause is fixed and measured. */
-  .grid {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
-    column-gap: 0.75rem;
-    row-gap: 0.75rem;
-  }
-
-  .grid li {
-    display: flex;
   }
 
   .pager {

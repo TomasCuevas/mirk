@@ -449,6 +449,80 @@ export function paginate<T>(
   return { items: items.slice(start, start + pageSize), page: current, pageCount, total };
 }
 
+// --- Home categories ------------------------------------------------------------------------
+//
+// R4 / B3 (L20, L22): Inicio's three carousels are three readings of the stored position, and each
+// reading is a rule rather than a SQL filter. The rules live here because they reuse the rules the
+// card already obeys — "at the end" is the same `progressFraction(...) === 1` the card and the
+// progress sort use — so a category can never disagree with the number printed on the card.
+//
+// **The stale category is measured from `progress.updated_at`**, which the interface receives as
+// `Progress.recordedAt`. `documents.last_opened_at` exists in the schema but nothing ever writes it,
+// so a query built on it would return confident nonsense (B3).
+
+/** The three summary categories on Inicio. */
+export type HomeCategory = "inProgress" | "finished" | "stale";
+
+/** Every category, in the order Inicio shows them. */
+export const homeCategories: readonly HomeCategory[] = ["inProgress", "finished", "stale"];
+
+/** Whether a string names a home category. */
+export function isHomeCategory(value: string): value is HomeCategory {
+  return (homeCategories as readonly string[]).includes(value);
+}
+
+/**
+ * How old a reading record must be to count as "not opened for a long time", in days.
+ *
+ * The specification names the category but not the number, so the number is a stated decision
+ * rather than a hidden one: it is a single constant, it is reported with this unit, and B4 requires
+ * it to be printed on the category's own screen so the reader can see the rule being applied.
+ */
+export const STALE_AFTER_DAYS = 30;
+
+/** The same threshold in Unix seconds, the unit `Progress.recordedAt` is stored in. */
+export const STALE_AFTER_SECONDS = STALE_AFTER_DAYS * 24 * 60 * 60;
+
+/**
+ * The documents in one home category (R4 / B3).
+ *
+ * `now` is passed in rather than read from the clock so the rule is testable without a browser and
+ * so every carousel on one render is measured against the same instant.
+ *
+ * - **inProgress** — a position is recorded, its total is known, and it is not at the end.
+ * - **finished** — a position is recorded and it is at the end. "At the end" is the same
+ *   `progressFraction(...) === 1` the card and the progress sort already use, so the three cannot
+ *   disagree about which documents are done.
+ * - **stale** — a position is recorded and its own timestamp (`progress.updated_at`) is at least
+ *   `staleAfterSeconds` old. This does not depend on a known total: a position without a total is
+ *   still a record with a time.
+ *
+ * A document with **no** record has nothing to read in any category: it is neither in progress nor
+ * finished (there is no position), and not stale either (there is no timestamp). That is the honest
+ * answer rather than treating "never opened" as "opened long ago".
+ */
+export function categoryEntries(
+  entries: readonly LibraryEntry[],
+  category: HomeCategory,
+  now: number,
+  staleAfterSeconds: number = STALE_AFTER_SECONDS,
+): LibraryEntry[] {
+  return entries.filter((entry) => {
+    switch (category) {
+      case "inProgress": {
+        const fraction = progressFraction(entry);
+        return fraction !== null && fraction < 1;
+      }
+      case "finished":
+        return progressFraction(entry) === 1;
+      case "stale": {
+        const recordedAt = entry.progress?.recordedAt ?? null;
+        return recordedAt !== null && now - recordedAt >= staleAfterSeconds;
+      }
+    }
+  });
+}
+
 /** A human name for a source or provider id, falling back to the id when none is catalogued. */
 function sourceLabel(source: string, t: Translate): string {
   const key = `source.${source}`;
