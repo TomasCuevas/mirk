@@ -69,13 +69,12 @@ const english: Catalogue = {
   "library.count": "{shown} of {total} documents",
 
   "card.cover": "No cover yet",
+  "card.progressPercent": "{percent}%",
   "card.openFolder": "Open containing folder",
   "card.openedFolder": "Opened {folder} with {viewer}.",
   "card.openFolderError": "Could not open the folder: {message}",
 
-  "progress.none": "No reading progress recorded",
   "progress.position": "p. {page}",
-  "progress.positionOf": "p. {page} of {total}",
   "progress.by": "recorded by {viewer}",
   "progress.closed": "recorded when {viewer} closed",
   "progress.manual": "set by you",
@@ -168,13 +167,12 @@ const spanish: Catalogue = {
   "library.count": "{shown} de {total} documentos",
 
   "card.cover": "Sin portada todavía",
+  "card.progressPercent": "{percent} %",
   "card.openFolder": "Abrir la carpeta contenedora",
   "card.openedFolder": "Se abrió {folder} con {viewer}.",
   "card.openFolderError": "No se pudo abrir la carpeta: {message}",
 
-  "progress.none": "No hay progreso de lectura registrado",
   "progress.position": "pág. {page}",
-  "progress.positionOf": "pág. {page} de {total}",
   "progress.by": "registrado por {viewer}",
   "progress.closed": "registrado al cerrar {viewer}",
   "progress.manual": "lo fijaste tú",

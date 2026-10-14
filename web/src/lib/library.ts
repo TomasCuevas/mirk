@@ -88,23 +88,62 @@ export interface ScanReport {
   failures: ScanFailure[];
 }
 
+/** What the card draws and says about reading progress (R7). */
+export interface ProgressView {
+  /** The bar's fill, `0..1`. `0` when nothing is recorded, which is what the card was asked to show. */
+  readonly fraction: number;
+  /** The text over the bar: the whole percentage, or the page when no total is known. */
+  readonly marker: string;
+  /** Where the marker sits along the bar, `0..1` — the fraction itself, so the number states the
+   *  fraction rather than merely sitting next to it. */
+  readonly markerAt: number;
+  /** The provenance in words, or `null` when nothing is recorded — the one case with no sentence. */
+  readonly provenance: string | null;
+}
+
 /**
- * The one-line reading-progress statement for a document.
+ * The card's progress: a fraction to draw, a number to place on it, and the provenance in words.
  *
- * `"p. 12 of 80, recorded by Evince"` — position first, provenance second, never a percentage.
- * A `null` progress is a document nobody has read, not a zero.
+ * Three cases, and the difference between the last two is the point:
+ *
+ * - **Recorded with a total** — the bar's fill and the marker's position are the same number, taken
+ *   from `progressFraction`, so the card and the progress sort can never disagree about a fraction.
+ * - **Recorded without a total** — the reader is demonstrably *somewhere* in the document, so the
+ *   marker states the page and the bar stays empty. A percentage here would be invented, and an
+ *   invented percentage is worse than none.
+ * - **Nothing recorded** — `0 %`, the user's decision (L23), and no sentence at all: the empty bar
+ *   says it, and repeating it in words is the thing they asked to be removed.
  */
-export function describeEntryProgress(progress: Progress | null, t: Translate): string {
+export function describeProgressView(entry: LibraryEntry, t: Translate): ProgressView {
+  const progress = entry.progress;
+
   if (progress === null) {
-    return t("progress.none");
+    return {
+      fraction: 0,
+      marker: t("card.progressPercent", { percent: 0 }),
+      markerAt: 0,
+      provenance: null,
+    };
   }
 
-  const position =
-    progress.total === null
-      ? t("progress.position", { page: progress.page + 1 })
-      : t("progress.positionOf", { page: progress.page + 1, total: progress.total });
+  const provenance = describeProvenance(progress, t);
+  const fraction = progressFraction(entry);
 
-  return `${position}, ${describeProvenance(progress, t)}`;
+  if (fraction === null) {
+    return {
+      fraction: 0,
+      marker: t("progress.position", { page: progress.page + 1 }),
+      markerAt: 0,
+      provenance,
+    };
+  }
+
+  return {
+    fraction,
+    marker: t("card.progressPercent", { percent: Math.round(fraction * 100) }),
+    markerAt: fraction,
+    provenance,
+  };
 }
 
 /**

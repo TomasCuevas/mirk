@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Translate } from "../lib/i18n";
   import {
-    describeEntryProgress,
+    describeProgressView,
     displayTitle,
     type FolderActionStatus,
     type LibraryEntry,
@@ -18,6 +18,9 @@
     status: FolderActionStatus | null;
     onOpenFolder: (entry: LibraryEntry) => void;
   } = $props();
+
+  // The card's progress, as a fraction to draw and a number to place on it (R7).
+  const view = $derived(describeProgressView(entry, t));
 </script>
 
 <!--
@@ -43,7 +46,19 @@
       : t("library.pages", { count: entry.pages })}
   </p>
 
-  <p class="progress">{describeEntryProgress(entry.progress, t)}</p>
+  <!-- R7: the bar stands for the fraction read and the number sits over it, at the position that
+       fraction corresponds to. The provenance stays in words underneath, because the rule that
+       progress is never stated as a bare percentage was the user's as well, and only the sentence for
+       a document with no record at all was asked to go. -->
+  <div class="progress">
+    <div class="bar">
+      <span class="fill" style="width: {view.fraction * 100}%"></span>
+      <span class="marker" style="--at: {view.markerAt * 100}%">{view.marker}</span>
+    </div>
+    {#if view.provenance !== null}
+      <p class="provenance">{view.provenance}</p>
+    {/if}
+  </div>
 
   <button type="button" onclick={() => onOpenFolder(entry)}>{t("card.openFolder")}</button>
 
@@ -105,9 +120,52 @@
   }
 
   .progress {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
     margin: 0;
-    color: #24506b;
-    font-size: 0.9rem;
+  }
+
+  /* The number is placed on the bar itself, so the statement is the bar's own geometry rather than a
+     caption beside it. The clamp is the honest compromise: a number has width, so at the very ends it
+     is nudged inside the bar instead of hanging off it. **The inset is measured, not guessed**: the
+     widest marker, "100 %", is 37 px across, so half of it is 18.5 px and the clamp uses 19.2 px
+     (1.2rem). With 15.2 px the chip hung 3.3 px outside the bar at 100 %, which is what the
+     measurement caught. */
+  .bar {
+    position: relative;
+    height: 0.5rem;
+    margin: 0.55rem 0;
+    border-radius: 999px;
+    background: #e8ebef;
+  }
+
+  .fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: inherit;
+    background: #24506b;
+  }
+
+  .marker {
+    position: absolute;
+    top: 50%;
+    left: clamp(1.2rem, var(--at), calc(100% - 1.2rem));
+    padding: 0 0.25rem;
+    border: 1px solid #ccd2da;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #1c2024;
+    font-size: 0.7rem;
+    line-height: 1.5;
+    white-space: nowrap;
+    transform: translate(-50%, -50%);
+  }
+
+  .provenance {
+    margin: 0;
+    font-size: 0.75rem;
+    color: #5a6472;
   }
 
   button {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { translate } from "./i18n";
 import {
-  describeEntryProgress,
+  describeProgressView,
+  describeProvenance,
   describeLibraryMessage,
   describeProvider,
   describeProviderRegistry,
@@ -42,48 +43,75 @@ function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
   };
 }
 
-describe("progress sentences", () => {
-  it("states the position with its total and its provenance", () => {
-    expect(
-      describeEntryProgress(
-        progress({ page: 11, total: 80, source: "evince-gvfs", confidence: "exact" }),
-        english,
-      ),
-    ).toBe("p. 12 of 80, recorded by Evince");
-  });
-
-  it("never invents a total or a percentage when the total is unknown", () => {
-    const sentence = describeEntryProgress(
-      progress({ page: 11, total: null, source: "evince-gvfs", confidence: "exact" }),
+describe("the card's progress view", () => {
+  // R7 (L22, L23). The bar stands for the fraction read and the number sits over it, at the position
+  // that fraction corresponds to. A document nobody has read shows 0 % — the user's decision.
+  it("draws the fraction it read, and puts the number at that position", () => {
+    const view = describeProgressView(
+      entry({
+        progress: progress({ page: 11, total: 80, source: "evince-gvfs", confidence: "exact" }),
+      }),
       english,
     );
-    expect(sentence).toBe("p. 12, recorded by Evince");
-    expect(sentence).not.toContain("%");
-    expect(sentence).not.toMatch(/\bof\b/);
+
+    expect(view.fraction).toBeCloseTo(12 / 80);
+    expect(view.markerAt).toBeCloseTo(12 / 80);
+    expect(view.marker).toBe("15%");
   });
 
-  it("says so when there is no progress at all", () => {
-    expect(describeEntryProgress(null, english)).toBe("No reading progress recorded");
+  it("shows 0 % for a document nobody has read, and states nothing in words", () => {
+    const view = describeProgressView(entry({ progress: null }), english);
+
+    expect(view.fraction).toBe(0);
+    expect(view.markerAt).toBe(0);
+    expect(view.marker).toBe("0%");
+    expect(view.provenance).toBeNull();
   });
+
+  it("never turns a known page into a percentage the store cannot support", () => {
+    // A viewer reported a page but no total. The reader is somewhere in the document, so 0 % would be
+    // as wrong as a made-up fraction: the bar stays empty and the marker states the page.
+    const view = describeProgressView(
+      entry({ progress: progress({ page: 11, total: null, source: "evince-gvfs" }) }),
+      english,
+    );
+
+    expect(view.marker).toBe("p. 12");
+    expect(view.marker).not.toContain("%");
+    expect(view.fraction).toBe(0);
+    expect(view.provenance).toBe("recorded by Evince");
+  });
+
+  it("uses one implementation of the fraction, so the card and the sort cannot disagree", () => {
+    const malformed = entry({
+      progress: progress({ page: 90, total: 80, source: "evince-gvfs", confidence: "exact" }),
+    });
+
+    expect(describeProgressView(malformed, english).fraction).toBe(progressFraction(malformed));
+    expect(describeProgressView(malformed, english).marker).toBe("100%");
+  });
+});
+
+describe("provenance in words", () => {
 
   it("renders every provenance combination differently", () => {
     const rendered = [
-      describeEntryProgress(progress({ source: "native", confidence: "exact" }), english),
-      describeEntryProgress(progress({ source: "manual", confidence: "manual" }), english),
-      describeEntryProgress(progress({ source: "evince-gvfs", confidence: "exact" }), english),
-      describeEntryProgress(progress({ source: "evince-gvfs", confidence: "close-time" }), english),
-      describeEntryProgress(progress({ source: "evince-gvfs", confidence: "unknown" }), english),
+      describeProvenance(progress({ source: "native", confidence: "exact" }), english),
+      describeProvenance(progress({ source: "manual", confidence: "manual" }), english),
+      describeProvenance(progress({ source: "evince-gvfs", confidence: "exact" }), english),
+      describeProvenance(progress({ source: "evince-gvfs", confidence: "close-time" }), english),
+      describeProvenance(progress({ source: "evince-gvfs", confidence: "unknown" }), english),
     ];
     expect(new Set(rendered).size).toBe(rendered.length);
   });
 
   it("names the known sources and falls back to the raw id for unknown ones", () => {
-    expect(describeEntryProgress(progress({ source: "native" }), english)).toContain("oct");
+    expect(describeProvenance(progress({ source: "native" }), english)).toContain("oct");
     expect(
-      describeEntryProgress(progress({ source: "manual", confidence: "manual" }), english),
+      describeProvenance(progress({ source: "manual", confidence: "manual" }), english),
     ).toContain("you");
-    expect(describeEntryProgress(progress({ source: "evince-gvfs" }), english)).toContain("Evince");
-    expect(describeEntryProgress(progress({ source: "zathura-history" }), english)).toContain(
+    expect(describeProvenance(progress({ source: "evince-gvfs" }), english)).toContain("Evince");
+    expect(describeProvenance(progress({ source: "zathura-history" }), english)).toContain(
       "zathura-history",
     );
   });
@@ -162,12 +190,15 @@ describe("i18n", () => {
   it("provides Spanish as a real alternative to English", () => {
     expect(spanish("library.heading")).not.toBe(english("library.heading"));
     expect(
-      describeEntryProgress(
-        progress({ page: 11, total: 80, source: "evince-gvfs" }),
+      describeProgressView(
+        entry({ progress: progress({ page: 11, total: 80, source: "evince-gvfs" }) }),
         spanish,
-      ),
+      ).provenance,
     ).not.toBe(
-      describeEntryProgress(progress({ page: 11, total: 80, source: "evince-gvfs" }), english),
+      describeProgressView(
+        entry({ progress: progress({ page: 11, total: 80, source: "evince-gvfs" }) }),
+        english,
+      ).provenance,
     );
   });
 });
