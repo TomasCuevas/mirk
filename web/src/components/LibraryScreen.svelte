@@ -3,6 +3,7 @@
   import {
     describeLibraryMessage,
     filterEntries,
+    paginate,
     sortEntries,
     sortKeys,
     type FolderActionStatus,
@@ -29,15 +30,20 @@
     onOpenFolder: (entry: LibraryEntry) => void;
   } = $props();
 
-  // Filter and sort state is local to the screen, because it is a view of the listing and not a
-  // property of the library. Both are pure functions over the listing already in hand (S3/L19).
+  // Filter, sort and page state is local to the screen, because it is a view of the listing and not a
+  // property of the library. Filter and sort are pure functions over the listing already in hand
+  // (S3/L19), and the page is cut from their result afterwards, so changing it cannot drop either.
   let query = $state("");
   let sort = $state<SortKey>("title");
+  let page = $state(1);
 
   // `null` means there is something to list, so the empty-library sentence and the grid are
   // mutually exclusive rather than layered.
   const emptyMessage = $derived(describeLibraryMessage(entries, t));
   const visible = $derived(sortEntries(filterEntries(entries, query), sort, locale));
+  // R10: the page is cut from the whole filtered, sorted listing, and the helper clamps the page into
+  // range when a filter shrinks the listing under the reader.
+  const paged = $derived(paginate(visible, page));
 </script>
 
 <section class="screen">
@@ -63,7 +69,7 @@
           {/each}
         </select>
       </label>
-      <span class="count">{t("library.count", { shown: visible.length, total: entries.length })}</span>
+      <span class="count">{t("library.count", { shown: paged.total, total: entries.length })}</span>
     </div>
 
     {#if visible.length === 0}
@@ -71,8 +77,13 @@
     {:else}
       <!-- Responsive columns: two at phone width (the shell is 390 px) and more if the window ever grows.
    The later phone-shape request wins over the earlier three-column one here, deliberately (S2). Each card reserves its cover space without pretending to have one. -->
+      <!-- R10 (L22, L27): the page controls sit above the grid as well as below it, because otherwise
+           reaching them costs a page of scrolling — the opposite of what pagination is for. They are one
+           snippet rendered twice, so the two copies cannot drift apart. -->
+      {@render pager()}
+
       <ul class="grid">
-        {#each visible as entry (entry.id)}
+        {#each paged.items as entry (entry.id)}
           <li>
             <BookCard
               {entry}
@@ -83,8 +94,31 @@
           </li>
         {/each}
       </ul>
+
+      {@render pager()}
     {/if}
   {/if}
+  <!-- One definition of the page controls, rendered above and below the grid (R10, L27). The buttons
+       move the window over the same filtered, sorted listing, so turning a page keeps the filters. -->
+  {#snippet pager()}
+    <div class="pager">
+      <button
+        type="button"
+        disabled={paged.page <= 1}
+        onclick={() => (page = paged.page - 1)}
+      >
+        {t("library.previousPage")}
+      </button>
+      <span>{t("library.pagePosition", { page: paged.page, pages: paged.pageCount })}</span>
+      <button
+        type="button"
+        disabled={paged.page >= paged.pageCount}
+        onclick={() => (page = paged.page + 1)}
+      >
+        {t("library.nextPage")}
+      </button>
+    </div>
+  {/snippet}
 </section>
 
 <style>
@@ -168,5 +202,34 @@
 
   .grid li {
     display: flex;
+  }
+
+  .pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    font-size: 0.85rem;
+    color: #5a6472;
+  }
+
+  .pager button {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #ccd2da;
+    border-radius: 0.4rem;
+    background: #ffffff;
+    color: #24506b;
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .pager button:hover:not(:disabled) {
+    background: #f0f2f5;
+  }
+
+  .pager button:disabled {
+    color: #9aa3af;
+    cursor: default;
   }
 </style>

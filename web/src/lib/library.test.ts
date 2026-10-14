@@ -9,6 +9,7 @@ import {
   describeScanSummary,
   displayTitle,
   filterEntries,
+  paginate,
   progressFraction,
   sortEntries,
   titleFromPath,
@@ -355,5 +356,48 @@ describe("title fallback", () => {
     const path = "/home/u/libros/Programación/gentleman-programming-book-es.pdf";
     expect(titleFromPath(path)).toBe("gentleman-programming-book-es");
     expect(titleFromPath(path)).not.toContain("/");
+  });
+});
+
+describe("paginating the listing", () => {
+  // R10 (L22). Ten per page is the user's number, and the controls behind the page have to say where
+  // the reader is and how many documents exist.
+  const many = Array.from({ length: 23 }, (_, index) =>
+    entry({ id: index + 1, title: `Doc ${index + 1}` }),
+  );
+
+  it("cuts the listing into pages of ten, and reports where the reader is", () => {
+    const first = paginate(many, 1);
+
+    expect(first.items.map((e) => e.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(first.page).toBe(1);
+    expect(first.pageCount).toBe(3);
+    expect(first.total).toBe(many.length);
+  });
+
+  it("cuts the filtered, sorted listing, so turning the page keeps the reader's filters", () => {
+    // Filtering and sorting run over the whole listing and only then is the result cut into pages: a
+    // page is a window onto what the reader filtered, not a slice of the raw rows. The clamp is what
+    // keeps a filter that shrinks the listing from stranding the reader on an empty page.
+    const docs = Array.from({ length: 25 }, (_, index) =>
+      entry({ id: index + 1, title: index % 2 === 0 ? `Even ${index}` : `Odd ${index}` }),
+    );
+    const visible = sortEntries(filterEntries(docs, "Even"), "title");
+    const first = paginate(visible, 1);
+    const second = paginate(visible, 2);
+
+    expect(first.items.every((item) => displayTitle(item).includes("Even"))).toBe(true);
+    expect(second.items.every((item) => displayTitle(item).includes("Even"))).toBe(true);
+    expect([...first.items, ...second.items]).toEqual(visible);
+    expect(paginate(visible, 9).page).toBe(second.page);
+  });
+
+  it("reports one page for an empty listing, so the controls never say 'page 1 of 0'", () => {
+    const empty = paginate([], 1);
+
+    expect(empty.items).toEqual([]);
+    expect(empty.page).toBe(1);
+    expect(empty.pageCount).toBe(1);
+    expect(empty.total).toBe(0);
   });
 });

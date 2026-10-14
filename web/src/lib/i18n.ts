@@ -67,12 +67,13 @@ const english: Catalogue = {
   "library.sort.progress": "Reading progress",
   "library.noMatches": "No document matches “{query}”.",
   "library.count": "{shown} of {total} documents",
+  "library.pagePosition": "Page {page} of {pages}",
+  "library.previousPage": "Previous page",
+  "library.nextPage": "Next page",
 
   "card.cover": "No cover yet",
   "card.progressPercent": "{percent}%",
   "card.openFolder": "Open containing folder",
-  "card.openedFolder": "Opened {folder} with {viewer}.",
-  "card.openFolderError": "Could not open the folder: {message}",
 
   "progress.position": "p. {page}",
   "progress.by": "recorded by {viewer}",
@@ -165,12 +166,13 @@ const spanish: Catalogue = {
   "library.sort.progress": "Progreso de lectura",
   "library.noMatches": "Ningún documento coincide con «{query}».",
   "library.count": "{shown} de {total} documentos",
+  "library.pagePosition": "Página {page} de {pages}",
+  "library.previousPage": "Página anterior",
+  "library.nextPage": "Página siguiente",
 
   "card.cover": "Sin portada todavía",
   "card.progressPercent": "{percent} %",
   "card.openFolder": "Abrir la carpeta contenedora",
-  "card.openedFolder": "Se abrió {folder} con {viewer}.",
-  "card.openFolderError": "No se pudo abrir la carpeta: {message}",
 
   "progress.position": "pág. {page}",
   "progress.by": "registrado por {viewer}",

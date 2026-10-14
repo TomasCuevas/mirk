@@ -404,6 +404,51 @@ function compareOptionalNumber(a: number | null, b: number | null): number {
   return a - b;
 }
 
+// --- Pagination -----------------------------------------------------------------------------
+//
+// R10 (L22): the library is paginated at ten documents per page, the user's number. The arithmetic
+// lives here — a pure function over a listing already filtered and sorted — so the screen carries
+// only the current page as state and no slice arithmetic hides in markup.
+
+/** Documents per page. Ten is the user's number (R10). */
+export const PAGE_SIZE = 10;
+
+/** One page of a listing, with everything the controls need to state where the reader is. */
+export interface LibraryPage<T> {
+  /** The documents on this page, in the order they arrived. */
+  readonly items: T[];
+  /** The page actually shown, 1-based and clamped into range. */
+  readonly page: number;
+  /** How many pages the listing fills; never less than one, so the controls cannot say "1 of 0". */
+  readonly pageCount: number;
+  /** How many documents the listing holds in total. */
+  readonly total: number;
+}
+
+/**
+ * Cuts a whole listing into pages of `pageSize` (R10).
+ *
+ * It is called **after** filtering and sorting, so both apply to the entire listing before it is cut:
+ * a page is a window onto the reader's filtered, sorted library, not a slice of the raw rows. Changing
+ * the page therefore cannot drop a filter — the page number only chooses which window of the same
+ * listing is shown, and the caller keeps the filter and the sort untouched.
+ *
+ * The requested `page` is clamped into `1..pageCount`, because filtering can shrink the listing while
+ * the reader is several pages in; without the clamp that would show an empty page and claim the
+ * reader is somewhere the listing no longer reaches. An empty listing still reports one page.
+ */
+export function paginate<T>(
+  items: readonly T[],
+  page: number,
+  pageSize: number = PAGE_SIZE,
+): LibraryPage<T> {
+  const total = items.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const current = Math.min(Math.max(1, page), pageCount);
+  const start = (current - 1) * pageSize;
+  return { items: items.slice(start, start + pageSize), page: current, pageCount, total };
+}
+
 /** A human name for a source or provider id, falling back to the id when none is catalogued. */
 function sourceLabel(source: string, t: Translate): string {
   const key = `source.${source}`;
