@@ -152,12 +152,11 @@
     color: #5a6472;
   }
 
-  /* The row gap is declared on its own and is wider than the column gap. R8 was **measured** from the
-     user's screenshot of the running build: the columns were separated by exactly 12 px of page
-     background and the rows by none at all, although this rule declared `gap: 0.75rem` for both axes
-     and the bundled CSS contained it. The card being pinned to its grid row by `height: 100%` is the
-     remaining suspect, so the row separation no longer rides on a shorthand and the user's own eyes on
-     the running application are the check. */
+  /* The row gap is declared on its own and is wider than the column gap. R8 was measured off the
+     user's screenshots and then reproduced in WebKitGTK 4.1: the columns were separated by 12 px of
+     page background while the rows were not separated at all. The cause was the card overflowing its
+     own grid row by its padding and border, not the gap — see BookCard, where `box-sizing: border-box`
+     is the line that fixes it. */
   .grid {
     list-style: none;
     margin: 0;

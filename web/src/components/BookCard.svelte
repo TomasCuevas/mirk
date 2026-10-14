@@ -61,9 +61,14 @@
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
-    /* `min-height`, not `height`: the card follows its own content instead of being pinned to its grid
-       row. Pinning it is the remaining suspect behind R8 — the rows of the library grid touching while
-       the columns were properly separated (L22). */
+    /* `box-sizing: border-box` is what R8 turned out to need, and the reason is measurable. With the
+       default `content-box`, `min-height: 100%` set the card's *content* box to the height of its grid
+       row and then added the padding and the border on top of it: the card's border box stuck out
+       24.4 px past its row (22.4 px of padding + 2 px of border), ate the 20 px row gap and overlapped
+       the next row by 4.4 px. Reproduced and measured in WebKitGTK 4.1, the engine the application
+       renders in: a row gap of -4.4 px before this line, exactly 20 px after it. The cover's
+       `aspect-ratio` was the first suspect and measurements cleared it. */
+    box-sizing: border-box;
     min-height: 100%;
     padding: 0.7rem;
     background: #ffffff;

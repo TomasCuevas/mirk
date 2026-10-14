@@ -237,7 +237,9 @@
     display: flex;
     flex-direction: column;
     /* R6 (L22): the layout padding was too generous for a phone-width window, so it is reduced here
-       and in the screens and cards together rather than one place at a time. */
-    padding: 0.7rem 0.8rem 0.9rem;
+       and in the screens and cards together rather than one place at a time. The top value is the
+       exception and went up, not down: the user found each screen's own heading too close to the
+       window bar (L23), and this is the one place that spacing can be stated for every screen. */
+    padding: 1.1rem 0.8rem 0.9rem;
   }
 </style>
