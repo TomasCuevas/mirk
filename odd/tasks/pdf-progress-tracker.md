@@ -790,7 +790,10 @@ criterion is corrected here rather than silently contradicted.
   engine the application renders in, driven headless with a faithful copy of the grid and the card: a row
   gap of **-4.4 px** as committed, exactly **20 px** with `box-sizing: border-box` on the card. Two
   earlier suspects were cleared by measurement rather than by argument: the `gap` shorthand (the built
-  CSS did contain it) and the cover's `aspect-ratio`.
+  CSS did contain it) and the cover's `aspect-ratio`. **Refined in L24**: the two gaps must be *equal* —
+  the user's follow-up, once the rows were visible at all, was that the vertical separation was larger
+  than the horizontal one. The grid therefore went back to a single `gap: 0.75rem` for both axes, which
+  is what this section asked for from the beginning.
 - **R9 — The containing-folder action is an icon, at the top.** Icon only, no text label, moved away from
   the bottom of the card to the top, with an accessible name because an icon alone is not a name.
   Verbatim: *"El boton para ir a la carpeta contenedora solamente debe tener un icono y debe estar
@@ -1621,3 +1624,15 @@ columns, per the arithmetic) and a document with **no reading record shows 0 %**
 explicit call, recorded as theirs, taken against the maintainer's stated preference to leave the number
 off in that case. The rule that stands is the one they asked for, with the reasoning on record rather
 than applied silently either way.
+
+**L24 — R8 confirmed, and the two gaps made equal (2026-10-14):**
+
+> Si, ahora por fin hay separacion entre las filas, una cosa mala es que no es la misma separacion que hay horizontalmente entre los elementos de una misma fila
+
+**R8 is finally confirmed by the user's eyes**, which is the only verification that counted for a visual
+criterion they had already reported twice. Their follow-up is the refinement now inside the same
+criterion: the row gap I had widened to 1.25rem was visibly larger than the 0.75rem between columns,
+so the grid takes one gap for both axes again — the original design, which the overflow bug had been
+hiding. Measured in WebKitGTK 4.1 with the committed rules: **column gap 12 px, row gap 12 px**. The
+sequence worth remembering is the one that closed this: two theories argued from a screenshot were both
+wrong, and driving the engine the application actually renders in found the cause in one run.
