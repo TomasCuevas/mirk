@@ -13,6 +13,7 @@
 //! | `open_events` | Intervals during which a document was open: document, process, viewer, start, end. |
 //! | `viewers` | Known viewers and their declared capability, so it is not recomputed on every launch. |
 //! | `folders` | Directories the user nominated as the source of truth, plus whether the watcher is enabled. |
+//! | `settings` | A small key/value store for choices the interface and the desktop process share; the first is the interface language, which the tray follows (R1). |
 //! | `suggestions` | Documents discovered outside watched folders, awaiting the user's accept-or-discard decision. |
 //!
 //! # The two decisions worth preserving
@@ -188,6 +189,20 @@ const SCHEMA_V2: &str = "
 CREATE UNIQUE INDEX idx_folders_path_unique ON folders (path);
 ";
 
+/// Version 3: one place for the settings the interface and the desktop process share.
+///
+/// Added as a migration rather than by editing [`SCHEMA_V1`] or [`SCHEMA_V2`], because both are
+/// **frozen**: a database an earlier build already created reports their versions, and editing the
+/// text would leave that database without the table forever while claiming otherwise. The first
+/// setting is the interface language — the desktop process reads it to word the tray (R1) — so the
+/// table exists before any value does, and stays generic rather than growing a column per setting.
+const SCHEMA_V3: &str = "
+CREATE TABLE settings (
+    key   TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);
+";
+
 /// A stored document, together with its database id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentRecord {
@@ -242,7 +257,7 @@ pub struct Store {
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -304,6 +319,37 @@ impl Store {
             names.push(row.map_err(storage_error)?);
         }
         Ok(names)
+    }
+
+    /// Reads a `settings` value, or `None` when the key was never written.
+    ///
+    /// An absent key and a key that holds nothing are the same answer on purpose: callers decide
+    /// what a missing setting means (the interface falls back to its default), and `None` is the
+    /// honest report that nothing was ever chosen.
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, OctError> {
+        self.connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    /// Writes a `settings` value, replacing any previous value for `key`.
+    ///
+    /// The upsert is in SQL rather than a read-then-write so a second writer cannot race this one
+    /// into a duplicate-key failure; the primary key on `settings.key` is the same invariant.
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), OctError> {
+        self.connection
+            .execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .map_err(storage_error)?;
+        Ok(())
     }
 
     /// Inserts a document, or updates the existing row that describes it. Returns the row id.
@@ -900,6 +946,15 @@ fn migrate(connection: &mut Connection) -> Result<(), OctError> {
         transaction.commit().map_err(storage_error)?;
     }
 
+    if version < 3 {
+        let transaction = connection.transaction().map_err(storage_error)?;
+        transaction.execute_batch(SCHEMA_V3).map_err(storage_error)?;
+        transaction
+            .pragma_update(None, "user_version", 3i64)
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+    }
+
     Ok(())
 }
 
@@ -1067,6 +1122,57 @@ mod tests {
         (dir, path)
     }
 
+    /// Builds a database exactly as version 2 left it: the V1 schema plus the V2 folder index, a
+    /// recorded folder, and the version stamp. Both schema constants are used directly so the
+    /// fixture cannot drift away from the schemas it reproduces.
+    fn a_version_2_database() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("oct.sqlite3");
+        let connection = Connection::open(&path).expect("open raw");
+        connection
+            .execute_batch(SCHEMA_V1)
+            .expect("create the version 1 schema");
+        connection
+            .execute_batch(SCHEMA_V2)
+            .expect("apply the version 2 migration");
+        connection
+            .execute(
+                "INSERT INTO folders (path, recursive, enabled, added_at) VALUES (?1, 1, 1, 7)",
+                params!["/library/watched"],
+            )
+            .expect("record a folder the way version 2 did");
+        connection
+            .pragma_update(None, "user_version", 2i64)
+            .expect("stamp version 2");
+        drop(connection);
+        (dir, path)
+    }
+
+    #[test]
+    fn a_version_2_database_gains_settings_and_keeps_its_rows() {
+        let (_dir, path) = a_version_2_database();
+
+        let store = Store::open(&path).expect("opening migrates the database");
+        assert_eq!(store.schema_version().expect("schema version"), 3);
+
+        // What the older build recorded survives, including the flags the user owns.
+        let folders = store.folders().expect("list folders");
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].path, PathBuf::from("/library/watched"));
+        assert!(folders[0].recursive);
+        assert!(folders[0].enabled);
+
+        // The table the V3 migration exists for is usable afterwards. This is the language the
+        // desktop process reads to word the tray, so the migration is what R1 depends on.
+        store
+            .set_setting("language", "es")
+            .expect("the settings table must exist after the V2 -> 3 migration");
+        assert_eq!(
+            store.get_setting("language").expect("read"),
+            Some("es".to_string())
+        );
+    }
+
     #[test]
     fn a_version_1_database_gains_the_folder_constraint_when_it_migrates() {
         // The reason SCHEMA_V1 is never edited in place: a database an earlier build already created
@@ -1075,7 +1181,7 @@ mod tests {
         let (_dir, path) = a_version_1_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 2);
+        assert_eq!(store.schema_version().expect("schema version"), 3);
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -1083,6 +1189,15 @@ mod tests {
         assert_eq!(folders[0].path, PathBuf::from("/library/watched"));
         assert!(folders[0].recursive);
         assert!(folders[0].enabled);
+
+        // V1 arrives at the same version 3 as everything else, settings table included.
+        store
+            .set_setting("language", "es")
+            .expect("the settings table must exist after the V1 -> 3 migration");
+        assert_eq!(
+            store.get_setting("language").expect("read"),
+            Some("es".to_string())
+        );
 
         // And the constraint the migration exists for is live afterwards.
         let connection = Connection::open(&path).expect("open raw");
@@ -1103,7 +1218,7 @@ mod tests {
         let before = std::fs::read(&path).expect("read the database bytes");
 
         let store = Store::open(&path).expect("reopen");
-        assert_eq!(store.schema_version().expect("schema version"), 2);
+        assert_eq!(store.schema_version().expect("schema version"), 3);
         drop(store);
 
         let after = std::fs::read(&path).expect("read the database bytes");

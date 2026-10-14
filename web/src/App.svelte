@@ -18,6 +18,7 @@
     type WatchedFolder,
   } from "./lib/screens";
   import { invoke, runningInTauri } from "./lib/tauri";
+  import { loadLanguage, saveLanguage } from "./lib/settings";
   import { type WindowControl } from "./lib/window";
   import CategoryScreen from "./components/CategoryScreen.svelte";
   import HomeScreen from "./components/HomeScreen.svelte";
@@ -55,6 +56,34 @@
   let scanning = $state(false);
   let scanReport = $state<ScanReport | null>(null);
   let scanError = $state<string | null>(null);
+
+  // R1 (L22). The language is not the interface's private state: the desktop process builds the
+  // tray's words from the same stored value, so it is read when the interface starts and written
+  // when the user chooses one. A read that fails leaves the default standing and is reported to the
+  // console; a write that fails must never take the switch away from the user, so the screen changes
+  // language either way and the failure is reported rather than discarded.
+  async function loadStoredLanguage(): Promise<void> {
+    try {
+      const stored = await loadLanguage(invoke);
+      if (stored) {
+        locale = stored;
+      }
+    } catch (error) {
+      console.error("the stored language could not be read", error);
+    }
+  }
+
+  async function chooseLocale(next: Locale): Promise<void> {
+    locale = next;
+    if (!inTauri) {
+      return;
+    }
+    try {
+      await saveLanguage(invoke, next);
+    } catch (error) {
+      console.error("the language could not be stored", error);
+    }
+  }
 
   async function loadLibrary(): Promise<void> {
     libraryLoading = true;
@@ -158,6 +187,7 @@
     window.addEventListener("hashchange", sync);
 
     if (inTauri) {
+      void loadStoredLanguage();
       void loadLibrary();
       void loadProviders();
       void loadFolders();
@@ -210,7 +240,7 @@
         {scanReport}
         {scanError}
         onScan={scan}
-        onLocale={(next) => (locale = next)}
+        onLocale={chooseLocale}
       />
     {:else}
       <CategoryScreen

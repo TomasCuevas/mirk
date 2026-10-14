@@ -27,12 +27,55 @@ pub trait ShellActions {
     fn close(&self) -> Result<(), String>;
 }
 
-/// The tray menu id for each item. They are stable strings because the menu is built once and the
-/// event handler matches on them, and `quit` is deliberately the same [`ShellAction`] the top
-/// bar's close button performs (A4).
+/// The tray menu id for each item. They are stable strings because the event handler matches on
+/// them, and they survive a language change while the *words* do not: the menu is rebuilt from the
+/// stored language, so the ids stay fixed and only the labels move. `quit` is deliberately the same
+/// [`ShellAction`] the top bar's close button performs (A4).
 pub const MENU_SHOW: &str = "show";
 pub const MENU_HIDE: &str = "hide";
 pub const MENU_QUIT: &str = "quit";
+
+/// The language tag the interface and the tray share. These are the same tags the webview's i18n
+/// catalogue uses, because there is one stored value under `settings('language')` and both halves
+/// must agree on it.
+pub const LANGUAGE_EN: &str = "en";
+pub const LANGUAGE_ES: &str = "es";
+
+/// The tray menu's words in one language.
+///
+/// The tray is native and cannot read the webview's i18n catalogue, so its few words live here,
+/// keyed by the stored language, instead of being spelled out at every menu rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrayLabels {
+    pub show: &'static str,
+    pub hide: &'static str,
+    pub quit: &'static str,
+}
+
+/// Whether `language` is a locale this build knows.
+///
+/// The store accepts any string under `settings`, so this is the one gate that keeps a typo — or a
+/// value written by a newer build — from being treated as a language. Callers that read the setting
+/// report an unknown value as no language; [`tray_labels`] falls back to English.
+pub fn is_known_language(language: &str) -> bool {
+    matches!(language, LANGUAGE_EN | LANGUAGE_ES)
+}
+
+/// The tray's words in `language`; English when nothing is stored or the value is not known.
+pub fn tray_labels(language: Option<&str>) -> TrayLabels {
+    match language {
+        Some(LANGUAGE_ES) => TrayLabels {
+            show: "Mostrar",
+            hide: "Ocultar",
+            quit: "Salir",
+        },
+        _ => TrayLabels {
+            show: "Show",
+            hide: "Hide",
+            quit: "Quit",
+        },
+    }
+}
 
 /// Perform `action` on `shell`.
 pub fn dispatch(action: ShellAction, shell: &dyn ShellActions) -> Result<(), String> {
@@ -130,5 +173,37 @@ mod tests {
         let shell = FakeShell::failing("no window");
         let error = dispatch(ShellAction::Minimize, &shell).expect_err("the fake fails");
         assert_eq!(error, "no window");
+    }
+
+    #[test]
+    fn the_tray_labels_follow_the_stored_language() {
+        // The stored language, not the interface's in-memory state: the desktop process words the
+        // tray (R1) and the words are pinned here so neither translation can drift.
+        assert_eq!(
+            tray_labels(Some("en")),
+            TrayLabels {
+                show: "Show",
+                hide: "Hide",
+                quit: "Quit",
+            }
+        );
+        assert_eq!(
+            tray_labels(Some("es")),
+            TrayLabels {
+                show: "Mostrar",
+                hide: "Ocultar",
+                quit: "Salir",
+            }
+        );
+    }
+
+    #[test]
+    fn an_unknown_or_absent_language_falls_back_to_english() {
+        assert!(is_known_language("en"));
+        assert!(is_known_language("es"));
+        assert!(!is_known_language("fr"));
+
+        assert_eq!(tray_labels(None), tray_labels(Some("en")));
+        assert_eq!(tray_labels(Some("fr")), tray_labels(Some("en")));
     }
 }

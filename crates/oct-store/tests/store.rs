@@ -21,10 +21,10 @@ fn document(path: &str, identity: FileId) -> Document {
     doc
 }
 
-// --- S1: the six documented tables -----------------------------------------------------------
+// --- S1: the documented tables -----------------------------------------------------------------
 
 #[test]
-fn schema_contains_exactly_the_six_documented_tables() {
+fn schema_contains_exactly_the_documented_tables() {
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");
     let tables = store.table_names().expect("table names");
@@ -35,6 +35,7 @@ fn schema_contains_exactly_the_six_documented_tables() {
             "folders",
             "open_events",
             "progress",
+            "settings",
             "suggestions",
             "viewers",
         ]
@@ -263,6 +264,57 @@ fn a_fresh_database_is_migrated_and_reopening_it_changes_nothing() {
     assert_eq!(before, after, "reopening a current database must change nothing");
 }
 
+// --- S9: settings, the single source the interface and the tray share -------------------------
+
+#[test]
+fn a_setting_round_trips_and_an_absent_key_reads_as_none() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+
+    // Never chosen and chosen as nothing are the same honest answer: `None`, not an empty string.
+    assert_eq!(store.get_setting("language").expect("read"), None);
+
+    store.set_setting("language", "es").expect("write");
+    assert_eq!(
+        store.get_setting("language").expect("read"),
+        Some("es".to_string())
+    );
+
+    // Writing the same key again replaces the value in place rather than adding a second row.
+    store.set_setting("language", "en").expect("overwrite");
+    assert_eq!(
+        store.get_setting("language").expect("read"),
+        Some("en".to_string())
+    );
+}
+
+#[test]
+fn reopening_a_version_3_database_changes_nothing() {
+    let (_dir, path) = temp_db();
+    {
+        let store = Store::open(&path).expect("migrate a fresh database to version 3");
+        assert_eq!(store.schema_version().expect("version"), 3);
+        store.set_setting("language", "es").expect("write a setting");
+    }
+    let before = std::fs::read(&path).expect("read the database bytes");
+
+    {
+        let store = Store::open(&path).expect("reopen a current database");
+        assert_eq!(store.schema_version().expect("version"), 3);
+        assert_eq!(
+            store.get_setting("language").expect("read"),
+            Some("es".to_string()),
+            "the setting must survive the reopen"
+        );
+    }
+
+    let after = std::fs::read(&path).expect("read the database bytes");
+    assert_eq!(
+        before, after,
+        "reopening a version-3 database must not rewrite it"
+    );
+}
+
 #[test]
 fn a_database_from_a_newer_build_is_refused_rather_than_downgraded() {
     let (_dir, path) = temp_db();
@@ -353,7 +405,7 @@ fn the_schema_has_the_documented_columns_of_every_table() {
     // Read through SQLite's public catalog, so this asserts the *spec's* column list rather than
     // whatever the implementation happens to define.
     let connection = rusqlite::Connection::open(&path).expect("open raw");
-    let expected: [(&str, &[&str]); 6] = [
+    let expected: [(&str, &[&str]); 7] = [
         (
             "documents",
             &[
@@ -398,6 +450,7 @@ fn the_schema_has_the_documented_columns_of_every_table() {
             "suggestions",
             &["id", "path", "seen_count", "first_seen_at", "decided_at"],
         ),
+        ("settings", &["key", "value"]),
     ];
 
     for (table, columns) in expected {

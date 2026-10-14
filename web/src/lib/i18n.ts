@@ -10,8 +10,24 @@
  * gender, ICU) is a later task; this is the smallest thing the first screen needs.
  */
 
-/** The languages the first screen ships with. */
-export type Locale = "en" | "es";
+/** The languages the first screen ships with. The list is the type's source, so a check written
+ * against it cannot drift from `Locale`. */
+export const LOCALES = ["en", "es"] as const;
+
+/** A language the interface has words for. */
+export type Locale = (typeof LOCALES)[number];
+
+/**
+ * Whether `value` is a language this build knows.
+ *
+ * It takes `unknown` on purpose: the value arrives from outside the interface — the stored setting,
+ * which the desktop process also writes — so it has to be checked before a screen uses it. An
+ * unknown locale would render keys with no words behind them and leave the tray with no labels,
+ * which is why "unknown" and "stored" are different answers.
+ */
+export function isLocale(value: unknown): value is Locale {
+  return typeof value === "string" && (LOCALES as readonly string[]).includes(value);
+}
 
 /** Values substituted into `{placeholders}`. */
 export type MessageParams = Record<string, string | number>;

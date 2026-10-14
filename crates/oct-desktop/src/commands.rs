@@ -18,6 +18,8 @@ use oct_scan::{ScanReport, Scanner};
 use oct_store::{LibraryEntry, Store, WatchedFolder};
 use serde::Serialize;
 
+use crate::shell;
+
 /// A reading position serialised for the interface, provenance included.
 ///
 /// `source` and `confidence` stay two fields, mirroring the two store columns: the screen renders
@@ -217,6 +219,36 @@ pub fn watched_folders(store: &Store) -> Result<Vec<WatchedFolderView>, OctError
         .into_iter()
         .map(WatchedFolderView::from)
         .collect())
+}
+
+/// The `settings` key the interface language is stored under. The interface writes it and the
+/// desktop process reads it to word the tray (R1), so both halves use this one name.
+const LANGUAGE_SETTING: &str = "language";
+
+/// The stored interface language, but only when it is a locale this build knows.
+///
+/// The database accepts any string under `settings`; a value this build does not recognise is not a
+/// language and must not reach a caller as one. It is reported as absent — the same answer as "never
+/// chosen" — so the interface keeps its default instead of rendering keys with no words behind them.
+pub fn get_language(store: &Store) -> Result<Option<String>, OctError> {
+    Ok(store
+        .get_setting(LANGUAGE_SETTING)?
+        .filter(|language| shell::is_known_language(language)))
+}
+
+/// Stores the interface language, refusing a locale this build does not know.
+///
+/// Refusing rather than storing keeps the single source honest: a typo written once would otherwise
+/// be read back as "no language stored" forever, and a newer build's locale would be silently
+/// downgraded by an older one. The tray is rebuilt by the command wrapper in `main.rs`, not here, so
+/// this decision stays testable without a display or a Tauri application.
+pub fn set_language(store: &Store, locale: &str) -> Result<(), OctError> {
+    if !shell::is_known_language(locale) {
+        return Err(OctError::Storage(format!(
+            "`{locale}` is not an interface language this build knows"
+        )));
+    }
+    store.set_setting(LANGUAGE_SETTING, locale)
 }
 
 /// Opens the folder that contains `path` with the platform launcher.
@@ -593,5 +625,49 @@ mod tests {
             Err(OctError::Io(error)) => assert!(error.to_string().contains("no xdg-open")),
             other => panic!("expected an io error, got {other:?}"),
         }
+    }
+
+    // --- R1: the language the interface and the tray share ------------------------------------
+
+    #[test]
+    fn the_language_is_stored_and_read_back() {
+        let store = in_memory_store();
+        assert_eq!(get_language(&store).expect("read"), None);
+
+        set_language(&store, "es").expect("store Spanish");
+        assert_eq!(get_language(&store).expect("read"), Some("es".to_string()));
+
+        set_language(&store, "en").expect("store English");
+        assert_eq!(get_language(&store).expect("read"), Some("en".to_string()));
+    }
+
+    #[test]
+    fn an_unknown_locale_is_rejected_and_not_stored() {
+        let store = in_memory_store();
+        let result = set_language(&store, "fr");
+        assert!(
+            matches!(result, Err(OctError::Storage(_))),
+            "an unknown locale must be refused, got {result:?}"
+        );
+        assert_eq!(
+            store.get_setting("language").expect("read the raw setting"),
+            None,
+            "a refused locale must never reach the store"
+        );
+    }
+
+    #[test]
+    fn a_stored_value_that_is_not_a_language_never_reaches_a_caller() {
+        let store = in_memory_store();
+        // A newer build, a hand-edited database or a typo can leave anything under this key. A
+        // caller must see "no language" rather than a value it cannot word the tray with.
+        store
+            .set_setting("language", "fr")
+            .expect("write a value the build does not know");
+        assert_eq!(
+            get_language(&store).expect("read"),
+            None,
+            "an unknown stored value is reported as no language, not as one"
+        );
     }
 }

@@ -8,7 +8,7 @@
 //!
 //! # The window shape is a product statement
 //!
-//! The window is `390x844` logical pixels — a common phone's logical viewport, and a 1:2.16 ratio —
+//! The window is `430x844` logical pixels — a phone's logical viewport, widened from 390 in R5 —
 //! undecorated, fixed-size and not fullscreen. This is not a limitation to apologise for: `oct` is
 //! meant to read as a phone-shaped companion that lives in the tray, not as a small desktop window
 //! that happens to render a mobile layout. The custom top bar exists for the same reason — a native
@@ -25,7 +25,7 @@ use commands::{LibraryEntryView, OpenedFolderView, ProviderView, ScanReportView,
 use oct_core::OctError;
 use oct_store::{database_path, Store};
 use shell::{action_for_menu_id, dispatch, ShellAction, ShellActions};
-use tauri::menu::MenuBuilder;
+use tauri::menu::{Menu, MenuBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
 
@@ -36,9 +36,13 @@ mod shell;
 /// tray and the commands always act on the same window.
 const MAIN_WINDOW: &str = "main";
 
-/// The tooltip of the tray icon. The tray is native, so its words do not come through the webview's
-/// i18n catalogue; English is the default and is what this first pass ships.
+/// The tooltip of the tray icon. It is the product name rather than a translated word, so it does
+/// not follow the language.
 const TRAY_TOOLTIP: &str = "oct";
+
+/// The tray icon's id, so the language command can find and re-word the existing tray instead of
+/// building a second icon.
+const TRAY_ID: &str = "oct-tray";
 
 /// Performs a [`shell`] action on the real window and application.
 struct AppShell {
@@ -142,6 +146,20 @@ fn watched_folders() -> Result<Vec<WatchedFolderView>, String> {
     commands::watched_folders(&store).map_err(error_message)
 }
 
+/// The stored interface language, or `null` when nothing — or nothing this build knows — is stored.
+#[tauri::command]
+fn get_language() -> Result<Option<String>, String> {
+    stored_language()
+}
+
+/// Stores the interface language and re-words the tray so it changes without a restart (R1).
+#[tauri::command]
+fn set_language(locale: String, app: AppHandle) -> Result<(), String> {
+    let store = open_store()?;
+    commands::set_language(&store, &locale).map_err(error_message)?;
+    rebuild_tray(&app, Some(&locale))
+}
+
 /// Opens the folder that contains the document at `path`, reporting an honest error when the
 /// folder is gone or nothing can open it.
 #[tauri::command]
@@ -159,26 +177,54 @@ fn open_store() -> Result<Store, String> {
     Store::open(path).map_err(error_message)
 }
 
+/// The language stored in the production database, or an error naming the failure.
+///
+/// The commands open the production database themselves; `setup` reads it through here so the tray is
+/// worded at launch exactly as a later change words it.
+fn stored_language() -> Result<Option<String>, String> {
+    let store = open_store()?;
+    commands::get_language(&store).map_err(error_message)
+}
+
 /// Renders an error into the string the frontend shows. `OctError` is not `Serialize`, and the
 /// screen only needs to display the message, so the conversion happens at the IPC boundary.
 fn error_message(error: OctError) -> String {
     error.to_string()
 }
 
-/// Builds the tray: an icon with Show, Hide and Quit.
+/// Builds a tray menu whose words are `labels`'.
+fn tray_menu(app: &AppHandle, labels: shell::TrayLabels) -> tauri::Result<Menu<tauri::Wry>> {
+    MenuBuilder::new(app)
+        .text(shell::MENU_SHOW, labels.show)
+        .text(shell::MENU_HIDE, labels.hide)
+        .text(shell::MENU_QUIT, labels.quit)
+        .build()
+}
+
+/// Re-words the tray in `language` without rebuilding the icon or restarting the application.
+///
+/// [`tauri::tray::TrayIcon::set_menu`] replaces the menu on the retained tray, and the manager keeps
+/// the icon under [`TRAY_ID`] so no handle has to be threaded through the setup closure. On Linux the
+/// replacement goes through the app-indicator's own `set_menu`, which is why the words can change
+/// while the ids stay fixed.
+fn rebuild_tray(app: &AppHandle, language: Option<&str>) -> Result<(), String> {
+    let menu = tray_menu(app, shell::tray_labels(language)).map_err(|error| error.to_string())?;
+    match app.tray_by_id(TRAY_ID) {
+        Some(tray) => tray.set_menu(Some(menu)).map_err(|error| error.to_string()),
+        None => Err("the tray icon is not present".to_string()),
+    }
+}
+
+/// Builds the tray in `language`: an icon with Show, Hide and Quit worded in that language.
 ///
 /// The tray is not decoration. The top bar offers "hide", and a hide button with no way back would
 /// make the application vanish forever, which is a trap rather than a feature — that is why the
 /// tray lands with the window chrome instead of in a later phase (A3, L20). The icon is the
 /// application's own committed placeholder; there is no visual identity to invent.
-fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
-    let menu = MenuBuilder::new(app)
-        .text(shell::MENU_SHOW, "Show")
-        .text(shell::MENU_HIDE, "Hide")
-        .text(shell::MENU_QUIT, "Quit")
-        .build()?;
+fn setup_tray(app: &AppHandle, language: Option<&str>) -> tauri::Result<()> {
+    let menu = tray_menu(app, shell::tray_labels(language))?;
 
-    let mut builder = TrayIconBuilder::new()
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip(TRAY_TOOLTIP)
         // On Linux only the menu is reachable (click events are not emitted), so the left click
@@ -229,7 +275,19 @@ fn main() {
                 .expect("the main window is declared in tauri.conf.json");
             enforce_fixed_shape(&window);
 
-            setup_tray(app.handle())?;
+            // The tray's words come from the stored language, read from the same production database
+            // the commands use. A database that cannot be opened must not take the tray down with it
+            // — hiding the window would then leave no way back — so the failure is reported and
+            // English stands in for this launch.
+            let language = match stored_language() {
+                Ok(language) => language,
+                Err(error) => {
+                    eprintln!("the stored language could not be read for the tray: {error}");
+                    None
+                }
+            };
+
+            setup_tray(app.handle(), language.as_deref())?;
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -249,6 +307,8 @@ fn main() {
             scan_folder,
             progress_providers,
             watched_folders,
+            get_language,
+            set_language,
             open_containing_folder
         ])
         .run(tauri::generate_context!())
@@ -286,6 +346,10 @@ mod tests {
         assert_eq!(window.max_width, Some(window.width));
         assert_eq!(window.min_height, Some(window.height));
         assert_eq!(window.max_height, Some(window.height));
+
+        // R5: the width widened from 390 to 430; the height and the shape did not move.
+        assert_eq!(window.width, 430.0, "R5: the window width");
+        assert_eq!(window.height, 844.0, "R5: the window height");
 
         let ratio = window.height / window.width;
         assert!(
