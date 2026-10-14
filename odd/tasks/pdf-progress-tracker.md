@@ -879,9 +879,21 @@ Spanish keeps the product name and follows the same shape: "Mostrar OCT". Verbat
 - **R14 — One visibility entry, not two.** The menu carries **either** the entry that shows the window
 **or** the one that hides it, according to whether the window is visible right now, instead of offering
 both and leaving one of them doing nothing. The state is read from the window rather than remembered
-beside it, and the menu is rebuilt after every action that can change it. Verbatim: *"otra cosa que me
+beside it — **corrected after the user found the defect**: the read is right everywhere except in the
+instant right after the application's own action, where the platform still reports the previous state.
+Measured by driving the tray's own menu over the session bus (`com.canonical.dbusmenu.Event`, the same
+call the panel makes when a person clicks): a hide reads back as visible, a show does not, which left
+the entry one click behind and is what the user reported as needing two clicks. There the action's own
+outcome is the truth, because an action that failed never reaches the rebuild, and it is passed through
+for that one refresh rather than stored.
+The menu is rebuilt after every action that can change it. Verbatim: *"otra cosa que me
 gustaria es que detecte si esta mostrada o no la app, para que unicamente muestre una de las dos
 opciones \"Show\" o \"Hidden\"."*
+
+- **R15 — A line divides the three entries.** Each of the three separated from the next by a divider, so
+the menu reads as three groups rather than one list, as the tray menu the user pointed at does.
+Verbatim: *"Tambien, debes colocar una linea que divida las tres opciones, algo similar a este menu"* —
+with a screenshot of another application's tray menu as the example.
 
 The words are the user's. Where one of them names a state ("Hidden") the entry is written as the
 **action** that state makes available ("Hide OCT"), because a menu entry is something a person clicks,
@@ -889,8 +901,10 @@ and the pair stays the two ids the shell already owns.
 
 ### Tasks — round 3
 
-- **U7** R12, R13, R14 — the tray's menu: a settings entry that asks the interface to navigate, the
-  application named in the visibility entry, and one visibility entry chosen by the window's real state
+- **U7** R12, R13, R14, R15 — **done** (`f2464eb`): the tray's menu carries a settings entry that asks the
+  interface to navigate (and brings the window up first), names the application in the visibility entry,
+  offers exactly one visibility entry chosen by the window's real state, and divides the three with
+  lines. Three defects were found and fixed on the way — see `L34`
 
 **How a unit lands (L26).** A unit is done when the user says they like it, not when the checks pass.
 The sequence is: implement → run the checks (tests, build, and the engine measurement where one applies)
@@ -1962,3 +1976,72 @@ because `oct-core`'s error enum has no variant for invalid input. The worker fla
 it, and it is its own task rather than an edit inside a unit that was mid-verification: a bad argument
 reported as a storage failure is a small lie, and a log that lies sends the next person looking in the
 wrong place.
+
+## L33 — the tray menu's entries are divided by lines
+
+> Tambien, debes colocar una linea que divida las tres opciones, algo similar a este menu /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-14 12-37-40.png
+
+A fourth item for the same menu, arriving while `U7` was still being built, and recorded as `R15` above.
+The screenshot the user attached is another application's tray menu: it shows the application named in
+the visibility entry ("Show MechvibesDX", which is the same shape as the "Show OCT" of `R13`) and a
+divider line between each group of entries.
+
+The menu therefore reads: the visibility entry, a line, the settings entry, a line, quit. Only the
+dividers are new; the words are `R13`'s and `R12`'s.
+
+## L34 — U7: the tray's menu, and three defects that only measurement could find
+
+> Si, funciona todo perfecto en mis pruebas manuales tambien. Podemos avanzar con la siguiente tarea
+
+**What landed** (`f2464eb`): the settings entry (`R12`) — native tray, webview screen, so the desktop
+process emits one `open-screen` event carrying the screen name and the interface answers it through the
+same hash routing the navbar uses; the application's name in the visibility entry (`R13`); exactly one
+visibility entry chosen by the window's real state (`R14`); and a line between each of the three
+(`R15`). The menu's shape — entry, line, entry, line, entry — is a pure function `shell::tray_menu_entries`
+(language, visible) that a test pins for both languages and both states, so the dividers are a decision
+rather than syntax sprinkled on at the builder.
+
+**Three defects, and the reason each one took measurement instead of reasoning:**
+
+1. **The entry sat one click behind** ("tengo que hacer 2 clic sobre el boton para que cambie de
+   estado"). The menu *was* rebuilt every time — the item id changed on every action — but the window's
+   own visibility answer lags a hide: measured over the session bus, a hide is still read back as
+   visible while a show is not. So the outcome of an action that already returned success is passed
+   through for that one refresh instead of being read back, and it is never stored. **`R14`'s own
+   sentence was corrected**, not the code quietly patched: "the state is read from the window" became
+   "and where that read races the platform, the action's outcome is the truth".
+2. **The settings entry did nothing** ("no abre la pantalla de ajustes, este o no abierta la
+   aplicacion"). Two causes: the project had **no capabilities file at all** — an application's own
+   commands need no grant, which is why every command had worked until now, but `listen` is a core API
+   that **rejects** without `core:event:allow-listen`, and the promise had no `.catch`, so it failed in
+   silence; and the entry navigated without bringing the window up, so with the window hidden it changed
+   a hash nobody could see. Both fixed, with `core:event:allow-listen` and `allow-unlisten` as the
+   narrowest pair, and the window shown before the request.
+3. **The launch read was flaky**: two launches of the same binary worded the tray differently over a
+   window that was visible both times. At launch the fact comes from the configuration, because the
+   window is created visible by it and the platform's answer at that instant is not yet trustworthy.
+
+**How it was verified without touching the user's session.** The tray's menu is readable and clickable
+over the session bus (`com.canonical.dbusmenu.GetLayout` and `Event`), which is exactly what the panel
+does when a person clicks. That is how the defects were reproduced, and how the fixes were confirmed:
+launch, hide, show, and the settings entry bringing back a hidden window. One false alarm is recorded so
+it is not repeated: grepping the bus names for the tray makes it look absent, because app-indicator items
+register under a unique name and are announced to the `StatusNotifierWatcher` — the only correct question
+is the watcher's `RegisteredStatusNotifierItems`.
+
+**Process notes.** A background worker timed out mid-unit and delivered no report; its diff was read in
+full and its RED evidence was recovered by **falsification** (breaking each rule and watching the tests
+fail), which is stronger than the report that never arrived — and that is also why the live path had
+never been exercised, which is where two of the three defects lived. `review start` rejects a long
+`lensesReason` with `lenses-invalid` and creates no lineage: 530 characters failed twice, the 205-character
+reason that had already worked succeeded.
+
+**The review, and its debt.** The RDD review on `review-becc52b5cf107481` approved this work in the
+revision before these fixes and burned its authority on acknowledgement; two of its six non-blocking
+findings were exactly defect 2, which it flagged before the user hit it. Those six are `R3-1`, `R3-2`,
+`R3-3` and `R4-tray-hide-no-way-back` besides, and they are their own triage task rather than a reason to
+re-review.
+
+**Left honestly open**: the menu is refreshed on the application's own paths, so a window restored or
+hidden by something outside the application can leave it stale until the next in-app action. The window
+has no `skipTaskbar` setting, so that case is reachable.
