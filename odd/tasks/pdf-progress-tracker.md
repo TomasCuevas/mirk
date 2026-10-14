@@ -853,7 +853,11 @@ criterion is corrected here rather than silently contradicted.
   task, because removing it touches `App.svelte`, which has no tests, and a hurried refactor there at the
   end of a long session is the pattern that produced the last six layout bugs. Only what was local and
   demonstrably dead — the `.status` CSS, with no element using it — is gone.
-- **U4** R2, R4 — Inicio: the header cleaned, the three carousels, and the queries behind them (`B1`–`B4`)
+- **U4** R2, R4 — **done** (`b7c5991`): Inicio keeps only its heading, and the three carousels (`B1`–`B4`)
+  with their own screens, their definitions on screen and a card-sized place kept when empty, backed by
+  the pure `categoryEntries` selector and one shared `BookGrid`. The card's shape took four attempts and
+  the last one is L31; the four category decisions (30 days, never-opened excluded, unknown total
+  excluded, categories independent) are recorded in the commit body and confirmed by the user
 - **U5** R1, R5 — the desktop process: tray labels from the stored language, window 430×844
 - **U6** R11 — the native folder chooser, with the plugin decision recorded
 
@@ -1822,3 +1826,49 @@ of this document — 35 lines of it — inside what was supposed to be the code 
 committing with an explicit `-- web/src` pathspec. **The size refinement of `R7` therefore lives inside
 `5fb339c` rather than in a commit of its own**: splitting one stylesheet across two commits by hunk was
 not worth the risk of a botched partial stage, so it travels there and is named in the commit body.
+
+**L31 — Inicio's carousels, and the card's shape (2026-10-14):**
+
+The user's requests, in their own words:
+
+> Procede con U4
+
+> Bien, los cambios se han aplicado correctamente. Hay varias cosas que quisiera corregir: Los mensajes indicando que no hay documentos deberian ser mas cortos. No me gusta que este todo demasiado junto cuando no hay elementos, se debe dejar espacio, una especie de placeholder si no hay elementos en los caruseles... Cuando voy a la pagina dedicada para cada categoria, no hay ningun boton para volver atras, tengo que utilizar el bottom-nav para volver
+
+> Tanto el placeholder como la tarjeta real deben tener las mismas dimensiones. He probado y el aspect-ratio que me gusta es 9/11, aplicalo
+
+> Quedo rota la UI de la pantalla inicio... Las card se ven estiradas, demasiado. Deberian ser un poco mas anchas y menos largas. El texto "Nothing here yet" deberia estar mas pegado al placeholder que simula la portada y no centrado en el contenido de debajo
+
+> Como esta ahora me gusta, por el momento no quiero más iteraciones sobre esto
+
+**What landed** (`b7c5991`): R2 (Inicio keeps only its heading) and R4 = `B1`–`B4` — the three carousels,
+their own screens, their definitions on screen, and a card-sized place kept when a category is empty —
+backed by the pure `categoryEntries(entries, category, now)` selector, one shared `BookGrid` so the
+carousels, the category screens and the library cannot render different cards, routing for
+`#/category/<name>`, and a back control that reuses it rather than inventing a second navigation.
+
+**The shape took four attempts, and each one is the reason for the next:**
+
+1. A card-sized placeholder at 18rem, **derived** by arithmetic from the card's CSS. Measured in
+   WebKitGTK it was 44 px short of a real card, so it was raised to 21rem.
+2. The user found it stretched — a card's silhouette is 136 × 332 — and asked for something less tall
+   and a little wider: 11rem by 12.5rem.
+3. Then: *the placeholder and the real card must have the same dimensions, at 9/11*. **A whole card at
+   9/11 is geometrically impossible**: the text block takes about as much height as the ratio leaves, so
+   the cover would be a 30–38 px stripe. Implemented as the **cover's** ratio in both, with a fixed text
+   block so a filled and an empty tile matched — which produced a 176 × 391 tube.
+4. The user reported the card *estirada, demasiado*, the message floating in the space the reservation
+   created, and the empty slot drawn as a frame inside a frame. The fixed block was removed (it was the
+   cause of both), the tile widened to 13rem, and the empty slot given the card's own chrome — white,
+   solid border, same radius — instead of a dashed translucent frame.
+
+**The honest note**: the residual height is not a bug but arithmetic the user chose. At 9/11 a wider tile
+makes a *taller* cover, so "wider and less long" cannot both hold; the options went in front of them with
+numbers (a 224 px cover at 9/11 against 184 at 1/1 and 138 at 4/3) and they chose to keep it as it is.
+
+**Two process notes worth keeping.** The command that made the first shape fix **skipped the
+dist → binary → process check** and hid `Compiling oct-desktop` behind `tail -1` — the exact trap this
+document already records one entry earlier — and it was re-run properly rather than assumed. And when the
+fixed text block was removed, a test that pinned it went red and **was updated to pin the new rule rather
+than weakened**, while a comment still claiming that the reservation kept every card the same height was
+corrected, because a comment that lies is worse than no comment at all.
