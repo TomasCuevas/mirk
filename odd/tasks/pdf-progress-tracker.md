@@ -779,6 +779,14 @@ criterion is corrected here rather than silently contradicted.
   true is that it has no record at all — they may be on page 100 of a document it has never seen. So:
   with a record, bar plus number at its position; without one, an empty bar and no number. The earlier
   honesty rule is not repealed by this item, it is restated: never a percentage the store cannot support.
+  **Refined in L25, twice over.** The number has to be **legible**: at the first size the user found it
+  too small to read and it is now `0.85rem`. And the pill keeps itself inside the bar **by
+  construction**: it takes a fixed width in its own font units (`3.4em`, `border-box`) with a clamp
+  inset of exactly half of it (`1.7em`), so changing the text size can never leave it hanging outside.
+  The reason this is stated rather than left implicit: the first attempt used a pixel inset measured
+  from the then-current text size (19.2 px), which is the kind of value that rots silently the next time
+  somebody changes the font — and that measurement is what caught the pill hanging 3.3 px outside the
+  bar at 100 % in the first place.
 - **R8 — Rows in Biblioteca are separated vertically.** The user's screenshot shows the containing-folder
   button of one row touching the card of the next: the rows need the same separation the columns have.
   Verbatim: *"No hay separacion vertical entre los elementos en la pantalla 'Biblioteca', puedes verlo en
@@ -797,7 +805,19 @@ criterion is corrected here rather than silently contradicted.
 - **R9 — The containing-folder action is an icon, at the top.** Icon only, no text label, moved away from
   the bottom of the card to the top, with an accessible name because an icon alone is not a name.
   Verbatim: *"El boton para ir a la carpeta contenedora solamente debe tener un icono y debe estar
-  situado arriba en alguna parte, no me gusta donde esta actualmente."*
+  situado arriba en alguna parte, no me gusta donde esta actualmente."* **Refined in L27**: "arriba"
+  turned out to need an anchor. The first attempt gave the action a row of its own above the cover, and
+  the user's verdict was that it looked loose up there with nothing to belong to, and that the icon
+  itself did not please them. It now sits on the **cover's top-right corner**, inside a relative wrapper,
+  so it reads as an action on the document's own body — and it stays there once a real cover replaces
+  the placeholder. The drawing is redrawn cleaner and larger (18 px). **The success sentence is gone**:
+  opening the folder window is its own confirmation, and only a **failure** is stated, because silence
+  there would leave the reader thinking it worked.
+- **R10b — The page controls are reachable from both ends (L27).** The user's words: *"la paginacion
+  deberia estar disponible arriba y abajo, actualmente esta abajo unicamente lo que obliga al usuario a
+  hacer scroll hacia el fondo para poder paginar"*. One snippet is rendered above and below the grid, so
+  the two copies cannot drift apart — the alternative, duplicating the markup, is how the second copy
+  ends up stale.
 - **R10 — Biblioteca is paginated, 10 per page.** The user's number. Page controls state where the reader
   is and how many documents there are, filtering and sorting still apply to the whole listing before it
   is cut into pages, and changing the page does not quietly drop the reader's filters.
@@ -811,16 +831,38 @@ criterion is corrected here rather than silently contradicted.
 
 ### Tasks — round 2
 
-- **U1** R3, R6, R8 — one string, the paddings, the row gap: small enough to make inline, committed with
-  these specs
-- **U2** R7 — the card's progress line (and its limit: no record means no number)
-- **U3** R9, R10 — the library screen: the icon-only folder action at the top, pagination at 10
+- **U1** R3, R6, R8 — **done** (`a3602f1`, corrected by `ea890ee` and `6d186c3`): "Ajustes", smaller
+  paddings and more room above each screen's heading, and the row separation — which turned out to be
+  the card overflowing its own grid row and not the gap at all, measured in WebKitGTK 4.1
+- **U2** R7 — **done** (`51198aa`): the bar with the number over it, 0 % for a document with no record,
+  and the number at `0.85rem` with the pill held inside the bar by construction rather than by a pixel
+  inset measured from the text size of the moment. The size refinement and U3 travel together in
+  `5fb339c`; the reason is in the note below rather than hidden in a message body.
+- **U3** R9, R10 — **done** (`5fb339c`): the containing-folder action is an icon-only button **anchored to
+  the cover's top-right corner** — a row of its own above the cover was rejected by the user as looking
+  loose there — with the drawing redrawn at 18 px and named through `aria-label`; the card states **no**
+  status text in any case; and the library is paginated at ten with the cut taken after filtering and
+  sorting, clamped into range, and the controls above **and** below the grid. R9 is pinned through
+  `svelte/server`, which the writer had reported as untestable without adding a dependency, and it is
+  testable with what is already installed. **The dead space the user reported twice was never the gap**:
+  a flex item does not grow by default, so the card's width followed its own text, a shorter title made a
+  narrower card and its cover shorter still (measured 186.2 px against 146.0 px in one row). `flex: 1`
+  fixed it; measured after, every card 209.0 wide, every cover 245.5 tall, the largest hole 28.6 px.
+  **And one thing is deliberately NOT clean**: with both texts gone, the cross-file `status` chain
+  (App → LibraryScreen → BookCard) is now dead code. It is left in place on purpose, as its own pending
+  task, because removing it touches `App.svelte`, which has no tests, and a hurried refactor there at the
+  end of a long session is the pattern that produced the last six layout bugs. Only what was local and
+  demonstrably dead — the `.status` CSS, with no element using it — is gone.
 - **U4** R2, R4 — Inicio: the header cleaned, the three carousels, and the queries behind them (`B1`–`B4`)
 - **U5** R1, R5 — the desktop process: tray labels from the stored language, window 430×844
 - **U6** R11 — the native folder chooser, with the plugin decision recorded
 
-Each unit closes with at least one work-unit commit with its tests and docs; every unit runs its own
-checks, and a unit whose risk tier requires it gets an independent verification before it is reported.
+**How a unit lands (L26).** A unit is done when the user says they like it, not when the checks pass.
+The sequence is: implement → run the checks (tests, build, and the engine measurement where one applies)
+→ rebuild the binary and hand the running application over → **wait** → commit with its tests and docs
+only after the user has approved what they saw. The working tree therefore holds the finished unit
+uncommitted while it waits, and **only one unit is in flight at a time**, so an unapproved change is
+never mixed with the next one in a diff the user has to read.
 
 ## Open decisions
 
@@ -1636,3 +1678,147 @@ so the grid takes one gap for both axes again — the original design, which the
 hiding. Measured in WebKitGTK 4.1 with the committed rules: **column gap 12 px, row gap 12 px**. The
 sequence worth remembering is the one that closed this: two theories argued from a screenshot were both
 wrong, and driving the engine the application actually renders in found the cause in one run.
+
+**L25 — The number gets bigger, and the priority is stated (2026-10-14):**
+
+> Obviamente, la UI actual deja MUCHO que desear, es bantante fea, pero por el momento no quiero centrarme en hacer la UI bonita si no que funcional. Lo unico que cambiaria seria que haria el numero un poco más grande, actualmente es muy pequeño como puedes ver en la siguiente captura: /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-14 09-14-20.png
+
+Two things to take from this, and the second one governs the whole remaining queue. **The progress
+number is now `0.85rem`** instead of `0.7rem`, re-measured in WebKitGTK 4.1 at the new size (all four
+cases inside the bar; 100 % clears the edge by 0.1 px). **And the user's priority for now is
+functional, not pretty** — they said the interface is ugly and that they do not want to spend this
+round on making it beautiful. That is a standing instruction, not a one-off remark: it means unfinished
+appearance is not a defect to raise, polish is not to be slipped into feature work, and what matters is
+that the thing does what it says. Improving the look is a later phase, and this line is where that
+becomes explicit rather than assumed.
+
+**L26 — The commit gate belongs to the user (2026-10-14):**
+
+> Pero hermano, no hagas commits si yo no verifique que me gusta el cambio realizado
+
+**Standing instruction, and it corrects how the work was being landed.** The protocol this document
+followed said a tracked task closes with a work-unit commit, and those commits were being taken after
+the maintainer's own checks — green tests, clean builds, the application relaunched — but **before the
+user had looked**. That made their review retrospective: the commit existed, so the verdict could only
+change it afterwards. The gate is theirs and it comes first. The sequence is now **implement → checks →
+hand the running application over → wait → commit only on approval**, and its two consequences are
+stated above rather than left implicit: the unit waits in the working tree, and only one unit is in
+flight at a time.
+
+What does not change: the checks still run **before** the handover, because handing over something
+untested wastes their time; file records are still written, and travel in the commit the approval
+unlocks. What happens to commits already made under the old order — the changes are in the running
+application and were handed over for judgement, and those commits are on `feat/phase-1-core` and
+**unpushed** — is the user's call, not the maintainer's: they can stand as they are, with any
+displeasing change fixed by a new commit, or the user can ask for them unwound so nothing is committed
+before their eyes. Neither is done unasked, and history is never rewritten silently.
+
+**L27 — Two rejections and one addition on U3 (2026-10-14):**
+
+> De U3 hay algunas cosas que no me gustan:
+>
+> - El icono escojido no me gusta. Tampoco me gusta la posicion ya que queda MUY RARO ese icono ahi arriba suelto como puedes ver en la captura /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-14 09-38-49.png
+> - Tampoco me gusta que al cliquearse el icono aparezca debajo el texto en verde indicando que se ha abierto la carpeta. Quita ese texto.
+
+> Tambien, la paginacion deberia estar disponible arriba y abajo, actualmente esta abajo unicamente lo que obliga al usuario a hacer scroll hacia el fondo para poder paginar
+
+**What this round is worth remembering.** The user's verdict arrived against a committed unit, which is
+exactly the situation the gate in L26 exists to prevent — the commit (45013b0) had been taken on the
+maintainer's own checks before they had looked. The three corrections are in the specs above: the action
+anchored to the cover's corner instead of a row of its own, a redrawn icon, no success sentence, and the
+page controls at both ends.
+
+**Two things were decided by the maintainer rather than the user, and are stated here so they can be
+overturned.** (1) The **error** text stays: the request removed the green "folder opened" sentence, and a
+failure is the one case where saying nothing would be a lie of omission. (2) The pager is **previous and
+next** with "Page X of Y" rather than numbered page buttons, which follows from L25's functional-first
+priority; numbered controls are a look decision for the later appearance phase.
+
+**And one honest note about the verification itself**: the placement was measured in WebKitGTK 4.1 rather
+than eyeballed (the button sits inside the cover's box, 4.8 px from its top and right — the committed
+rule), and the new test for "an opened folder says nothing" failed on its first run **because the test was
+wrong, not the code**: it compared raw server-rendered HTML and tripped over Svelte's own comment
+markers. It now compares with those stripped, which is what the rule is actually about.
+
+**L28 — The dead space inside a short card, in a row with a longer title (2026-10-14):**
+
+> Hay un pequeño bug que encontre en algunas filas y es que uno de los dos no completa todo su espacio. Segun lo que pude apreciar, esto pasa en filas donde hay uno que tiene el titulo más largo lo que requiere más renglones para mostrar el texto. Pasa cuando los dos elementos de la fila no tienen los mismos renglones en el titulo como puedes ver en la siguiente captura: /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-14 09-14-20.png /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-14 09-38-49.png
+
+**Their diagnosis was right; the mechanism was not what it looked like, and measuring first is what
+told the two apart.** Reproduced in WebKitGTK 4.1 with a two-column row: the card boxes already
+stretch **equally** (439.1 px each), so a card was never failing to fill its *box*. What it left empty
+was **119.7 px of dead space at the end of its own content**, in the row whose neighbour's longer title
+needed more lines — and 50.7 px in the next row, where the titles were one and two lines.
+
+**The fix spends that difference instead of hiding it**: the progress block is pushed to the card's
+bottom (`margin: auto 0 0` on `.progress`). Re-measured: **every bar in a row now sits at one height**
+(405.7 and 405.7, then 787.8 and 787.8, with 12.2 px below each). That alignment is the point — a
+progress screen exists so a reader can compare how far along several documents are, and a row whose
+bars sit at different heights cannot be read that way. **The alternative was declined**: letting each
+card keep its own height removes the empty space but gives up the alignment and leaves the rows ragged.
+**Left as a known consequence**: the space has moved to the gap between the last line of text and the
+bar, so a one-line title still shows a gap — smaller than before, and now doing work.
+
+**L29 — The hole was the card's width, not the gap (2026-10-14):**
+
+> No, no se arreglo, el problem sigue ahi y puedes verlo en la siguiente captura: /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-14 10-04-53.png
+
+**Two attempts failed before the cause was measured, and both failures are worth keeping**, because they
+show what arguing from a screenshot costs:
+
+- **First attempt (L28)** — pushing the progress block to the card's bottom. The user photographed the
+  result: the hole had only **moved**, from after the last line of text to above the bar.
+- **Second attempt** — clamping the title to two lines, so two cards could differ by at most one line.
+  **Measured, and not enough**: the shorter card still carried a 68.8 px hole while one line explains
+  only ~24 px. The measurement said so before the CSS was touched again.
+
+**Measuring element by element then found it, and it was not the gap.** The card is a flex item, and
+**a flex item does not grow by default**: its width followed its own text. A card with a shorter title
+came out **narrower**, and because the cover's height comes from its width (`aspect-ratio: 3/4`), its
+cover came out **shorter** — measured in a single row as **186.2 px against 146.0 px**, a 40.2 px
+difference that had nothing to do with the gap, pushed every line above the bar and left the hole.
+
+**The fix is one declaration**: `flex: 1` on the card, so it fills its grid column. Measured after:
+every card 209.0 px wide, every cover 245.5 px tall, the largest hole **28.6 px** (down from 113.1), the
+bars aligned within a row and each bar 12.2 px from the card's bottom.
+
+**The title clamp stays**, and it is a decision the user may veto: it bounds the remaining difference to
+one line by clipping a long title visually — the element still holds the whole text for a screen reader,
+and the full title is offered to the pointer through `title=`. Without it the residual hole grows to
+about two lines.
+
+**What this round teaches, and it is the third time in one session**: a screenshot shows *that*
+something is wrong, never *why* — and two plausible mechanisms were both wrong, while the per-element
+measurement in the engine the application actually renders in found a cause in a different part of the
+layout than either guess.
+
+**L30 — The last text goes, and the commits taken before the gate are unwound (2026-10-14):**
+
+The user answered the three open questions, in their own words as the options they chose:
+
+> 1. **"Sí, commiteá todo lo que está en el árbol"** — the U3 revision, the dead-space fix and the record
+>    go in together.
+> 2. **"Deshacelos (soft reset)"** — for the two commits taken before their commit gate.
+> 3. **"Sacalo también"** — the failure text: *"Ninguna frase: la carpeta se abre o no se abre, sin texto
+>    en la ficha"*.
+
+**The failure sentence is gone**, so the card now states nothing about the folder action in any case:
+neither the green "folder opened" line nor the red "could not open" one. The `card.openedFolder` and
+`card.openFolderError` keys are removed from both catalogues, the `.status` CSS with them, and the test
+that used to require a failure to be stated now requires silence in every status — with the reason
+recorded as the user's decision, because silence on failure is the kind of thing a maintainer should not
+quietly hold the opposite opinion about.
+
+**The unwind, done with `--soft` so nothing was lost**: `e1b1fc3` and `45013b0` were the two the user
+named, and two further commits had to go with them — `78416d2` and `9557d18`, both document records, the
+second of which claimed U3 as landed **citing `45013b0`**, a commit that would no longer exist. HEAD went
+back to `51198aa` and the work was re-committed as `5fb339c`. Only local, unpushed history was rewritten,
+and only because the user asked for it.
+
+**One thing went wrong while doing it, and it is worth recording because it was caught by checking**:
+`git reset --soft` leaves the *index* as it was, so the first re-commit `git commit` swept in a stale copy
+of this document — 35 lines of it — inside what was supposed to be the code commit. Found by reading
+`git show --stat` instead of trusting the command's silence, then fixed by reusing the saved message and
+committing with an explicit `-- web/src` pathspec. **The size refinement of `R7` therefore lives inside
+`5fb339c` rather than in a commit of its own**: splitting one stylesheet across two commits by hunk was
+not worth the risk of a botched partial stage, so it travels there and is named in the commit body.
