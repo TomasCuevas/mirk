@@ -152,11 +152,10 @@
     color: #5a6472;
   }
 
-  /* The row gap is declared on its own and is wider than the column gap. R8 was measured off the
-     user's screenshots and then reproduced in WebKitGTK 4.1: the columns were separated by 12 px of
-     page background while the rows were not separated at all. The cause was the card overflowing its
-     own grid row by its padding and border, not the gap — see BookCard, where `box-sizing: border-box`
-     is the line that fixes it. */
+  /* One gap for both axes, which is what the design asked for from the start: the rows looked
+     unseparated because the card overflowed its own grid row (see BookCard, where
+     `box-sizing: border-box` is the line that fixes it), not because the gap was missing. The
+     shorthand is honest again now that the real cause is fixed and measured. */
   .grid {
     list-style: none;
     margin: 0;
@@ -164,7 +163,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
     column-gap: 0.75rem;
-    row-gap: 1.25rem;
+    row-gap: 0.75rem;
   }
 
   .grid li {
