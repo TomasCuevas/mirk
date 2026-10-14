@@ -766,7 +766,9 @@ criterion is corrected here rather than silently contradicted.
   renders two columns and only about 470 px renders three.
 - **R6 — Smaller paddings.** The shell's and the screens' paddings are reduced to values that leave the
   content room on a 430 px window. Verbatim: *"Debes adaptar los padding tambien, tienes que reducirlos y
-  no hacerlos tan grandes como estan actualmente."*
+  no hacerlos tan grandes como estan actualmente."* **Refined in L23**: the top of the screen is the
+  exception and goes the other way — the user found each screen's own heading too close to the window
+  bar, so the shell's top padding went up while everything else came down.
 - **R7 — Progress is a line with the number on it.** Each card draws a bar standing for the fraction
   read, with the percentage number placed **over the bar, at the position that fraction corresponds to**.
   The sentence *"No hay progreso de lectura registrado"* goes away. Verbatim: *"No me gusta que diga 'No
@@ -781,6 +783,14 @@ criterion is corrected here rather than silently contradicted.
   button of one row touching the card of the next: the rows need the same separation the columns have.
   Verbatim: *"No hay separacion vertical entre los elementos en la pantalla 'Biblioteca', puedes verlo en
   esta captura: /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-13 16-44-17.png"*.
+  **Resolved (L23), and the gap was never the problem**: the card overflowed its own grid row. With the
+  default `content-box`, `min-height: 100%` set the card's content box to the height of its row and then
+  added the padding and the border on top of it, so the card's border box stuck out 24.4 px, ate the
+  20 px row gap and overlapped the next row by 4.4 px. Reproduced and measured in WebKitGTK 4.1 — the
+  engine the application renders in, driven headless with a faithful copy of the grid and the card: a row
+  gap of **-4.4 px** as committed, exactly **20 px** with `box-sizing: border-box` on the card. Two
+  earlier suspects were cleared by measurement rather than by argument: the `gap` shorthand (the built
+  CSS did contain it) and the cover's `aspect-ratio`.
 - **R9 — The containing-folder action is an icon, at the top.** Icon only, no text label, moved away from
   the bottom of the card to the top, with an accessible name because an icon alone is not a name.
   Verbatim: *"El boton para ir a la carpeta contenedora solamente debe tener un icono y debe estar
@@ -1590,3 +1600,24 @@ untouched with zero exit-path logs, and the user confirmed they were the one clo
 cited in item 8 was checked before any code changed: it is from the running build (binary written
 16:36:21, process started 16:36:22, screenshot taken 16:44), so the feedback is about the current tree
 twice over — and it shows the rows of the library grid touching, which is `R8`.
+
+**L23 — Round-2 feedback on the first fix, and the cause finally measured (2026-10-14):**
+
+> 1. Ahora por lo menos, las cards no se superponen pero sigue sin haber espacio vertical entre las filas como puedes ver en esta captura: /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-14 08-49-20.png
+> 2. Si, ahora dice "Ajustes"
+> 3. Si, ahora hay menos padding en general, me gusta más. Una cosa que tal vez debas agregar es padding-top sobre el titulo de cada pantalla, ya que actualmente esta muy pegado sobre la barra superior: /home/tomas-cuevas/Pictures/Screenshots/Screenshot from 2026-10-14 08-51-07.png
+>
+> Respondiendo a las decisiones, el ancho acepto unos 430px y 0% para los documentos que no tengan registro de lectura.
+
+Three things settled here. **R3 and R6 were accepted** — the Spanish label and the reduced padding —
+with one refinement on R6: the screen heading needs *more* room above it, not less, and that space is
+stated once in the shell rather than in each screen. **R8 was not fixed by the first attempt, and that
+attempt's suspect was wrong**: changing `height` to `min-height` stopped the cards overlapping but the
+rows still had no space, because the real cause was the card overflowing its grid row by its own padding
+and border under `content-box`. It was found by driving WebKitGTK headless — the engine the application
+renders in — instead of reading pixels off a screenshot, which is what made the difference after two
+wrong guesses. **The two open decisions were answered**: the window goes to **430 px** (accepting two
+columns, per the arithmetic) and a document with **no reading record shows 0 %**, which is the user's
+explicit call, recorded as theirs, taken against the maintainer's stated preference to leave the number
+off in that case. The rule that stands is the one they asked for, with the reasoning on record rather
+than applied silently either way.
