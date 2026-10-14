@@ -858,8 +858,39 @@ criterion is corrected here rather than silently contradicted.
   the pure `categoryEntries` selector and one shared `BookGrid`. The card's shape took four attempts and
   the last one is L31; the four category decisions (30 days, never-opened excluded, unknown total
   excluded, categories independent) are recorded in the commit body and confirmed by the user
-- **U5** R1, R5 — the desktop process: tray labels from the stored language, window 430×844
+- **U5** R1, R5 — **done** (`6156f08`): the language is stored in the database (schema V3, a `settings` key/value table), the tray is worded from it at launch and re-worded on a change without a restart, and the window is 430×844. Proven at runtime by reading the tray's own menu over the session bus, both ways
 - **U6** R11 — the native folder chooser, with the plugin decision recorded
+
+## Specs — UI adjustments (round 3, L32)
+
+Three items the user listed the moment the tray followed the language (verbatim in `L32`). They are about
+the tray's own menu, which is native and therefore belongs to the desktop process, not to the interface's
+catalogue.
+
+- **R12 — The tray offers the settings screen.** A tray entry that opens Ajustes. The tray is native and
+the screen lives in the webview, so the desktop process has to *ask* the interface to navigate rather
+than reaching into it; the request travels as one event naming the screen, and the interface answers it
+through the routing that already exists (`hashForScreen`), so a tray click and the navbar land on the
+same screen by the same path. Verbatim: *"Lo unico que hace falta en el tray es la opcion para abrir la
+pantalla ajustes."*
+- **R13 — The visibility entry names the application.** The first entry reads "Show OCT", not "Show".
+Spanish keeps the product name and follows the same shape: "Mostrar OCT". Verbatim: *"el primer texto
+ deberia decir \"Show OCT\" en vez de solo \"Show\"."*
+- **R14 — One visibility entry, not two.** The menu carries **either** the entry that shows the window
+**or** the one that hides it, according to whether the window is visible right now, instead of offering
+both and leaving one of them doing nothing. The state is read from the window rather than remembered
+beside it, and the menu is rebuilt after every action that can change it. Verbatim: *"otra cosa que me
+gustaria es que detecte si esta mostrada o no la app, para que unicamente muestre una de las dos
+opciones \"Show\" o \"Hidden\"."*
+
+The words are the user's. Where one of them names a state ("Hidden") the entry is written as the
+**action** that state makes available ("Hide OCT"), because a menu entry is something a person clicks,
+and the pair stays the two ids the shell already owns.
+
+### Tasks — round 3
+
+- **U7** R12, R13, R14 — the tray's menu: a settings entry that asks the interface to navigate, the
+  application named in the visibility entry, and one visibility entry chosen by the window's real state
 
 **How a unit lands (L26).** A unit is done when the user says they like it, not when the checks pass.
 The sequence is: implement → run the checks (tests, build, and the engine measurement where one applies)
@@ -1872,3 +1903,62 @@ document already records one entry earlier — and it was re-run properly rather
 fixed text block was removed, a test that pinned it went red and **was updated to pin the new rule rather
 than weakened**, while a comment still claiming that the reservation kept every card the same height was
 corrected, because a comment that lies is worse than no comment at all.
+
+## L32 — U5: the language is stored, and the tray follows it
+
+> Si, el tray funciona perfectaente, se sincroniza con el idioma seleccionado. Lo unico que hace falta en el tray es la opcion para abrir la pantalla ajustes. Tambien, el primer texto deberia decir "Show OCT" en vez de solo "Show". Tambien, otra cosa que me gustaria es que detecte si esta mostrada o no la app, para que unicamente muestre una de las dos opciones "Show" o "Hidden"
+
+The verdict is the first sentence, and it is the one that mattered: the mechanism nobody could prove
+without a click — the tray changing with the language while the application stayed open — **is confirmed
+by the user**. The three requests after it are round 3, specified above as `R12`–`R14`.
+
+**What decided the size of the unit.** R1 says the tray's words come from *"the stored language setting —
+the same single source the interface reads"*, and there was **no stored language at all**:
+`web/src/App.svelte` held `let locale = $state<Locale>("en")`, in memory only. The choice was lost on every
+launch, and the desktop process had nothing to read when it built the tray. U5 therefore landed the
+source as well as its readers.
+
+**What landed** (`6156f08`):
+
+- `oct-store` schema **V3**: a `settings(key, value)` table with `get_setting`/`set_setting`, written as
+  its own recorded migration because V1 and V2 are frozen. The table is generic on purpose — the next
+  setting should not need a fifth schema.
+- `oct-desktop`: `get_language` and `set_language` as plain functions taking the store, so they are
+  testable without a display or a running application. A locale this build does not know is **refused**
+rather than stored, and a stored value that is not a language is reported as **no language**, because a
+  typo must never reach a caller as one. The tray's words live in one place, `shell::tray_labels`, keyed
+  by the stored language, and the comment claiming the menu "is built once" was corrected instead of left
+  lying.
+- The tray is built from the stored language at launch and re-worded through `tray_by_id` + `set_menu`
+  when the language changes. If the database cannot be read at launch, the failure is reported and English
+  stands in — **because hiding the window with no tray would leave no way back**.
+- `R5`: the window is 430×844 — width, `minWidth` and `maxWidth`. The height and the undecorated fixed
+  shape did not move.
+- The interface reads the stored language when it starts and writes the chosen one, through
+  `web/src/lib/settings.ts` with `invoke` injected so the rules are testable without a Tauri application.
+  `isLocale` refuses any value this build has no words for, and `Locale` is now derived from a runtime
+  `LOCALES` list so the check cannot drift away from the type.
+
+**Proven at runtime by the parent, not taken from a report.** The tray's own declared menu was read over
+the session bus (`com.canonical.dbusmenu.GetLayout` on the item the `StatusNotifierWatcher` announces):
+store `es` → Mostrar/Ocultar/Salir, store `en` → Show/Hide/Quit, store `es` again → Spanish. That is the
+launch path observable end to end, and it proves the id `oct-tray` names a real object —
+`/org/ayatana/NotificationItem/tray_icon_tray_app_oct_tray` — which is exactly what `tray_by_id` +
+`set_menu` need. `cargo test` (every suite) and `clippy -D warnings` were re-run by hand, and the diff was
+read in full: the V2→V3 fixture is built from the real schema constants so it cannot drift, and the tests
+that already existed **gained** assertions instead of losing them.
+
+**One false alarm, recorded so nobody repeats it.** The parent first grepped the bus names for the tray
+and concluded it was missing. It was not: app-indicator items register under a unique connection name and
+are announced to the watcher, so the only correct question is the watcher's
+`RegisteredStatusNotifierItems`. The error was in the check, not in the code.
+
+**The live rebuild was the user's click, and it worked.** The mechanism is source-verified besides: Tauri
+documents that on Linux only `None` fails to take effect, and `tray-icon`'s GTK `set_menu` calls the
+app-indicator's own on `Some(menu)`.
+
+**Left as debt, on purpose.** `set_language` refuses an unknown locale by returning `OctError::Storage`,
+because `oct-core`'s error enum has no variant for invalid input. The worker flagged it instead of hiding
+it, and it is its own task rather than an edit inside a unit that was mid-verification: a bad argument
+reported as a storage failure is a small lie, and a log that lies sends the next person looking in the
+wrong place.
