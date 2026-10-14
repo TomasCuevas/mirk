@@ -31,6 +31,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WindowEvent};
 
 mod commands;
 mod shell;
+mod track;
 
 /// The label of the window declared in `tauri.conf.json`. Referenced rather than repeated so the
 /// tray and the commands always act on the same window.
@@ -415,6 +416,55 @@ fn enforce_fixed_shape(window: &WebviewWindow) {
     }
 }
 
+/// Starts the ingestion loop: one catch-up sweep at launch, then a tick every
+/// [`track::POLL_INTERVAL`].
+///
+/// Both halves run on Tauri's own runtime rather than the main thread. A tick walks `/proc` and a
+/// sweep shells out to `gio`; neither belongs on the thread that paints the window, and `S5` asks
+/// for the sweep to be off the main thread explicitly. The task is deliberately never joined: it is
+/// the application's background job, and the process ending is its stop signal.
+fn start_tracking() {
+    tauri::async_runtime::spawn_blocking(|| {
+        let detector = oct_platform::backends().open_documents;
+        let providers = oct_platform::progress_providers();
+
+        // S5: catch up once, over every known document, so a position written while the
+        // application was closed is recorded instead of lost.
+        match open_store() {
+            Ok(store) => report_tracking(&track::sweep_library(&store, &providers)),
+            Err(error) => eprintln!("the launch sweep could not open the store: {error}"),
+        }
+
+        // S1: record what is open while the application runs. A store that is briefly busy must not
+        // end tracking, so a failed open is reported and the next tick tries again.
+        loop {
+            std::thread::sleep(track::POLL_INTERVAL);
+            match open_store() {
+                Ok(store) => report_tracking(&track::track_open_documents(
+                    &store,
+                    detector.as_ref(),
+                    &providers,
+                )),
+                Err(error) => eprintln!("the ingestion tick could not open the store: {error}"),
+            }
+        }
+    });
+}
+
+/// Writes one pass's outcome to stderr.
+///
+/// Missing capabilities and failures are logged apart, because they are different facts: one says
+/// this machine cannot answer the question, the other says the answer went wrong. There is no
+/// screen for either, so stderr is where they go.
+fn report_tracking(report: &track::TrackReport) {
+    for missing in &report.missing_capabilities {
+        eprintln!("missing capability ({}): {}", missing.source, missing.reason);
+    }
+    for failure in &report.failures {
+        eprintln!("ingestion: {failure}");
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -427,6 +477,9 @@ fn main() {
             // `current_tray_menu` reports a database it cannot read and falls back to English, so a
             // launch without a readable store still leaves a tray with a way back.
             setup_tray(app.handle())?;
+            // The ingestion loop is what connects the detector and the providers to the store; it
+            // runs for the life of the process and reports everything it cannot do to stderr.
+            start_tracking();
             Ok(())
         })
         .on_window_event(|window, event| {
