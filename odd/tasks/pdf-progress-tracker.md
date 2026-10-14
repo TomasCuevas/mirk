@@ -906,6 +906,74 @@ and the pair stays the two ids the shell already owns.
   offers exactly one visibility entry chosen by the window's real state, and divides the three with
   lines. Three defects were found and fixed on the way — see `L34`
 
+## Specs — T17: the ingestion loop (L35)
+
+The defect the user reported after following the application's own recipe: reading a document produces
+no record at all. Measured before designing anything — the real store holds 42 documents and one watched
+folder, with **zero** rows in `progress` and **zero** in `open_events`, so no reading position has ever
+been written — while Evince's metadata was present and live on disk at the very moment: the source is
+there and being updated. The provider that reads it exists (`T9`) and the open-document detector exists
+(`T8`), but **nothing calls either**: the desktop process starts no loop, and `record_progress` has no
+caller outside a test. The tracker never tracked.
+
+So the unit is the loop, not another adapter. `S1`–`S6` below, and the user's own four steps (add a
+folder, scan, read in Evince, reload) are its acceptance test.
+
+- **S1 — The application polls while it runs.** A tick in the desktop process asks the open-document
+detector what is open and records what the providers say about those documents, so no interface action is
+required for a position to be recorded: reading a document in a viewer is enough. The interval is one
+named constant with its reason in the code — short enough that a position appears immediate, long enough
+to cost nothing.
+- **S2 — A position that has not changed is not written again.** The store appends a row per record, so a
+tick that wrote unconditionally would grow the table forever. Each document's newest recorded position is
+compared with the provider's answer, and nothing is written when the two agree.
+- **S3 — Silence is not a value.** A provider answering `Ok(None)`, or a document no provider knows,
+writes **nothing**: "no record" and "page zero" are different facts, and the interface already has an
+honest way to show the first.
+- **S4 — A missing capability is reported as one.** `OctError::NotSupported` from a provider or from the
+detector is surfaced as a missing capability, never as an empty answer, because an absent provider and a
+viewer with nothing to say are the two facts this project refuses to confuse.
+- **S5 — Catch up on launch.** Once at startup the loop sweeps **every** known document, not only the open
+ones, so progress written while the application was closed is recorded instead of lost. It runs off the
+main thread and reports failures rather than failing silently.
+- **S6 — The loop is a decision, and the decision is tested.** Which documents to poll, which provider to
+ask, and whether to write are plain functions taking their collaborators as arguments, so every rule above
+is pinned by a test that needs neither a display nor a running application. The tick itself is the
+thinnest possible wrapper over them.
+
+### Tasks — the tracker's loop
+
+- **T17** S1–S6 — **done** (`151ef99`): the ingestion loop. The desktop process sweeps the library once
+  at launch and then ticks every three seconds; the detector and the providers finally reach the store,
+  and reading a document produces a record. Verified by the parent on the user's own library: 0 → 28
+  positions with `evince-gvfs/exact` provenance, and the document open at that moment at its real page
+  (`L36`)
+
+## Specs — the carousels' shape (round 4, L37)
+
+Three items: the first two reported by the user once the carousels finally had content, the third found by
+the maintainer in the screenshot they attached.
+
+- **R16 — A carousel is short.** It shows a bounded number of tiles rather than every document in its
+category, because a strip long enough to hold a whole library is not a carousel. Verbatim: *"hay que
+limitar el numero de elementos que puede aparecer en el carrusel, ya que a mi, me aparecieron demasiados,
+tantos que molestaba tener un carrusel tan largo"*. The button that opens the category's full list already
+exists (`B2`) and is where the rest belong, so the bound is what makes that button mean something.
+- **R17 — A strip never scrolls vertically.** Verbatim: *"dentro del contenedor de un carrusel puede haber
+scroll vertical y eso no me gusto nada"*. The cause is a CSS rule rather than a size: `overflow-x` set to
+anything but `visible` makes the other axis compute to `auto` as well, so the sideways scroll silently
+enables a vertical one that then shows for any overflow at all. The strip scrolls sideways and only
+sideways.
+- **R18 — The page count appears once.** The card renders `{count} páginas` twice, above the title and
+again below it, because two identical blocks ended up in the file. Found by the maintainer in the
+screenshot of `L37`; the user did not report it because it had been there since the card was rebuilt. The
+count stays where it reads as the document's size; the other goes.
+
+### Tasks — round 4
+
+- **U8** R16, R17, R18 — the carousels' shape: a bounded strip, no vertical scroll inside it, and one page
+  count on the card
+
 **How a unit lands (L26).** A unit is done when the user says they like it, not when the checks pass.
 The sequence is: implement → run the checks (tests, build, and the engine measurement where one applies)
 → rebuild the binary and hand the running application over → **wait** → commit with its tests and docs
@@ -2045,3 +2113,68 @@ re-review.
 **Left honestly open**: the menu is refreshed on the application's own paths, so a window restored or
 hidden by something outside the application can leave it stale until the next in-app action. The window
 has no `skipTaskbar` setting, so that case is reachable.
+
+## L35 — the tracker never tracked: reading produced no record
+
+> No, he hecho los 4 pasos que me haz dicho varias veces con diferentes PDFs y no paso nada, sigue tanto el porcentaje en 0% como asi no aparece nada en la pantalla inicio
+
+This is the gravest defect the project has had, and the first one that is not a mistake in a part but the
+absence of the connection between them: the user reported it instead of a hundred other things, which is
+what makes it worth stating plainly.
+
+**What was measured before any theory was formed.** The real store: **42 documents**, one watched folder,
+and **zero** rows in `progress` and **zero** in `open_events`. So the documents arrive and their cards
+render at 0% — which is the recorded rule "no reading record -> 0%" working correctly over a record that
+never came. Meanwhile `~/.local/share/gvfs-metadata/home` was present and had been modified the same
+afternoon, while the user was reading: the source the provider reads is real, live and being written.
+`record_progress` appears twice in non-test code and both calls are inside `mod tests`; `crates/oct-desktop/src/main.rs`
+starts no detector, no watcher and no refresh; and the interface's calls are only the library, the
+providers, the watched folders, the scan, the folder action, the window controls and the language pair.
+The adapter was never connected to anything.
+
+**Why no test caught it.** Every test in this project verifies a part: the adapter reads the metadata
+correctly, the detector lists what is open correctly, the store writes and reads correctly, and the
+interface renders correctly. A loop that does not exist cannot fail a test, and the omission lived
+exactly in the gap between four green suites.
+
+**The unit this became** is `T17` above, and the user's four steps are its acceptance test.
+
+## L36 — T17: the tracker tracks
+
+> Si, con estos cambios ahora funciona todo de maravilla, es mas, ya me sirve ya que pude ver todos los PDFs que habia leido previamente.
+
+**The second sentence is the one that matters**: for the first time the user can see every PDF they had
+already read. That is the product's promise arriving, and it arrived because the loop was the only thing
+missing — the adapters had been correct all along.
+
+**What landed** (`151ef99`): `crates/oct-desktop/src/track.rs` holds the decision as plain functions that
+take the detector, the provider registry and the store as arguments, and `main.rs` runs one catch-up sweep
+at launch and then a three-second tick off the main thread. The interval's reason is in the constant, and
+so is the reason an unchanged position is never rewritten (the table is an append-only log), why `Ok(None)`
+writes nothing ("no record" and "page zero" are different facts), why a document the detector sees but the
+store does not know is ignored rather than added (the watched folder stays the source of truth), and why a
+missing capability and a failure are logged apart.
+
+**Verified by the parent before the user saw it, on the user's own library**: `progress` went from 0 to
+**28 rows** in 14 seconds, all `[evince-gvfs/exact]` — Cosmos at 72/575, Historia del Pensamiento II at
+524/823, La Rebelión de Atlas at 18/1058 — and the document the user happened to have **open** at that
+moment was recorded at **page 34 of 314**, which is the same page the provider had reported independently
+minutes earlier. Twenty-five seconds of further ticks over that open document added **no row**, which is
+`S2` holding under the live path rather than only in a test, and stderr stayed empty.
+
+**Why no test had caught the omission**: every suite in this project verifies a part, and a loop that does
+not exist cannot fail a test. The gap lived between four green suites, and it was found by a person
+following the application's own recipe and reporting that nothing happened.
+
+## L37 — the carousels are too long, and they scroll sideways *and* vertically
+
+> Si, con estos cambios ahora funciona todo de maravilla, es mas, ya me sirve ya que pude ver todos los PDFs que habia leido previamente. Es más, esto me hizo ver que hay que limitar el numero de elementos que puede aparecer en el carrusel, ya que a mi, me aparecieron demasiados, tantos que molestaba tener un carrusel tan largo. Otra cosa que note, es que dentro del contenedor de un carrusel puede haber scroll vertical y eso no me gusto nada
+
+Both items are consequences of the same success: once `T17` filled the carousels, the strip held far more
+than the handful of documents it had been designed against, and assumptions that had never been exercised
+showed themselves.
+
+**A third defect the user did not report**, found by the maintainer in the attached screenshot: the card
+prints the same page count **twice**, above the title and again below it. It is recorded as `R18` rather
+than quietly fixed, for the same reason this log exists — nobody reported it, and it had been on screen
+since the card was last rebuilt.
