@@ -30,9 +30,11 @@ pub trait ShellActions {
 /// The tray menu id for each item. They are stable strings because the event handler matches on
 /// them, and they survive a language change while the *words* do not: the menu is rebuilt from the
 /// stored language, so the ids stay fixed and only the labels move. `quit` is deliberately the same
-/// [`ShellAction`] the top bar's close button performs (A4).
+/// [`ShellAction`] the top bar's close button performs (A4). `settings` is the one id with no
+/// [`ShellAction`]: it asks the interface to navigate instead of acting on the window (R12).
 pub const MENU_SHOW: &str = "show";
 pub const MENU_HIDE: &str = "hide";
+pub const MENU_SETTINGS: &str = "settings";
 pub const MENU_QUIT: &str = "quit";
 
 /// The language tag the interface and the tray share. These are the same tags the webview's i18n
@@ -44,11 +46,14 @@ pub const LANGUAGE_ES: &str = "es";
 /// The tray menu's words in one language.
 ///
 /// The tray is native and cannot read the webview's i18n catalogue, so its few words live here,
-/// keyed by the stored language, instead of being spelled out at every menu rebuild.
+/// keyed by the stored language, instead of being spelled out at every menu rebuild. `show` and
+/// `hide` name the application (R13); `settings` words the entry that asks the interface to
+/// navigate (R12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrayLabels {
     pub show: &'static str,
     pub hide: &'static str,
+    pub settings: &'static str,
     pub quit: &'static str,
 }
 
@@ -65,16 +70,79 @@ pub fn is_known_language(language: &str) -> bool {
 pub fn tray_labels(language: Option<&str>) -> TrayLabels {
     match language {
         Some(LANGUAGE_ES) => TrayLabels {
-            show: "Mostrar",
-            hide: "Ocultar",
+            show: "Mostrar OCT",
+            hide: "Ocultar OCT",
+            settings: "Ajustes",
             quit: "Salir",
         },
         _ => TrayLabels {
-            show: "Show",
-            hide: "Hide",
+            show: "Show OCT",
+            hide: "Hide OCT",
+            settings: "Settings",
             quit: "Quit",
         },
     }
+}
+
+/// One entry of the tray menu: the stable id the handler matches on, and the words in front of the
+/// user. Keeping both together is what lets the whole menu be pinned by a test instead of only its
+/// words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrayMenuEntry {
+    pub id: &'static str,
+    pub label: &'static str,
+}
+
+/// One item of the tray menu: an actionable entry, or the line that divides one group from the next
+/// (R15).
+///
+/// The divider is a value here rather than a call only the builder knows about, so the menu's whole
+/// shape — entry, line, entry, line, entry — is a decision a test can pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayMenuItem {
+    Entry(TrayMenuEntry),
+    Divider,
+}
+
+/// The tray menu's items, in the order the user sees them, for `language` and a window that is
+/// visible right now (R12, R13, R14, R15).
+///
+/// Exactly one visibility entry is returned — the one that can act on the window as it is — so the
+/// menu never offers a click that does nothing. The opinion about a *minimized* window belongs to
+/// the caller that reads the window, which reports a minimized window as not visible: the words are
+/// chosen from that answer, never remembered beside it.
+///
+/// This is the whole decision the tray makes, as a plain function. It takes a `bool` rather than a
+/// window so every combination can be pinned without a display, and the caller's only remaining job
+/// is to ask the window and hand the answer in.
+pub fn tray_menu_entries(language: Option<&str>, window_visible: bool) -> Vec<TrayMenuItem> {
+    let labels = tray_labels(language);
+    let visibility = if window_visible {
+        TrayMenuEntry {
+            id: MENU_HIDE,
+            label: labels.hide,
+        }
+    } else {
+        TrayMenuEntry {
+            id: MENU_SHOW,
+            label: labels.show,
+        }
+    };
+    // The user asked for a line between each of the three groups, so the three entries are separated
+    // by two dividers and never run together.
+    vec![
+        TrayMenuItem::Entry(visibility),
+        TrayMenuItem::Divider,
+        TrayMenuItem::Entry(TrayMenuEntry {
+            id: MENU_SETTINGS,
+            label: labels.settings,
+        }),
+        TrayMenuItem::Divider,
+        TrayMenuItem::Entry(TrayMenuEntry {
+            id: MENU_QUIT,
+            label: labels.quit,
+        }),
+    ]
 }
 
 /// Perform `action` on `shell`.
@@ -178,23 +246,118 @@ mod tests {
     #[test]
     fn the_tray_labels_follow_the_stored_language() {
         // The stored language, not the interface's in-memory state: the desktop process words the
-        // tray (R1) and the words are pinned here so neither translation can drift.
+        // tray (R1) and the words are pinned here so neither translation can drift. The visibility
+        // entry names the application (R13), and Settings (R12) is a fourth word with no action.
         assert_eq!(
             tray_labels(Some("en")),
             TrayLabels {
-                show: "Show",
-                hide: "Hide",
+                show: "Show OCT",
+                hide: "Hide OCT",
+                settings: "Settings",
                 quit: "Quit",
             }
         );
         assert_eq!(
             tray_labels(Some("es")),
             TrayLabels {
-                show: "Mostrar",
-                hide: "Ocultar",
+                show: "Mostrar OCT",
+                hide: "Ocultar OCT",
+                settings: "Ajustes",
                 quit: "Salir",
             }
         );
+    }
+
+    #[test]
+    fn the_settings_entry_is_not_a_window_action() {
+        // Settings asks the interface to navigate (R12); it must never become a window operation
+        // by accident, which is why its id is not one `action_for_menu_id` knows.
+        assert_eq!(action_for_menu_id(MENU_SETTINGS), None);
+        assert_eq!(action_for_menu_id(MENU_SHOW), Some(ShellAction::Show));
+        assert_eq!(action_for_menu_id(MENU_HIDE), Some(ShellAction::Hide));
+        assert_eq!(action_for_menu_id(MENU_QUIT), Some(ShellAction::Close));
+    }
+
+    #[test]
+    fn the_tray_menu_offers_one_visibility_entry_chosen_by_the_window() {
+        let entry = |id: &'static str, label: &'static str| {
+            TrayMenuItem::Entry(TrayMenuEntry { id, label })
+        };
+        let divider = TrayMenuItem::Divider;
+
+        // All four combinations of the two things the menu depends on, in the order the user sees
+        // them: the single visibility entry, a line, Settings, a line, Quit. Visible and hidden
+        // differ only in that first entry, and never carry both (R14). The dividers are part of the
+        // decision — not syntax sprinkled on at the builder — so the whole shape is pinned here
+        // rather than only its words (R15).
+        for (language, visible, visibility) in [
+            ("en", true, (MENU_HIDE, "Hide OCT")),
+            ("en", false, (MENU_SHOW, "Show OCT")),
+            ("es", true, (MENU_HIDE, "Ocultar OCT")),
+            ("es", false, (MENU_SHOW, "Mostrar OCT")),
+        ] {
+            let settings = if language == "es" { "Ajustes" } else { "Settings" };
+            let quit = if language == "es" { "Salir" } else { "Quit" };
+            assert_eq!(
+                tray_menu_entries(Some(language), visible),
+                vec![
+                    entry(visibility.0, visibility.1),
+                    divider,
+                    entry(MENU_SETTINGS, settings),
+                    divider,
+                    entry(MENU_QUIT, quit),
+                ],
+                "language {language}, visible {visible}"
+            );
+        }
+    }
+
+    #[test]
+    fn exactly_one_visibility_entry_is_offered_for_every_language_and_state() {
+        // The invariant behind R14, over languages the build may or may not know and both window
+        // states: three entries divided into three groups by two lines (R15), exactly one of
+        // Show/Hide among them, and it is the one that can act on the window as it is.
+        for language in [None, Some("en"), Some("es"), Some("fr")] {
+            for visible in [true, false] {
+                let items = tray_menu_entries(language, visible);
+
+                let entries: Vec<TrayMenuEntry> = items
+                    .iter()
+                    .filter_map(|item| match item {
+                        TrayMenuItem::Entry(entry) => Some(*entry),
+                        TrayMenuItem::Divider => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    entries.len(),
+                    3,
+                    "language {language:?}, visible {visible}: three entries"
+                );
+
+                let visibility: Vec<&str> = entries
+                    .iter()
+                    .filter(|entry| matches!(entry.id, MENU_SHOW | MENU_HIDE))
+                    .map(|entry| entry.id)
+                    .collect();
+                assert_eq!(
+                    visibility.len(),
+                    1,
+                    "language {language:?}, visible {visible}: exactly one visibility entry"
+                );
+                let expected = if visible { MENU_HIDE } else { MENU_SHOW };
+                assert_eq!(visibility[0], expected);
+
+                let dividers = items
+                    .iter()
+                    .filter(|item| matches!(item, TrayMenuItem::Divider))
+                    .count();
+                assert_eq!(
+                    dividers,
+                    2,
+                    "language {language:?}, visible {visible}: a line between each entry"
+                );
+            }
+        }
     }
 
     #[test]

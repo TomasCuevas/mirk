@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The window's own capability. The interface's custom commands need no grant — Tauri allows an application's own commands without one — but the core APIs it calls do. The only one it calls is the event API, which receives the screens the desktop process asks it to open (R12): the tray's settings entry emits `open-screen` and the webview listens for it.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

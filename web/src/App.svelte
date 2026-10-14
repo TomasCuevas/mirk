@@ -12,12 +12,13 @@
   import {
     hashForScreen,
     hashForView,
+    isScreen,
     viewFromHash,
     type Screen,
     type View,
     type WatchedFolder,
   } from "./lib/screens";
-  import { invoke, runningInTauri } from "./lib/tauri";
+  import { OPEN_SCREEN_EVENT, invoke, listen, runningInTauri, type Unlisten } from "./lib/tauri";
   import { loadLanguage, saveLanguage } from "./lib/settings";
   import { type WindowControl } from "./lib/window";
   import CategoryScreen from "./components/CategoryScreen.svelte";
@@ -186,17 +187,49 @@
     };
     window.addEventListener("hashchange", sync);
 
+    // R12: the tray's settings entry is native and cannot reach a screen by itself, so the desktop
+    // process asks the interface to navigate. The request names a screen and the interface answers by
+    // writing the same hash the navbar writes, so a tray click and a navbar click land on the same
+    // screen through the same path — the hash listener above is what actually moves. A request that
+    // names no screen is ignored rather than guessed at: it comes from outside the interface.
+    let stopListening: Unlisten | null = null;
+    let cancelled = false;
+
     if (inTauri) {
       void loadStoredLanguage();
       void loadLibrary();
       void loadProviders();
       void loadFolders();
+      void listen<string>(OPEN_SCREEN_EVENT, (screen) => {
+        if (isScreen(screen)) {
+          window.location.hash = hashForScreen(screen);
+        }
+      })
+        .then((stop) => {
+          // The listener may arrive after the screen is already gone; stopping it then is still owed.
+          if (cancelled) {
+            stop();
+          } else {
+            stopListening = stop;
+          }
+        })
+        .catch((error) => {
+          // A listener that never arrives is a real failure, not a detail: the tray's settings entry
+          // would then do nothing at all. This went unnoticed until the user clicked that entry,
+          // because an unhandled rejection is silent — the permission the core event API needs was
+          // missing, and nothing anywhere said so. Reported, never dropped.
+          console.error("the tray's screen requests will not be received", error);
+        });
     } else {
       // Outside the shell there is nothing to ask, and saying the library is empty would be a lie.
       libraryLoading = false;
     }
 
-    return () => window.removeEventListener("hashchange", sync);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("hashchange", sync);
+      stopListening?.();
+    };
   });
 </script>
 
