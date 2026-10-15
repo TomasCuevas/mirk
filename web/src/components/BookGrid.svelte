@@ -16,6 +16,20 @@
     onOpenFolder: (entry: LibraryEntry) => void;
     layout?: "grid" | "strip";
   } = $props();
+
+  /**
+   * How many tiles a carousel shows before it stops (R16).
+   *
+   * A strip is a preview, not a list: with a whole library inside it, it stops being a carousel — the
+   * user's words were that too many tiles made one so long it was a nuisance to look at. Ten is the
+   * number the library already paginates by, so "abrir la lista completa" is where the rest belongs
+   * and the two limits teach the same expectation instead of two different ones.
+   */
+  const CAROUSEL_TILES = 10;
+
+  // A strip shows the first tiles only. A grid shows everything it was given, because a full list is
+  // the one screen that is supposed to be complete.
+  const shown = $derived(layout === "strip" ? entries.slice(0, CAROUSEL_TILES) : entries);
 </script>
 
 <!--
@@ -25,7 +39,7 @@
   for a full list, a horizontal scrolling strip for a carousel (B1).
 -->
 <ul class="grid" class:strip={layout === "strip"}>
-  {#each entries as entry (entry.id)}
+  {#each shown as entry (entry.id)}
     <li>
       <BookCard
         {entry}
@@ -61,6 +75,11 @@
     display: flex;
     flex-wrap: nowrap;
     overflow-x: auto;
+    /* R17: as soon as one axis is not `visible`, the other computes to `auto` too — so `overflow-x`
+       alone silently enabled a vertical scrollbar, which showed for the overflow described in
+       BookCard's fixed-height body. The strip scrolls sideways and only sideways, and this says so
+       rather than leaving it to a CSS default; the overflow itself was fixed where it happened. */
+    overflow-y: hidden;
     gap: 0.75rem;
     padding-bottom: 0.35rem;
   }

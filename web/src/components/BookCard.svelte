@@ -67,19 +67,19 @@
     </button>
   </div>
 
-  <p class="pages">
-    {entry.pages === null
-      ? t("library.pagesUnknown")
-      : t("library.pages", { count: entry.pages })}
-  </p>
-
   <!-- The text block below the cover is a FIXED height, and that is the whole point: it is what makes
        a tile with a real document and the empty placeholder end up exactly the same size, which is
        the user's stated requirement. The title is clamped to two lines and two lines are reserved
        here, so a one-line and a two-line title occupy the same slot; the progress block is pushed to
        the bottom of the fixed block by its own `margin: auto 0 0`, so every bar sits at one height.
        The title is only clipped visually — the element still holds the whole title for a screen
-       reader and offers it to the pointer through `title=`. -->
+       reader and offers it to the pointer through `title=`.
+
+       The height above is computed for exactly what this block contains, which is why the page count
+       is rendered here and nowhere else. It used to be rendered a second time above the cover as
+       well (R18): the same sentence twice on one card, and — because that copy sat outside this fixed
+       block — a card pushed past its own height, whose overflow then made the carousel strip scroll
+       vertically (R17). A fixed height its own content overflows is not fixed. -->
   <div class="body">
     <h2 class="title" title={displayTitle(entry)}>{displayTitle(entry)}</h2>
 
