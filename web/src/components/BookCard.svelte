@@ -40,6 +40,14 @@
   <div class="cover-wrap">
     <div class="cover" style="aspect-ratio: 9 / 11" aria-hidden="true">{t("card.cover")}</div>
 
+    <!-- R19: the page count sits on the cover's bottom-right, mirroring the folder action at its
+         top-right, so the two corners read as one design instead of two. It says nothing when the
+         count is unknown: a corner badge cannot hold "Número de páginas desconocido", and a card that
+         cannot state a number must not invent one. -->
+    {#if entry.pages !== null}
+      <p class="cover-pages">{t("library.pages", { count: entry.pages })}</p>
+    {/if}
+
     <!-- R9 (L22): an icon rather than a full-width text button. An icon is not a name, so the accessible
          name comes from the catalogue through `aria-label`, and the drawing is hidden from assistive
          technology because it repeats the name instead of adding to it. -->
@@ -86,12 +94,6 @@
     {#if entry.author !== null}
       <p class="author">{t("library.author", { author: entry.author })}</p>
     {/if}
-
-    <p class="pages">
-      {entry.pages === null
-        ? t("library.pagesUnknown")
-        : t("library.pages", { count: entry.pages })}
-    </p>
 
     <!-- R7: the bar stands for the fraction read and the number sits over it, at the position that
          fraction corresponds to. The provenance stays in words underneath, because the rule that
@@ -176,7 +178,12 @@
      provenance — `recorded by oct`, `recorded by Evince` — simply leaves slack at the top, which the
      progress block's `margin: auto 0 0` spends before the bar. The reserve is two provenance lines
      rather than one because a close-time viewer says `recorded when Evince closed`, which wraps at
-     this width; a fixed height that a real string can overflow is not fixed. */
+     this width; a fixed height that a real string can overflow is not fixed.
+
+     The page line is no longer one of the things this height has to hold — it moved onto the cover as
+     a badge (R19) — so the block now carries that line's worth of slack. The value stays 11rem on
+     purpose: shrinking it would make the placeholder's identical declaration wrong, and the slack is
+     the headroom the optional author line already needed. */
   .body {
     display: flex;
     flex-direction: column;
@@ -202,13 +209,6 @@
   }
 
   .author,
-  .pages {
-    margin: 0;
-    font-size: 0.82rem;
-    color: #5a6472;
-    overflow-wrap: anywhere;
-  }
-
   .progress {
     display: flex;
     flex-direction: column;
@@ -287,6 +287,22 @@
 
   .open-folder:hover {
     background: #f0f2f5;
+  }
+
+  /* R19: the page count as a badge on the cover's bottom-right. Same inset, border radius and white
+     pill as the folder action one line up, because they are the same kind of thing: a small fact
+     about the document, stated on the space that stands for its body. */
+  .cover-pages {
+    position: absolute;
+    bottom: 0.3rem;
+    right: 0.3rem;
+    margin: 0;
+    padding: 0.15rem 0.4rem;
+    border: 1px solid #ccd2da;
+    border-radius: 0.4rem;
+    background: #ffffff;
+    color: #55606d;
+    font-size: 0.72rem;
   }
 
 </style>
