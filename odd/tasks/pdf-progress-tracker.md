@@ -1089,6 +1089,101 @@ listing that looks current and is not.
 - **U12** R28 — the refresh clock beside the category clock, the quiet re-read in `App`, and the tests that
   pin the tick, its cleanup and its bound
 
+## Specs — the carousels' order (L45)
+
+- **R29 — the most recently read document comes first, and the tiles run towards the oldest.** Verbatim:
+*"en el carrusel, el ultimo elemento que se haya leido siempre aparezca primero. Se vayan ordenando de
+izquierda a derecha de mas reciente a más antiguo"*. The order is part of the category rule rather than a
+property of the screen, so it lives in the same pure selector that decides which documents a category holds:
+the carousel, a category's own screen and the ten-tile cap all read one order and cannot disagree about it.
+Two facts make the rule honest rather than approximate. **What the store knows as "read" is the moment a
+source that OBSERVED the reading says it happened** — `progress.read_at` (L46) — and not the moment the
+position last changed (`updated_at`), which is when the application looked; nothing writes
+`documents.last_opened_at`. This sentence was corrected in L46's round: it named `updated_at` when R29 first
+landed, and that is now false by design. A document whose reading time no source recorded sorts to the far
+end rather than claiming to be the newest. And **the order must be a function of the data alone**: the launch sweep records a
+whole library inside a second, so equal timestamps are the common case, and the fallback is the displayed
+name followed by the row id. The listing is re-read every fifteen seconds, and an order that could change
+on its own would make ten tiles jump under the reader's hand.
+
+### Tasks — L45
+
+- **U13** R29 — the recency order inside `categoryEntries`, with the tests that pin it, its tiebreak and its
+  honesty about "read"
+
+## Specs — cuando lo leíste (L46)
+
+- **R30 — un tiempo de lectura sale de una fuente que observó la lectura, y "no se sabe" es una respuesta en
+sí misma.** Verbatim: *"no hay ningun elemento en el carrusel que representa los PDFs que no se abren hace
+tiempo. Y no es porque no haya documentos que no se hayan abierto, ya que muchos, la gran mayoria no los abro
+hace bastante"*. El mecanismo detrás del carrusel vacío: `record_progress` sellaba cada fila con
+`unix_now()`, así que el tiempo de un registro era cuando **la app miró**, nunca cuando la persona leyó — y el
+barrido de arranque escribió la biblioteca entera dentro de 25 horas, con el registro más viejo a 1,05 días.
+Con el umbral en 30 días, nada *puede* ser viejo. La corrección tiene tres partes:
+  1. `progress` gana un tiempo de lectura propio (V4, anulable): NULL significa que la app **no sabe**, que es
+     un hecho distinto de "leído hace mucho" y no se puede inferir de cuándo miramos nosotros.
+  2. Lo llenan las fuentes que sí observaron una lectura: el historial del propio visor (el
+     `recently-used.xbel` de GTK, escrito por el visor al abrir el documento) y un cambio de posición que el
+tracker ve ocurrir.
+  3. La categoría "hace mucho" y el orden de `R29` leen **ese** tiempo, no el de escritura de la fila.
+  **El tiempo de último acceso del archivo se consideró y se descartó con evidencia.** El usuario lo eligió
+  como respaldo, y la medición muestra por qué no puede funcionar: los 42 documentos de su biblioteca tienen
+  un atime de **~1,1 días**, porque es oct el que lee los archivos (pdfium cuenta las páginas, el barrido los
+  abre). Un hecho que escribe el propio escaneo de la aplicación no es evidencia sobre el lector. Y el
+  historial cubre 15 de 42 documentos, con uno a 37,8 días: eso ya llena la categoría con la verdad en vez de
+  con una suposición. Queda registrado para que nadie lo vuelva a deducir.
+
+  **La marca de agua, y su única excepción (la especificación decía de más; la verificación lo encontró).**
+  El tiempo de lectura nunca retrocede: el historial registra el instante de la apertura, unos segundos antes
+  de que el tick vea la página moverse, así que un barrido posterior de la misma tarde no puede hacer que un
+  documento leído hoy parezca más viejo. La excepción que la frase no decía: un tiempo **guardado en el
+  futuro** no se conserva, se reemplaza por ahora. Un valor futuro sólo puede venir de un reloj que se movió, y
+  no es evidencia sobre una lectura; en el tick estamos viendo el documento abierto, así que "ahora" sí es una
+  observación. El código ya hacía esto; lo que faltaba era el test que lo dice y la frase que no lo ocultaba.
+
+  **Un tiempo que una fuente reporta en el futuro no es creíble (hallazgo real de la verificación).** El
+  barrido lo aceptaba y lo guardaba, y como el tiempo de lectura es una marca de agua lo conservaba para
+  siempre: un documento que nadie tocó en un año quedaba sellado como leído mañana, y el umbral de 30 días ya
+  no podía alcanzarlo nunca. Ahora una sola regla sirve a los dos caminos —el barrido ignora una observación
+  futura y conserva lo que ya sabía; el tick, que está observando el documento abierto, responde "ahora"— y cada
+  camino tiene su test, además del test de la regla misma.
+
+  **El campo `modified` del historial no es la fecha del archivo, medido en la máquina del usuario.** La
+  verificación advirtió que tomar el máximo de `modified` y `visited` puede declarar una lectura que no
+  ocurrió, y la medición muestra qué es ese campo acá: coincide con el mtime del archivo en **0 de 15** casos
+  (los archivos tienen mtime de 315, 455 y 788 días mientras `modified` va de 0 a 119), y en los **4**
+  documentos abiertos ese día `modified` se movió en todos mientras `visited` se movió en 2 — con `visited`
+  solo, dos lecturas recientes se habrían perdido. Así que el máximo es la última vez que una aplicación GTK
+  registró el documento, que es la apertura. Queda como **residual**: en una máquina donde `modified` signifique
+  "el archivo se editó", la regla podría declarar una lectura que no ocurrió, y ningún dato de acá puede
+  distinguir ese caso.
+
+  **El orden manda al final a los documentos cuyo tiempo de lectura no conoce nadie.** La clave es infinito
+  negativo, no cero: cero no es el final de la escala, es 1970, y un tiempo real por debajo —un historial
+  editado a mano, una fecha anterior a la época— quedaba ordenado *detrás* de un documento cuya antigüedad no
+  se sabe. La ausencia de una respuesta no es una respuesta, y tampoco puede pretender ser la lectura más vieja.
+
+  **La migración a V4 es atómica, y ahora hay un test que puede fallar.** El paso corre en su propia transacción
+  y `user_version` se sella al final, así que un paso que falla deja la base como estaba — pero eso era una
+  intención escrita y nunca ejercitada. El test la vuelve un hecho: una base en la versión 3 que ya tiene la
+  columna (de modo que el `ALTER` falla con "duplicate column name") se abre, falla, y sigue en la versión 3 con
+  su documento y su posición intactos y legibles.
+
+  **Verificado sobre la biblioteca real del usuario, en las dos direcciones.** La base migró de v3 a v4 en el
+  lugar: 42 documentos y 51 filas medidos inmediatamente después de migrar (la verificación leyó 55 más tarde,
+  las nuevas escritas por lecturas reales), 15 filas ganaron el tiempo en que fueron leídas y 36 siguen
+  diciendo honestamente que ninguna fuente lo dijo, y "hace mucho" pasó de 0 a 5 documentos (64,9 · 64,2 · 63,0
+  · 49,2 · 37,8 días). El usuario cerró el círculo sin proponérselo: abrió *El extranjero*, que el historial
+  fechaba a 63 días, el tick lo selló con la hora de ese momento y el documento salió de la categoría solo.
+
+### Tasks — L46
+
+- **U14** R30, y `R29` viaja con esta unidad — el tiempo de lectura (V4, el historial del visor y la
+  observación en vivo del tracker), la regla de "hace mucho" y el orden del carrusel leyéndolo, y la
+  definición que la propia categoría muestra en pantalla diciendo qué mide. `R29` viaja acá porque el orden
+  que agregó ordenaría por el mismo tiempo distorsionado, y arreglar la fuente sin el orden dejaría la mitad
+  del defecto en pie.
+
 **How a unit lands (L26).** A unit is done when the user says they like it, not when the checks pass.
 The sequence is: implement → run the checks (tests, build, and the engine measurement where one applies)
 → rebuild the binary and hand the running application over → **wait** → commit with its tests and docs
@@ -2509,3 +2604,89 @@ The verification of the rebuild also got sharper in this round, and that is wort
 `web/dist` compressed, so grepping the binary for frontend content finds nothing — but the asset manifest
 keeps each file NAME uncompressed, so the new bundle's name is present inside the binary and the previous
 one is absent, which is direct evidence instead of an inference from timestamps.
+
+**L45 — the carousels' order: the most recently read document first (U13/R29).** The user asked that
+*"el ultimo elemento que se haya leido siempre aparezca primero … de mas reciente a más antiguo"*. The order
+lives in the same pure selector that decides which documents a category holds, so the carousel, a category's
+own screen and the ten-tile cap read ONE order and cannot disagree about it. The tiebreak is the displayed
+name lowercased and then the row id — never `localeCompare`, because a tiebreak must not depend on the
+machine's locale, and raw code units put `Zebra` before `apple`. Two falsifications: removing the sort failed
+all four ordering tests, and reducing the tiebreak to the row id failed the stability one. It never stood
+alone, on purpose: the time it sorted by was the distorted one L46 fixed, so fixing the source without the
+order would have left half the defect standing — and the user approved both in one verdict. The unit's own
+spec sentence named `progress.updated_at` as what "read" means; that is false by design now and was corrected
+above, because leaving it would send the next reader to the wrong field.
+
+**L46 — the app now knows when you read: the viewer's history, a separate time, and a high-water mark
+(U14/R30).** The user reported an empty "hace mucho" carousel: *"no hay ningun elemento en el carrusel que
+representa los PDFs que no se abren hace tiempo, y no es porque no haya documentos… la gran mayoria no los
+abro hace bastante"*. The diagnosis found TWO symptoms of ONE defect. `record_progress` stamps every row with
+`unix_now()`, so a record's time was always *when oct looked*; the launch sweep writes the whole library
+inside a second, and the oldest row in their store was 1,05 days old — with a 30-day threshold, nothing
+*can be* old. The same distorted time fed R29's order, which is why their tiles came out looking
+alphabetical. The fix is a second, SEPARATE fact: `progress.read_at` (migration V4, nullable), where NULL
+means "no source said" — a different fact from "read long ago", and the one thing no amount of looking by us
+can establish. `updated_at` keeps its old meaning because it was honest; it was simply never the answer to
+this question.
+
+TWO SOURCES FILL IT. The desktop's GTK history (`~/.local/share/recently-used.xbel`) is read once per sweep
+by `crates/oct-platform/src/recent.rs`: a tolerant reader — attributes read by name, percent and entity
+decoding, ISO-8601 with microseconds, `file://` only, a missing file meaning an empty history and an
+unreadable one an honest error — whose date arithmetic was derived independently (`date -u` and Python's
+`calendar.timegm`, including a leap day). And the live tick: a document the tracker watches being read is
+stamped with the moment it saw it. The stored value is a HIGH-WATER MARK, and it had to be: the history
+records the moment of OPENING, seconds before the tick sees the page turn, so a later sweep finding the
+earlier time would have walked the fact backwards and made a document read today look older than the store
+already knew it was.
+
+WHAT WAS CONSIDERED AND REJECTED, WITH THE MEASUREMENT. The user offered the file's atime as a fallback. All
+42 documents show an atime of ~1,1 days because **oct itself reads the files** — pdfium counts pages, the
+sweep opens them — so a fact written by the application's own scanning is not evidence about the reader.
+Recorded so that nobody derives it again.
+
+THE HANDOVER SAID THE UNCOMFORTABLE PART. The history knows 15 of their 42 documents; 36 rows say honestly
+that no source said when they were read, and 26 documents gain nothing from this round until the person
+opens them or the viewer registers them. The category's on-screen definition was rewritten to say what it
+measures and that a document no source ever recorded is not claimed there, because an empty carousel with no
+explanation is exactly what cost the user time. On their real database the migration ran in place: 42
+documents and 51 rows immediately after (55 measured later — the difference written by real reading), 15 rows
+gaining a time, and "hace mucho" going from 0 documents to 5 (64,9 · 64,2 · 63,0 · 49,2 · 37,8 days) with 5
+more crossing the threshold in the days that follow. The user then closed the loop without meaning to: they
+opened *El extranjero*, which the history dated 63 days back, the tick stamped it with that moment, and the
+document left the category on its own.
+
+THE INDEPENDENT VERIFICATION EARNED ITS KEEP. Five claims went in; it refused to call three of them
+satisfied, and one of those was a real defect: the sweep accepted a reading time from the FUTURE and stored
+it, and because `read_at` is a high-water mark it would have been kept forever, leaving a document nobody had
+touched in a year permanently fresh for the stale rule. The fix is one predicate (`credible_reading_time`)
+used by BOTH paths, and it judges the value the store ALREADY knew as well — which is what heals a row a
+previous build could have left in the future, instead of waiting for somebody to open that document. It also
+found that my ordering sent "no source said" to `0`, which is 1970, not the end of the scale, so a time
+before the epoch sorted BEHIND a document nobody knows anything about (it is negative infinity now); that the
+high-water sentence claimed more than the code did — a stored time in the future is replaced, because in the
+tick we are watching the document open — so the SPEC was corrected rather than the code; and that no test
+proved a FAILING migration leaves the database alone, which is now pinned: a database whose `progress` table
+already has the column makes the V4 step fail, and the version stays 3 with every row intact. It also refused
+to confirm what it could not test: there is no pre-migration snapshot of that database, so preservation rests
+on the counts and the integrity check rather than on a comparison, and that is written down as a residual.
+
+ONE MORE DEFECT CAME OUT OF THE FIX ROUND, in the test harness itself. The fixture that writes a history file
+named it after the PROCESS, and every test runs in the same process, so two tests overwrote and deleted each
+other's file. It failed a DIFFERENT test on each run and passed on the third — the worst kind of failure,
+because it had nothing to do with the code under test. The name is unique per call now, and the evidence that
+it was the cause is that three-run sequence itself: fail, fail, pass. Five falsifications in this round, all
+real RED and all restored byte-identical with their hashes: the sweep writing `unix_now()` into `read_at`,
+`with_read_at` ignoring its argument, the stale rule reading the row's write time (5 tests red), the order
+reading it (3 red), the null key back at `0`, and the sweep no longer judging the value it already held.
+
+THE HEURISTIC THAT WAS KEPT, WITH ITS RISK WRITTEN DOWN. The history's `modified` field was suspected of
+meaning "the file was edited" rather than "the document was opened", which would let a change to a file claim
+a reading. Measured on the user's machine: `modified` equals the file's mtime in **0 of 15** cases (those
+files' mtimes are 315, 455 and 788 days old while `modified` ranges 0–119), and of the 4 documents opened
+that day `modified` moved in ALL of them while `visited` moved in only 2 — so with `visited` alone, two recent
+readings would have been lost. The maximum of the two is therefore the last time a GTK application registered
+the document, which is the open. The residual stays written down: on a machine where `modified` means a
+content edit, the rule could claim a reading that did not happen.
+
+**The user's verdict on the running build: *"Si, todo funciona correctamente como deberia"*** — with the five
+stale documents, their real day counts and the corrected definition sentence on screen.
