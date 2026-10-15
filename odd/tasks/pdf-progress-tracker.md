@@ -969,11 +969,20 @@ again below it, because two identical blocks ended up in the file. Found by the 
 screenshot of `L37`; the user did not report it because it had been there since the card was rebuilt. The
 count stays where it reads as the document's size; the other goes.
 
+- **R19 — The page count sits on the cover.** It moves out of the card's text block and becomes a badge
+on the cover's bottom-right, mirroring the folder action that already sits at its top-right. Verbatim:
+*"estuve pensando que tal vez, el numero de pagina deberia estar sobre la portada, asi como ya se
+encuentra el icono para abrir la carpeta contenedora. Tal vez, colocar el numero abajo a la derecha de la
+portada"*. A corner badge cannot hold a sentence, so when the count is unknown nothing is drawn at all
+rather than an invented number.
+
 ### Tasks — round 4
 
 - **U8** R16, R17, R18 — **done** (`10dae28`): a carousel capped at ten tiles, a strip that scrolls
-  sideways and only sideways, and one page count per card. Also the defect the maintainer introduced and
-the test that was missing — see `L39`
+  sideways and only sideways, and one page count per card. Also the defect the maintainer introduced, and
+  the test that was missing — see `L39`
+- **U9** R19 — **done** (`667bec5`): the page count as a badge on the cover's bottom-right, mirroring the
+  folder action at its top-right, drawn only when the count is known (`L40`)
 
 **How a unit lands (L26).** A unit is done when the user says they like it, not when the checks pass.
 The sequence is: implement → run the checks (tests, build, and the engine measurement where one applies)
@@ -2219,3 +2228,29 @@ argued from the same arithmetic that the fixed height does not count the optiona
 a task for it. The user checked: authors **do** show and the cards look clear. So it was dropped rather
 than fixed, and the reason is the same one this log keeps repeating — reasoning from a formula lost to
 looking at the screen.
+
+## L40 — U9: the page count moves onto the cover
+
+> U9 esta bien hasta donde pude ver. Comitea y prosigue con la siguiente tarea
+
+**What landed** (`667bec5`): the page count left the card's text block and became a badge on the cover's
+bottom-right, mirroring the folder action already at its top-right — the same inset, the same border
+radius, the same white pill, so the two corners read as one design instead of two unrelated marks. It
+renders only when the library knows the count.
+
+**Two consequences, both stated to the user before they looked.** An unknown count now shows no badge at
+all, because a corner pill cannot hold "Número de páginas desconocido" and a card that cannot state a
+number must not invent one; the two catalogue entries that sentence used went with it. And the text block
+keeps its 11rem height on purpose: shrinking it would make the empty placeholder's identical declaration
+wrong, and the slack that leaves is the headroom the optional author line already needed.
+
+**A correction the maintainer owed, and paid.** Reading the height comment in full for the first time
+while doing this, he found that it counts an author line — "two title lines (2.94rem), an author line
+(1.23rem), the page line (1.23rem)". His earlier claim that the fixed height ignored the author line came
+from quoting that comment only in part, and the task he opened for it (`#53`) was dropped rather than
+fixed. The code was right and the reading was not. That makes three times in this work that looking beat
+reasoning, and the first where the wrong side was the maintainer's own reading of his own comment.
+
+**Debt avoided**: the `.pages` rule went with the markup that used it, so nothing was left dead behind
+this change — the same discipline that produced its own task for the dead `status` chain instead of a
+hurried removal.
