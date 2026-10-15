@@ -1065,6 +1065,30 @@ code does; naming the window is the honest version.
 the self-covered sentence, `#56`), and a removal that takes its documents with it after stating the count
   the same computation will carry out
 
+## Specs — the listing is re-read while the application runs (#46)
+
+Found while closing the category recalculation, and named there as the half that fix does not cover: a
+document that FINISHES, or that GAINS ITS FIRST record, is a change to the listing itself rather than to the
+clock, and re-reading the time does not re-read the store. `App` loaded the library at mount and after a
+scan, so a reader watching their own progress — which the tracker writes every few seconds from the desktop
+process — had to relaunch the application to see Inicio change. The application looked dead for exactly as
+long as it was working, which is the worst shape a defect can have.
+
+- **R28 — the listing is re-read on a clock of its own, and the re-read is quiet.** While the application
+runs, the library is re-read on an interval, so a document that gains its first record, moves through its
+pages, or reaches its last one appears where it belongs without anybody touching the interface. The interval
+is a named constant with its reason written down, and the re-read does NOT raise the loading state: that
+flag belongs to the first load — "reading the library" may only be said when there is nothing on screen
+YET — and reusing it would flash an empty grid over a listing that is already there, once per interval. A
+failed re-read is reported where the first load's failure is reported, because it is the same inability to
+read the library, and it clears on the next success: a transient failure heals itself instead of leaving a
+listing that looks current and is not.
+
+### Tasks — #46
+
+- **U12** R28 — the refresh clock beside the category clock, the quiet re-read in `App`, and the tests that
+  pin the tick, its cleanup and its bound
+
 **How a unit lands (L26).** A unit is done when the user says they like it, not when the checks pass.
 The sequence is: implement → run the checks (tests, build, and the engine measurement where one applies)
 → rebuild the binary and hand the running application over → **wait** → commit with its tests and docs
@@ -2457,3 +2481,31 @@ The test the user ran is worth recording because **their store is what shaped it
 no "Quitar" to press — the orphaned PDF sitting in their library was the proof of the old behaviour. The
 round trip therefore became: add Borges back, remove it, and watch the modal say one document and the PDF
 leave Biblioteca.
+
+## L44 — #46: the listing is re-read while the application runs
+
+> Si, funciona perfectamente
+
+A defect that was invisible, which is the worst kind and the reason it survived four rounds: `App` read the
+library at mount and after a scan, while the tracker writes a reading position every few seconds from the
+desktop process. So the one thing this application exists to show — a document moving as you read it — only
+appeared after a relaunch. It looked dead for exactly as long as it was working.
+
+**The load-bearing decision is not the clock but the quietness.** `LIBRARY_REFRESH_MS = 15_000` and
+`startLibraryRefresh` sit beside the category clock, and 15 s is argued in the code: the tracker's own tick
+is three seconds and it writes only when the position CHANGES, so four small reads a minute buy all the
+freshness a carousel can show, while matching the tick would read for facts that cannot have changed and a
+whole minute would leave a finished document sitting in "in progress" where a reader can see it. What
+matters more is that the re-read is a separate function from `loadLibrary` and not a flag on it: that one
+raises the loading state, and raising it every interval would flash an empty grid over a listing that is
+already on screen — a fix that would have looked worse than the defect.
+
+A failed re-read is reported where the first load's failure is reported and clears on the next success, so a
+transient failure heals instead of leaving a listing that looks current and is not. Three tests pin the tick,
+its cleanup and its bound, and falsifying the cleanup — a timer that outlives the application — turned the
+tick test red with `expected 5 to be 2`, which is a leaked interval caught rather than described.
+
+The verification of the rebuild also got sharper in this round, and that is worth keeping: Tauri embeds
+`web/dist` compressed, so grepping the binary for frontend content finds nothing — but the asset manifest
+keeps each file NAME uncompressed, so the new bundle's name is present inside the binary and the previous
+one is absent, which is direct evidence instead of an inference from timestamps.
