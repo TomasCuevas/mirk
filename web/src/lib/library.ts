@@ -484,6 +484,44 @@ export const STALE_AFTER_DAYS = 30;
 export const STALE_AFTER_SECONDS = STALE_AFTER_DAYS * 24 * 60 * 60;
 
 /**
+ * How often an open screen re-reads the clock, in milliseconds.
+ *
+ * A category is a function of the clock, and Inicio or a category's list can stay open for a long
+ * time, so the instant cannot be captured once at mount: a document whose record crosses the
+ * `STALE_AFTER_DAYS` threshold has to move carousel on its own. One **minute** is the design point
+ * because the threshold is measured in days — the cost is imperceptible (one recomputation of a
+ * short list per minute) and the lag is bounded to a minute, which no reader can notice for a rule
+ * that changes on the order of days. A sub-second tick would recompute for no visible gain; a
+ * multi-minute one would let the screen look wrong for long enough to be seen.
+ */
+export const CATEGORY_REFRESH_MS = 60_000;
+
+/**
+ * The current time as Unix seconds — the unit `Progress.recordedAt` and the `now` the category rule
+ * takes both use.
+ *
+ * A helper rather than `Math.floor(Date.now() / 1000)` at each call site: if one caller passed
+ * milliseconds, every record would silently look ancient against a seconds threshold.
+ */
+export function currentUnixSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+/**
+ * Starts the tick that lets an open screen re-evaluate its categories, and returns the function
+ * that stops it.
+ *
+ * Inicio and a category's list need the same interval and the same cleanup, so it lives here once
+ * instead of as two copies of `setInterval` that can drift apart. The caller passes the value to
+ * re-read and owns the reactive state; keeping the clock itself out of this function is what makes
+ * the tick testable with fake timers, with no DOM and no dependency.
+ */
+export function startCategoryRefresh(onTick: () => void): () => void {
+  const timer = setInterval(onTick, CATEGORY_REFRESH_MS);
+  return () => clearInterval(timer);
+}
+
+/**
  * The documents in one home category (R4 / B3).
  *
  * `now` is passed in rather than read from the clock so the rule is testable without a browser and

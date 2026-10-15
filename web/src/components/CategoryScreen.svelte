@@ -1,7 +1,10 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { Translate } from "../lib/i18n";
   import {
     categoryEntries,
+    currentUnixSeconds,
+    startCategoryRefresh,
     type FolderActionStatus,
     type HomeCategory,
     type LibraryEntry,
@@ -30,9 +33,12 @@
   } = $props();
 
   // The same measurement Inicio uses, so the carousel and its full list cannot disagree about which
-  // documents belong to the category (B3).
-  const now = Math.floor(Date.now() / 1000);
+  // documents belong to the category (B3) — and re-read on the same tick, for the same reason: the
+  // list can stay open while a record crosses the staleness threshold.
+  let now = $state(currentUnixSeconds());
   const items = $derived(categoryEntries(entries, category, now));
+
+  onMount(() => startCategoryRefresh(() => (now = currentUnixSeconds())));
 </script>
 
 <!--

@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { translate } from "./i18n";
 import {
+  CATEGORY_REFRESH_MS,
   STALE_AFTER_SECONDS,
   categoryEntries,
+  currentUnixSeconds,
   describeProgressView,
   describeProvenance,
   describeLibraryMessage,
@@ -14,6 +16,7 @@ import {
   paginate,
   progressFraction,
   sortEntries,
+  startCategoryRefresh,
   titleFromPath,
   type LibraryEntry,
   type Progress,
@@ -399,6 +402,64 @@ describe("the home categories", () => {
     const never = entry({ id: 3, progress: null });
 
     expect(categoryEntries([stale, fresh, never], "stale", now).map((e) => e.id)).toEqual([1]);
+  });
+
+  it("re-evaluates as the clock advances, which is what an open screen's tick drives", () => {
+    // The screens no longer capture the instant at mount; they re-read it. This is the rule that
+    // re-read makes true: the same record and the same list, a different instant, a different
+    // category. One second apart is enough because the comparison is `>=`, and without the re-read
+    // the tick would change nothing.
+    const justInside = entry({
+      id: 1,
+      progress: recorded(11, 80, now - STALE_AFTER_SECONDS + 1),
+    });
+
+    expect(categoryEntries([justInside], "stale", now)).toEqual([]);
+    expect(categoryEntries([justInside], "stale", now + 1).map((e) => e.id)).toEqual([1]);
+  });
+});
+
+describe("the clock an open screen re-reads", () => {
+  it("reads Unix seconds, the unit recordedAt and the threshold share", () => {
+    // If this helper ever returned milliseconds, every record would look ancient against a seconds
+    // threshold, so the unit is the thing this pins.
+    const before = Math.floor(Date.now() / 1000);
+    const value = currentUnixSeconds();
+    const after = Math.floor(Date.now() / 1000);
+
+    expect(Number.isInteger(value)).toBe(true);
+    expect(value).toBeGreaterThanOrEqual(before);
+    expect(value).toBeLessThanOrEqual(after);
+  });
+
+  it("ticks on the refresh interval and stops when the screen goes away", () => {
+    // The interval is the whole point: an open screen must re-evaluate without a remount, and it
+    // must not keep a timer after it unmounts. Fake timers make both observable with no DOM.
+    vi.useFakeTimers();
+    try {
+      let ticks = 0;
+      const stop = startCategoryRefresh(() => {
+        ticks += 1;
+      });
+
+      vi.advanceTimersByTime(CATEGORY_REFRESH_MS - 1);
+      expect(ticks).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(ticks).toBe(1);
+
+      stop();
+      vi.advanceTimersByTime(CATEGORY_REFRESH_MS * 3);
+      expect(ticks).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the tick cheap to run but short enough to notice", () => {
+    // The threshold is measured in days: a sub-second tick would recompute for no visible gain, and
+    // a multi-minute one would let a document sit in the wrong carousel long enough to be seen.
+    expect(CATEGORY_REFRESH_MS).toBeGreaterThanOrEqual(1000);
+    expect(CATEGORY_REFRESH_MS).toBeLessThanOrEqual(5 * 60 * 1000);
   });
 });
 

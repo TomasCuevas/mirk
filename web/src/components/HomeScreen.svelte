@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { Translate } from "../lib/i18n";
   import {
     categoryEntries,
+    currentUnixSeconds,
     homeCategories,
+    startCategoryRefresh,
     type FolderActionStatus,
     type HomeCategory,
     type LibraryEntry,
@@ -28,14 +31,20 @@
     onOpenCategory: (category: HomeCategory) => void;
   } = $props();
 
-  // One instant for every carousel in a render, so "a long time" cannot differ between them (B3).
-  const now = Math.floor(Date.now() / 1000);
+  // One instant for every carousel in a render, so "a long time" cannot differ between them (B3) —
+  // and re-read on a tick, because the screen can stay open while a document crosses the staleness
+  // threshold, which must move it between carousels without a remount.
+  let now = $state(currentUnixSeconds());
   const sections = $derived(
     homeCategories.map((category) => ({
       category,
       items: categoryEntries(entries, category, now),
     })),
   );
+
+  // The tick is the shared helper, and it is stopped when the screen unmounts, so a screen that is
+  // not open runs no timer.
+  onMount(() => startCategoryRefresh(() => (now = currentUnixSeconds())));
 </script>
 
 <!--
