@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use oct_core::{Confidence, Document, FileId, OctError, Platform, ProgressSource, StoredProgress};
-use oct_store::{database_path, user_data_dir_for, Store};
+use oct_store::{covering_folder, database_path, user_data_dir_for, Store, WatchedFolder};
 
 fn temp_db() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("create temp dir");
@@ -745,6 +745,450 @@ fn the_schema_refuses_a_second_row_for_the_same_folder() {
     assert_eq!(folders.len(), 1);
     assert!(!folders[0].recursive);
     assert!(folders[0].enabled, "the user's enabled flag must survive");
+}
+
+// --- R27 (reverses R20): removing a watch takes its documents with it -------------------------
+
+#[test]
+fn forgetting_a_folder_takes_the_documents_and_positions_it_covers_with_it() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let keep = store.record_folder("/library/keep", true).expect("record");
+    let doomed = store.record_folder("/library/doomed", true).expect("record");
+
+    let doc_id = store
+        .upsert_document(&document(
+            "/library/doomed/Cosmos.pdf",
+            FileId::Posix { dev: 3, ino: 7 },
+        ))
+        .expect("insert the document");
+    store
+        .record_progress(
+            doc_id,
+            &StoredProgress::new(
+                72,
+                Some(575),
+                ProgressSource::External("evince-gvfs"),
+                Confidence::Exact,
+            ),
+        )
+        .expect("record its position");
+
+    let removal = store
+        .forget_folder(doomed)
+        .expect("forget the watch")
+        .expect("the row was there, so the removal must report what it took");
+
+    // The plan names the document by the stored path, and nothing was left behind.
+    assert_eq!(removal.folder.id, doomed);
+    assert_eq!(
+        removal.documents,
+        vec!["/library/doomed/Cosmos.pdf".to_string()]
+    );
+    assert!(removal.kept.is_empty(), "no other watch covers this document");
+
+    let folders = store.folders().expect("list folders");
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].id, keep, "only the named watch goes");
+
+    // The counts, not merely the absence of a row: the user asked for the watch's documents to
+    // leave the library, so the document, its position and the listing entry all go with it.
+    assert_eq!(store.document_count().expect("count"), 0, "the document goes");
+    assert!(
+        store
+            .progress_for_document(doc_id)
+            .expect("read progress")
+            .is_empty(),
+        "the reading history goes with the document it describes"
+    );
+    assert!(
+        store.library().expect("list the library").is_empty(),
+        "the library no longer lists it"
+    );
+}
+
+#[test]
+fn removing_the_outer_watch_keeps_documents_the_inner_watch_still_covers() {
+    // The guard R27 exists for: the user's own store holds a nested pair, and removing the outer
+    // watch must not empty the folder that is still watched.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let outer = store.record_folder("/lib", true).expect("record the outer watch");
+    let inner = store
+        .record_folder("/lib/inner", true)
+        .expect("record the inner watch");
+
+    store
+        .upsert_document(&document("/lib/direct.pdf", FileId::Posix { dev: 1, ino: 1 }))
+        .expect("insert a document directly under the outer watch");
+    let nested = store
+        .upsert_document(&document(
+            "/lib/inner/nested.pdf",
+            FileId::Posix { dev: 1, ino: 2 },
+        ))
+        .expect("insert a document under the inner watch");
+
+    let removal = store
+        .forget_folder(outer)
+        .expect("forget the outer watch")
+        .expect("the row was there");
+
+    assert_eq!(removal.documents, vec!["/lib/direct.pdf".to_string()]);
+    assert_eq!(removal.kept, vec!["/lib/inner/nested.pdf".to_string()]);
+
+    assert_eq!(store.document_count().expect("count"), 1);
+    let library = store.library().expect("list the library");
+    assert_eq!(library.len(), 1);
+    assert_eq!(library[0].document.id, nested);
+
+    let folders = store.folders().expect("list folders");
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].id, inner, "only the named watch goes");
+}
+
+#[test]
+fn removing_the_inner_watch_keeps_its_documents_because_the_outer_watch_still_covers_them() {
+    // The guard is "another remaining watch still covers it", and the outer watch is exactly that:
+    // a document inside `/lib/inner` is also inside `/lib`. So removing the inner watch removes
+    // nothing — the outer watch still lists those documents, and a later scan would bring them back
+    // anyway. (The work order phrased this direction as "removes only its own"; the frozen
+    // contract's `covering_folder` guard keeps them, and this test pins that contract. See risks.)
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let outer = store.record_folder("/lib", true).expect("record the outer watch");
+    let inner = store
+        .record_folder("/lib/inner", true)
+        .expect("record the inner watch");
+
+    let nested = store
+        .upsert_document(&document(
+            "/lib/inner/nested.pdf",
+            FileId::Posix { dev: 2, ino: 1 },
+        ))
+        .expect("insert");
+
+    let removal = store
+        .forget_folder(inner)
+        .expect("forget the inner watch")
+        .expect("the row was there");
+
+    assert!(
+        removal.documents.is_empty(),
+        "the outer watch still covers this document, so it does not leave"
+    );
+    assert_eq!(removal.kept, vec!["/lib/inner/nested.pdf".to_string()]);
+
+    assert_eq!(store.document_count().expect("count"), 1);
+    assert_eq!(
+        store.library().expect("list the library")[0].document.id,
+        nested
+    );
+
+    let folders = store.folders().expect("list folders");
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].id, outer);
+}
+
+#[test]
+fn a_document_outside_every_watch_is_never_touched() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let watched = store.record_folder("/lib/watched", true).expect("record");
+
+    let inside = store
+        .upsert_document(&document(
+            "/lib/watched/gone.pdf",
+            FileId::Posix { dev: 3, ino: 1 },
+        ))
+        .expect("insert a document the watch covers");
+    let outside = store
+        .upsert_document(&document(
+            "/lib/elsewhere/kept.pdf",
+            FileId::Posix { dev: 3, ino: 2 },
+        ))
+        .expect("insert a document no watch covers");
+
+    store
+        .forget_folder(watched)
+        .expect("forget the watch")
+        .expect("the row was there");
+
+    assert_eq!(store.document_count().expect("count"), 1);
+    let library = store.library().expect("list the library");
+    assert_eq!(library.len(), 1);
+    assert_eq!(
+        library[0].document.id, outside,
+        "a document outside every watch stays"
+    );
+    assert!(
+        store
+            .progress_for_document(inside)
+            .expect("progress")
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_document_in_a_sibling_folder_sharing_a_string_prefix_is_never_touched() {
+    // `/lib/pdfs-old` shares the whole string prefix `/lib/pdfs` and is an unrelated folder. The
+    // "inside" test compares path components, so the sibling stays where a string prefix would
+    // take it.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let watched = store.record_folder("/lib/pdfs", true).expect("record");
+
+    let inside = store
+        .upsert_document(&document(
+            "/lib/pdfs/inside.pdf",
+            FileId::Posix { dev: 4, ino: 1 },
+        ))
+        .expect("insert");
+    let sibling = store
+        .upsert_document(&document(
+            "/lib/pdfs-old/sibling.pdf",
+            FileId::Posix { dev: 4, ino: 2 },
+        ))
+        .expect("insert");
+
+    let removal = store
+        .forget_folder(watched)
+        .expect("forget the watch")
+        .expect("the row was there");
+
+    assert_eq!(removal.documents, vec!["/lib/pdfs/inside.pdf".to_string()]);
+    assert!(removal.kept.is_empty());
+
+    assert_eq!(store.document_count().expect("count"), 1);
+    assert_eq!(
+        store.library().expect("list the library")[0].document.id,
+        sibling
+    );
+    assert!(
+        store
+            .progress_for_document(inside)
+            .expect("progress")
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_removal_names_the_documents_that_go_and_the_ones_that_stay_sorted_by_path() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let outer = store.record_folder("/lib", true).expect("record the outer watch");
+    store
+        .record_folder("/lib/inner", true)
+        .expect("record the inner watch");
+
+    // Inserted out of path order, so the sorted answer cannot be an accident of insertion order.
+    for (name, dev, ino) in [
+        ("/lib/inner/z-stays.pdf", 7, 1),
+        ("/lib/b-goes.pdf", 7, 2),
+        ("/lib/inner/a-stays.pdf", 7, 3),
+        ("/lib/a-goes.pdf", 7, 4),
+    ] {
+        store
+            .upsert_document(&document(name, FileId::Posix { dev, ino }))
+            .expect("insert");
+    }
+
+    let removal = store
+        .folder_removal(outer)
+        .expect("plan")
+        .expect("the watch is known");
+
+    assert_eq!(
+        removal.documents,
+        vec!["/lib/a-goes.pdf".to_string(), "/lib/b-goes.pdf".to_string()],
+        "`documents` is exactly what leaves, sorted by path"
+    );
+    assert_eq!(
+        removal.kept,
+        vec![
+            "/lib/inner/a-stays.pdf".to_string(),
+            "/lib/inner/z-stays.pdf".to_string(),
+        ],
+        "`kept` is exactly what another watch still covers, sorted by path"
+    );
+}
+
+#[test]
+fn folder_removal_plans_exactly_what_forget_folder_does_and_changes_nothing() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let watched = store.record_folder("/lib/watched", true).expect("record");
+    store
+        .record_folder("/lib/kept", true)
+        .expect("record a second watch");
+
+    store
+        .upsert_document(&document(
+            "/lib/watched/gone.pdf",
+            FileId::Posix { dev: 5, ino: 1 },
+        ))
+        .expect("insert");
+    store
+        .upsert_document(&document("/lib/kept/stays.pdf", FileId::Posix { dev: 5, ino: 2 }))
+        .expect("insert");
+
+    // The plan is read-only: two consecutive calls agree, and neither changes the store.
+    let folders_before = store.folders().expect("list folders");
+    let count_before = store.document_count().expect("count");
+    let library_before = store.library().expect("list the library");
+
+    let first = store.folder_removal(watched).expect("plan");
+    let second = store.folder_removal(watched).expect("plan again");
+    assert_eq!(first, second, "two consecutive plans must agree");
+    assert_eq!(store.folders().expect("list folders"), folders_before);
+    assert_eq!(store.document_count().expect("count"), count_before);
+    assert_eq!(store.library().expect("list the library"), library_before);
+
+    // And the plan is exactly what the removal carries out.
+    let planned = first.expect("the watch is known");
+    let performed = store
+        .forget_folder(watched)
+        .expect("forget")
+        .expect("the watch was known");
+    assert_eq!(planned, performed);
+
+    assert_eq!(store.document_count().expect("count"), count_before - 1);
+    let library = store.library().expect("list the library");
+    assert_eq!(library.len(), 1);
+    assert_eq!(
+        library[0].document.document.path,
+        PathBuf::from("/lib/kept/stays.pdf")
+    );
+}
+
+#[test]
+fn an_unknown_id_plans_and_removes_nothing() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let watched = store.record_folder("/lib/watched", true).expect("record");
+    let doc_id = store
+        .upsert_document(&document(
+            "/lib/watched/book.pdf",
+            FileId::Posix { dev: 6, ino: 1 },
+        ))
+        .expect("insert");
+    store
+        .record_progress(
+            doc_id,
+            &StoredProgress::new(1, Some(2), ProgressSource::Manual, Confidence::Manual),
+        )
+        .expect("record progress");
+
+    // R27 makes the promise sharper than the earlier `Ok(false)`: an id that names no watch must
+    // delete nothing at all, not even by accident.
+    assert!(
+        store.folder_removal(404).expect("plan").is_none(),
+        "an unknown id plans nothing"
+    );
+    assert!(
+        store.forget_folder(404).expect("forget").is_none(),
+        "an unknown id removes nothing"
+    );
+
+    let folders = store.folders().expect("list folders");
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].id, watched, "the watch survives");
+    assert_eq!(
+        store.document_count().expect("count"),
+        1,
+        "the document survives"
+    );
+    assert_eq!(
+        store.progress_for_document(doc_id).expect("progress").len(),
+        1,
+        "the position survives"
+    );
+}
+
+#[test]
+fn forgetting_an_id_the_store_never_held_is_none_rather_than_a_failure() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+
+    // A request that is already satisfied is not an error: `None` says nothing was there, and
+    // inventing a failure here would make a double click look broken.
+    assert!(store
+        .forget_folder(404)
+        .expect("an unknown id must be answered, not refused")
+        .is_none());
+
+    let id = store.record_folder("/library", true).expect("record");
+    assert!(store.forget_folder(id).expect("first removal").is_some());
+    assert!(
+        store.forget_folder(id).expect("second removal").is_none(),
+        "removing the same watch twice must report nothing to remove, not panic"
+    );
+    assert!(store.folders().expect("list").is_empty());
+}
+
+// --- R22: coverage is a component question, never a string one --------------------------------
+
+fn watched(id: i64, path: &str) -> WatchedFolder {
+    WatchedFolder {
+        id,
+        path: PathBuf::from(path),
+        recursive: true,
+        enabled: true,
+    }
+}
+
+#[test]
+fn a_watched_folder_covers_itself_and_its_subfolders_but_not_a_lookalike_sibling() {
+    let folders = vec![watched(1, "/library/pdfs")];
+    let covering = |candidate: &str| {
+        covering_folder(&folders, Path::new(candidate)).map(|folder| folder.id)
+    };
+
+    // The trap this test exists for: `/library/pdfs-old` shares the entire character prefix
+    // `/library/pdfs` and is an unrelated folder. `str::starts_with` says it is inside; comparing
+    // whole path components says it is not.
+    assert_eq!(covering("/library/pdfs-old"), None);
+    // The same trap in a plainer spelling, so the rule cannot pass by special-casing one shape.
+    assert_eq!(covering("/library/pdfs-2024"), None);
+
+    // The answers that must be a refusal.
+    assert_eq!(covering("/library/pdfs"), Some(1), "the watched folder itself");
+    assert_eq!(covering("/library/pdfs/book.pdf"), Some(1), "a real subfolder");
+    assert_eq!(
+        covering("/library/pdfs/deep/inside"),
+        Some(1),
+        "a folder nested deeper"
+    );
+
+    // ... and the ones that must not be.
+    assert_eq!(covering("/library"), None, "the parent is not inside its child");
+    assert_eq!(covering("/library/other"), None, "an unrelated sibling");
+    assert_eq!(covering("/"), None, "the filesystem root is not inside anything");
+}
+
+#[test]
+fn a_trailing_separator_on_the_watched_path_changes_nothing() {
+    let folders = vec![watched(1, "/library/pdfs/")];
+    let covering = |candidate: &str| {
+        covering_folder(&folders, Path::new(candidate)).map(|folder| folder.id)
+    };
+
+    assert_eq!(covering("/library/pdfs/book"), Some(1));
+    assert_eq!(covering("/library/pdfs"), Some(1));
+    assert_eq!(covering("/library/pdfs-old"), None);
+}
+
+#[test]
+fn the_tightest_covering_folder_is_the_one_that_gets_named() {
+    // Two watches can cover one candidate when a folder inside a watched tree was recorded before
+    // the rule existed. The refusal names the folder that actually bounds the choice, so the reader
+    // is handed the narrowest true answer rather than a technically-correct ancestor.
+    let folders = vec![watched(1, "/library"), watched(2, "/library/pdfs")];
+    let covering = |candidate: &str| {
+        covering_folder(&folders, Path::new(candidate)).map(|folder| folder.id)
+    };
+
+    assert_eq!(covering("/library/pdfs/book"), Some(2));
+    assert_eq!(covering("/library/other"), Some(1));
 }
 
 // --- UI slice: the library listing (S1) ------------------------------------------------------

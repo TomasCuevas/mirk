@@ -10,10 +10,13 @@
     type ScanReport,
   } from "./lib/library";
   import {
+    coveringFolder,
     hashForScreen,
     hashForView,
     isScreen,
     viewFromHash,
+    type FolderRefusal,
+    type FolderRemoval,
     type Screen,
     type View,
     type WatchedFolder,
@@ -53,6 +56,17 @@
 
   // The result of the last card action. Held here, not in the card, so the card stays a renderer.
   let folderStatus = $state<FolderActionStatus | null>(null);
+
+  // R27 (L42). What removing a watched folder would take with it, while the confirmation is open. It is
+  // the store's own plan and not a guess: the count the modal states comes from the same computation the
+  // removal carries out, so the two cannot disagree.
+  let removal = $state<FolderRemoval | null>(null);
+
+  // R22. A folder inside a watched one is refused before anything is scanned, and the refusal is held
+  // here rather than in the screen for the same reason the card's folder status is: the screen renders,
+  // and the decisions live where the data does. Both of this screen's modals read from props, which is
+  // also what lets a test see them without typing into an input.
+  let refusal = $state<FolderRefusal | null>(null);
 
   let scanning = $state(false);
   let scanReport = $state<ScanReport | null>(null);
@@ -117,6 +131,17 @@
   }
 
   async function scan(path: string): Promise<void> {
+    // R22: a folder inside a watched one is watched already, and adding it again would scan the same
+    // files twice. The scan is not attempted at all: the interface states the refusal in the reader's own
+    // language, naming the folder that already covers the choice. The Rust side enforces the same rule,
+    // because it is the truth, but its message can only be in English — two purposes, two statements of
+    // the same rule.
+    const covered = coveringFolder(folders ?? [], path);
+    if (covered !== null) {
+      refusal = { covered, candidate: path };
+      return;
+    }
+    refusal = null;
     scanning = true;
     scanError = null;
     scanReport = null;
@@ -138,6 +163,53 @@
       folderStatus = { id: entry.id, kind: "ok", folder: opened.folder, viewer: opened.viewer };
     } catch (error) {
       folderStatus = { id: entry.id, kind: "error", message: String(error) };
+    }
+  }
+
+  // R27: removing a watch now takes that folder's documents out of the library with it, so the click no
+  // longer removes anything — it asks the store what the removal would do, and the modal says so. A plan
+  // that comes back empty means the folder is already gone (another window, an edited database): there is
+  // nothing to confirm, so the list is re-read and the answer is corrected rather than announced.
+  async function askRemoval(id: number): Promise<void> {
+    foldersError = null;
+    try {
+      const plan = await invoke<FolderRemoval | null>("folder_removal", { id });
+      if (plan === null) {
+        await loadFolders();
+        return;
+      }
+      removal = plan;
+    } catch (error) {
+      foldersError = String(error);
+    }
+  }
+
+  // The removal takes documents with it, so both views are refreshed: the folder list that named it and
+  // the library it emptied. The modal is closed before the call rather than after, so a failure cannot
+  // leave a stale confirmation on screen over a store that has already changed.
+  async function confirmRemoval(): Promise<void> {
+    const pending = removal;
+    if (pending === null) {
+      return;
+    }
+    removal = null;
+    try {
+      await invoke("remove_folder", { id: pending.folder.id });
+      await Promise.all([loadFolders(), loadLibrary()]);
+    } catch (error) {
+      foldersError = String(error);
+    }
+  }
+
+  // R24: opening a watched folder opens the folder *itself*, which is why it is not
+  // `open_containing_folder` — that one opens the folder containing a document.
+  async function openFolder(path: string): Promise<void> {
+    try {
+      await invoke("open_folder", { path });
+    } catch (error) {
+      // Nowhere on this screen to report it, and failing to open a folder is a program error rather
+      // than user state, so it goes to the console instead of being discarded.
+      console.error("the folder could not be opened", error);
     }
   }
 
@@ -274,6 +346,14 @@
         {scanError}
         onScan={scan}
         onLocale={chooseLocale}
+        onOpenFolder={openFolder}
+        {removal}
+        onAskRemoval={askRemoval}
+        onConfirmRemoval={confirmRemoval}
+        onCancelRemoval={() => (removal = null)}
+        {refusal}
+        onCloseRefusal={() => (refusal = null)}
+        {inTauri}
       />
     {:else}
       <CategoryScreen

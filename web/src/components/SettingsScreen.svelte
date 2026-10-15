@@ -7,7 +7,16 @@
     type Provider,
     type ScanReport,
   } from "../lib/library";
-  import { describeWatchedFolders, type WatchedFolder } from "../lib/screens";
+  import {
+    describeCoveredFolder,
+    describeRemoval,
+    describeWatchedFolders,
+    type FolderRefusal,
+    type FolderRemoval,
+    type WatchedFolder,
+  } from "../lib/screens";
+  import { invoke } from "../lib/tauri";
+  import Modal from "./Modal.svelte";
 
   let {
     providers,
@@ -21,6 +30,14 @@
     scanError,
     onScan,
     onLocale,
+    onOpenFolder,
+    removal,
+    onAskRemoval,
+    onConfirmRemoval,
+    onCancelRemoval,
+    refusal,
+    onCloseRefusal,
+    inTauri,
   }: {
     providers: Provider[] | null;
     providerError: string | null;
@@ -33,6 +50,14 @@
     scanError: string | null;
     onScan: (folder: string) => Promise<void>;
     onLocale: (locale: Locale) => void;
+    onOpenFolder: (path: string) => void;
+    removal: FolderRemoval | null;
+    onAskRemoval: (id: number) => void;
+    onConfirmRemoval: () => void;
+    onCancelRemoval: () => void;
+    refusal: FolderRefusal | null;
+    onCloseRefusal: () => void;
+    inTauri: boolean;
   } = $props();
 
   const providerMessage = $derived(describeProviderRegistry(providers, t));
@@ -40,12 +65,34 @@
 
   let folder = $state("");
 
+  // R11: the primary route is the system's own folder browser, so a person does not have to know where
+  // a folder lives in order to nominate it. It is a command of ours rather than the dialog plugin's own
+  // JavaScript API, for this project's usual reason: the screens call our thin commands and the
+  // decision stays on the Rust side, where it is testable without a display.
+  async function pickFolder(): Promise<void> {
+    if (!inTauri) {
+      return;
+    }
+    try {
+      const picked = await invoke<string | null>("pick_folder");
+      // Cancelling is a normal answer rather than a mistake: it changes nothing and says nothing.
+      if (picked !== null) {
+        folder = picked;
+      }
+    } catch (error) {
+      // A dialog that cannot open at all is a real failure, and there is no screen for it here.
+      console.error("the folder chooser could not be opened", error);
+    }
+  }
+
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     const path = folder.trim();
     if (path === "") {
       return;
     }
+    // R22 is decided where the watched folders are held, because the refusal is a fact about the store
+    // rather than about this form: the screen hands the path over and the answer comes back as a prop.
     await onScan(path);
   }
 </script>
@@ -103,7 +150,16 @@
       <ul>
         {#each folders ?? [] as watched (watched.id)}
           <li>
-            <span class="path">{watched.path}</span>
+            <!-- R24: the path itself is the control, so clicking a folder's own address opens it in the
+                 file manager — which is what a person means when they click a folder. R21: it is set at a
+                 secondary size, because it is the least important thing on this row and it used to read
+                 as the most important. -->
+            <button
+              type="button"
+              class="watched-path"
+              title={t("settings.folders.open", { path: watched.path })}
+              onclick={() => onOpenFolder(watched.path)}
+            >{watched.path}</button>
             <span class="detail">
               {watched.recursive
                 ? t("settings.folders.recursive")
@@ -112,6 +168,16 @@
                 ? t("settings.folders.enabled")
                 : t("settings.folders.disabled")}
             </span>
+            <!-- R27: this used to need no confirmation, because removing a watch cost the watching and
+                 nothing else. It now takes the folder's documents out of the library with it, so it is a
+                 destructive action and it asks first: the click opens the plan, and the modal states how
+                 many documents leave before anything happens. -->
+            <button
+              type="button"
+              class="remove"
+              aria-label={t("settings.folders.removeFolder", { path: watched.path })}
+              onclick={() => onAskRemoval(watched.id)}
+            >{t("settings.folders.remove")}</button>
           </li>
         {/each}
       </ul>
@@ -121,11 +187,39 @@
   <div class="panel">
     <h2>{t("scan.heading")}</h2>
     <form onsubmit={submit}>
-      <label class="inline">
-        <span>{t("scan.folderLabel")}</span>
-        <input bind:value={folder} placeholder={t("scan.placeholder")} />
-      </label>
-      <button type="submit" disabled={scanning}>{t("scan.action")}</button>
+      <!--
+        R25: the section is composed rather than stacked. The folder being acted on is the subject, so it
+        reads as a field-like readout and not as a sentence; the two things a person can DO with it sit
+        together in one row; and the manual route is a quiet link, because it is another way to fill the
+        same field rather than a box of its own. What was here before was six blocks of equal weight —
+        two identical buttons, the path, its line, the browser's disclosure triangle and the alert —
+        which is what made the section read as a list of unrelated things.
+      -->
+      <p class="field" aria-live="polite">
+        {#if folder === ""}
+          <span class="empty">{t("scan.noFolder")}</span>
+        {:else}
+          {folder}
+        {/if}
+      </p>
+
+      <div class="actions">
+        {#if inTauri}
+          <button type="button" class="secondary" onclick={pickFolder}>{t("scan.choose")}</button>
+        {/if}
+        <!-- The scan is the action this panel exists for, so it is the prominent one — and it stays
+             disabled until there is a path, which is the shape of every form a person already knows. -->
+        <button type="submit" disabled={scanning || folder.trim() === ""}>{t("scan.action")}</button>
+      </div>
+
+      <details class="manual">
+        <summary>{t("scan.manual")}</summary>
+        <input
+          bind:value={folder}
+          placeholder={t("scan.placeholder")}
+          aria-label={t("scan.folderLabel")}
+        />
+      </details>
     </form>
 
     {#if scanning}
@@ -148,6 +242,44 @@
     {/if}
   </div>
 </section>
+
+<!--
+  R26: what used to be a line under the form is a modal now, and the same modal serves both things that
+  need one. Only one can be open at a time, and the removal wins the tie: it is the one that was asked
+  for by a click and the one that is waiting on an answer.
+-->
+{#if removal !== null}
+  <Modal title={t("settings.folders.removalTitle")} onClose={onCancelRemoval}>
+    <!-- The modal names its own subject: with two folders watched, "this folder" without a path would
+         leave the reader to remember which button they pressed. -->
+    <p class="detail path">{removal.folder.path}</p>
+    <p>{describeRemoval(removal, t)}</p>
+    <!-- Only when the removal is partial: with nothing leaving, the sentence above has already said
+         that the documents are covered by another watch, and following it with "documents another
+         watched folder covers stay" would repeat it. -->
+    {#if removal.kept.length > 0 && removal.documents.length > 0}
+      <p class="detail">{t("settings.folders.removalKept")}</p>
+    {/if}
+    {#if removal.documents.length > 0}
+      <p class="detail">{t("settings.folders.removalRecover")}</p>
+    {/if}
+    <div class="actions">
+      <button type="button" class="secondary" onclick={onCancelRemoval}>
+        {t("settings.folders.removalCancel")}
+      </button>
+      <button type="button" class="danger" onclick={onConfirmRemoval}>
+        {t("settings.folders.removalConfirm")}
+      </button>
+    </div>
+  </Modal>
+{:else if refusal !== null}
+  <Modal title={t("scan.refusedTitle")} onClose={onCloseRefusal}>
+    <p>{describeCoveredFolder(refusal.covered, refusal.candidate, t)}</p>
+    <div class="actions">
+      <button type="button" onclick={onCloseRefusal}>{t("scan.refusedClose")}</button>
+    </div>
+  </Modal>
+{/if}
 
 <style>
   .screen {
@@ -209,13 +341,72 @@
     gap: 0.1rem;
   }
 
-  .path {
+  /* R21 and R24: the watched folder's address is a control (it opens the folder) and reads as the least
+     important thing on the row rather than the loudest. */
+  .watched-path {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: #24506b;
+    font: inherit;
+    font-size: 0.82rem;
+    text-align: left;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+    cursor: pointer;
     overflow-wrap: anywhere;
+  }
+
+  .watched-path:hover {
+    color: #17364a;
+  }
+
+  /* R27: the way to stop watching a folder, which now takes the folder's documents with it. It is still
+     a small secondary control because the confirmation, not the button, is where the consequence is
+     stated — which is the point of asking. */
+  .remove {
+    background: none;
+    border: 1px solid #ccd2da;
+    border-radius: 0.4rem;
+    padding: 0.15rem 0.45rem;
+    color: #a1301f;
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+    align-self: flex-start;
+  }
+
+  .remove:hover {
+    background: #fdf1ef;
+  }
+
+  /* R25: the folder the panel acts on, as a readout. It is styled like a field because that is what it
+     is — the value the actions below apply to — and it wraps anywhere, because an absolute path is long
+     and pushing the layout around is worse than breaking a line. */
+  .field {
+    margin: 0;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid #e2e6eb;
+    border-radius: 0.4rem;
+    background: #f7f9fb;
+    font-size: 0.82rem;
+    color: #1c2024;
+    overflow-wrap: anywhere;
+    box-sizing: border-box;
+    width: 100%;
+  }
+
+  .field .empty {
+    color: #8b95a3;
   }
 
   .detail {
     font-size: 0.8rem;
     color: #5a6472;
+  }
+
+  .path {
+    overflow-wrap: anywhere;
   }
 
   .id {
@@ -238,14 +429,39 @@
 
   form {
     display: flex;
-    flex-wrap: wrap;
-    align-items: flex-end;
-    gap: 0.75rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.6rem;
   }
 
-  form input {
-    flex: 1 1 10rem;
-    min-width: 0;
+  /* R25: the two things a person can do here, side by side, so they read as one set of actions rather
+     than as two unrelated rows of the same weight. */
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  /* The manual route: a quiet link, because it is another way to fill the field above and not a block of
+     its own. The browser's own disclosure triangle is removed rather than shown — it was one of the
+     things that made this section read as a pile. */
+  .manual summary {
+    list-style: none;
+    cursor: pointer;
+    color: #24506b;
+    font-size: 0.8rem;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+    width: fit-content;
+  }
+
+  .manual summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .manual input {
+    margin-top: 0.4rem;
+    width: 100%;
   }
 
   button {
@@ -256,6 +472,16 @@
     color: #ffffff;
     font: inherit;
     cursor: pointer;
+  }
+
+  button.secondary {
+    background: #ffffff;
+    color: #24506b;
+  }
+
+  button.danger {
+    background: #a1301f;
+    border-color: #a1301f;
   }
 
   button:disabled {

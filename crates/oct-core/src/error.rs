@@ -46,6 +46,22 @@ pub enum OctError {
     #[error("invalid path: {0}")]
     InvalidPath(String),
 
+    /// A folder was refused because a watched folder already covers it.
+    ///
+    /// Deliberately **not** [`OctError::InvalidPath`]: that variant means the path itself could not be
+    /// understood, while here the path is well formed and the folder exists — the request is refused
+    /// because watching it would put the same tree under two watches and discover every document in
+    /// it twice. Both paths travel as fields rather than baked into one sentence, so the interface
+    /// can name the folder that already covers the user's choice and word the alert in its own
+    /// language. "It was blocked", with no "by which one", is a half-answer.
+    #[error("`{path}` is already covered by the watched folder `{covering}`, so it was not added")]
+    PathCoveredByWatchedFolder {
+        /// The folder whose addition was refused.
+        path: String,
+        /// The watched folder that already covers it.
+        covering: String,
+    },
+
     /// A native component this build needs is missing or could not be loaded.
     ///
     /// Deliberately **not** [`OctError::NotSupported`], which means the capability is not implemented

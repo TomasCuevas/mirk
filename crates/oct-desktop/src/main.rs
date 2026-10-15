@@ -21,13 +21,17 @@
 
 use std::path::Path;
 
-use commands::{LibraryEntryView, OpenedFolderView, ProviderView, ScanReportView, WatchedFolderView};
+use commands::{
+    FolderRemovalView, LibraryEntryView, OpenedFolderView, ProviderView, ScanReportView,
+    WatchedFolderView,
+};
 use oct_core::OctError;
 use oct_store::{database_path, Store};
 use shell::{action_for_menu_id, dispatch, ShellAction, ShellActions};
 use tauri::menu::{Menu, MenuBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, FilePath};
 
 mod commands;
 mod shell;
@@ -171,6 +175,27 @@ fn watched_folders() -> Result<Vec<WatchedFolderView>, String> {
     commands::watched_folders(&store).map_err(error_message)
 }
 
+/// Computes what removing the watch with `id` would take with it, changing nothing (R27).
+///
+/// The confirmation reads this before offering the destructive action, so the count it states is
+/// the store's answer rather than the screen's estimate.
+#[tauri::command]
+fn folder_removal(id: i64) -> Result<Option<FolderRemovalView>, String> {
+    let store = open_store()?;
+    commands::folder_removal(&store, id).map_err(error_message)
+}
+
+/// Stops watching a folder, taking the documents it covers and their positions with it (R27).
+///
+/// The reversal is deliberate: the user asked that a folder they stopped watching leave their
+/// library, and the store keeps a document another remaining watch still covers. `None` means the
+/// id named no watch, and nothing was deleted.
+#[tauri::command]
+fn remove_folder(id: i64) -> Result<Option<FolderRemovalView>, String> {
+    let store = open_store()?;
+    commands::remove_folder(&store, id).map_err(error_message)
+}
+
 /// The stored interface language, or `null` when nothing — or nothing this build knows — is stored.
 #[tauri::command]
 fn get_language() -> Result<Option<String>, String> {
@@ -194,6 +219,64 @@ fn set_language(locale: String, app: AppHandle) -> Result<(), String> {
 fn open_containing_folder(path: String) -> Result<OpenedFolderView, String> {
     let launcher = oct_platform::backends().launcher;
     commands::open_containing_folder(launcher.as_ref(), Path::new(&path)).map_err(error_message)
+}
+
+/// Opens the folder at `path` itself in the system's file manager (R24).
+///
+/// The watched-folder action: [`open_containing_folder`] opens a document's folder, this opens the
+/// folder the user pointed at, and the two share one implementation and one honesty rule — a
+/// folder that no longer exists is an error, never a silent no-op.
+#[tauri::command]
+fn open_folder(path: String) -> Result<OpenedFolderView, String> {
+    let launcher = oct_platform::backends().launcher;
+    commands::open_folder(launcher.as_ref(), Path::new(&path)).map_err(error_message)
+}
+
+/// Opens the system folder browser and returns the folder the user chose (R11).
+///
+/// The chooser is driven from Rust, through `tauri-plugin-dialog`'s `DialogExt`, rather than from the
+/// interface through `@tauri-apps/plugin-dialog`, for two reasons. First, the interface talking to a
+/// plugin directly would break this project's one interaction pattern: screens call our thin commands
+/// and the decision lives in Rust, where it can be testable without a display. Second, it would add
+/// an npm package where a crate already suffices for what is one system dialog.
+///
+/// Because the application calls its own plugin, no capability file change is needed: capabilities
+/// gate what the webview may invoke over IPC, and the webview invokes nothing here.
+///
+/// The contract is frozen: the chosen absolute path as a `String`, or `null` when the user cancels.
+/// Cancelling is a normal answer, not a failure, so it never becomes an `Err`; `Err` is reserved for
+/// a real failure, a choice that cannot be turned into a path.
+#[tauri::command]
+async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    // The blocking variant is the plugin's own recommendation for asynchronous commands (its module
+    // docs say so), and a Tauri async command does not run on the main thread, so waiting here does
+    // not freeze the interface. It is also the route taken because it turns cancel into an ordinary
+    // `Option` return instead of a callback that has to funnel the answer back out of a closure, which
+    // is what keeps the frozen cancel-is-not-an-error contract expressible in one place below.
+    chosen_folder(app.dialog().file().blocking_pick_folder())
+}
+
+/// The frozen result of a folder choice: the path as a `String`, `None` for a cancel, or an error.
+///
+/// It is kept apart from the command so the contract — cancel is a normal answer, and only a choice
+/// that cannot become a path is a failure — can be asserted without opening a native dialog, which no
+/// test can drive.
+fn chosen_folder(chosen: Option<FilePath>) -> Result<Option<String>, String> {
+    match chosen {
+        None => Ok(None),
+        Some(path) => {
+            let path = path
+                .into_path()
+                .map_err(|error| format!("the chosen folder could not be read as a path: {error}"))?;
+            // Paths are opaque UTF-8 everywhere in this project (R7), and the store only ever holds
+            // valid UTF-8, so a path that cannot be spelled as UTF-8 is a real failure rather than a
+            // value silently mangled by a lossy conversion.
+            match path.to_str() {
+                Some(path) => Ok(Some(path.to_string())),
+                None => Err(format!("the chosen folder is not valid UTF-8: {}", path.display())),
+            }
+        }
+    }
 }
 
 /// Opens the production database at its per-platform user data location.
@@ -467,6 +550,9 @@ fn report_tracking(report: &track::TrackReport) {
 
 fn main() {
     tauri::Builder::default()
+        // The dialog plugin is initialized so the application can open the system folder browser
+        // from Rust through `DialogExt` (R11). It is a plugin of this process, not of the interface.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let window = app
                 .get_webview_window(MAIN_WINDOW)
@@ -499,9 +585,13 @@ fn main() {
             scan_folder,
             progress_providers,
             watched_folders,
+            folder_removal,
+            remove_folder,
             get_language,
             set_language,
-            open_containing_folder
+            open_containing_folder,
+            open_folder,
+            pick_folder
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the oct desktop application");
@@ -548,5 +638,38 @@ mod tests {
             (1.9..=2.4).contains(&ratio),
             "the window must have phone proportions, but its height/width ratio is {ratio}"
         );
+    }
+
+    // --- R11: the folder chooser's frozen contract --------------------------------------------
+    //
+    // A native dialog cannot be driven by a test, so the command itself is not asserted. What is
+    // asserted is the choice-to-contract mapping it delegates to: cancelling is a normal answer, a
+    // chosen folder is its path, and a choice that cannot be a path is an error rather than a silent
+    // `None` — the one failure mode that would be indistinguishable from a cancel to the interface.
+
+    use super::{chosen_folder, FilePath};
+    use std::path::PathBuf;
+    use std::str::FromStr;
+
+    #[test]
+    fn cancelling_the_folder_chooser_is_a_normal_answer() {
+        assert_eq!(chosen_folder(None), Ok(None));
+    }
+
+    #[test]
+    fn a_chosen_folder_becomes_its_path() {
+        let chosen = FilePath::from(PathBuf::from("/library/pdfs"));
+        assert_eq!(
+            chosen_folder(Some(chosen)),
+            Ok(Some("/library/pdfs".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_choice_that_cannot_be_a_path_is_an_error() {
+        // `content://` is a URI with no filesystem path. It is a real failure and must surface as
+        // an `Err`, never as `Ok(None)`, which the interface would render as a cancel.
+        let chosen = FilePath::from_str("content://com.example/document/1").expect("parse a URI");
+        assert!(chosen_folder(Some(chosen)).is_err());
     }
 }

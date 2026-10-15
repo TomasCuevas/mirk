@@ -7,15 +7,16 @@
 //! the same injection pattern the scanner and the provider adapters already use.
 //!
 //! Each command exists because a pixel of a screen needs it: the library, a folder scan, the
-//! progress-provider registry, the watched folders Configuración lists, and the card action that
-//! opens a document's containing folder. Anything else is a later task.
+//! progress-provider registry, the watched folders Configuración lists and now removes (R20, R27),
+//! the card action that opens a document's containing folder, and the watched-folder action that
+//! opens the folder itself (R24). Anything else is a later task.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use oct_core::{FileIdentity, LaunchOutcome, Launcher, OctError, StoredProgress};
 use oct_scan::{ScanReport, Scanner};
-use oct_store::{LibraryEntry, Store, WatchedFolder};
+use oct_store::{covering_folder, FolderRemoval, LibraryEntry, Store, WatchedFolder};
 use serde::Serialize;
 
 use crate::shell;
@@ -171,6 +172,31 @@ impl From<WatchedFolder> for WatchedFolderView {
     }
 }
 
+/// What removing one watch would take with it, as Configuración's confirmation reads it (R27).
+///
+/// The store type never crosses this boundary, exactly like every other view here: the screen sees
+/// paths as strings and never a [`Store`] type, and `folder` is a [`WatchedFolderView`] built by
+/// the same `display_path` the folder list uses, so the two cannot spell a path differently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderRemovalView {
+    pub folder: WatchedFolderView,
+    /// Paths of the documents that leave the library.
+    pub documents: Vec<String>,
+    /// Paths of the documents that stay because another remaining watch still covers them.
+    pub kept: Vec<String>,
+}
+
+impl From<FolderRemoval> for FolderRemovalView {
+    fn from(removal: FolderRemoval) -> Self {
+        Self {
+            folder: WatchedFolderView::from(removal.folder),
+            documents: removal.documents,
+            kept: removal.kept,
+        }
+    }
+}
+
 /// The folder a card action opened, and the program that opened it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OpenedFolderView {
@@ -191,13 +217,32 @@ pub fn library_entries(store: &Store) -> Result<Vec<LibraryEntryView>, OctError>
 ///
 /// `identity` is injected so the scan can be driven with a real or fake provider, exactly as
 /// [`Scanner`] documents.
+///
+/// A folder that a watched folder already covers is refused here, before anything is walked or
+/// recorded: the same tree under two watches discovers every document in it twice, and the subfolder
+/// adds nothing the watch does not already reach. The refusal carries the covering folder's path,
+/// because "it was blocked" with no "by which one" leaves the reader with nothing to do about it.
+///
+/// The candidate is resolved with the same `canonicalize` the scanner uses on the root it records,
+/// so a folder the user selected through a symlinked ancestor is still recognised as one the store
+/// has already recorded. Canonicalising first also means a folder that does not exist fails here
+/// rather than after a pdfium bind, which is the same honest `Io` error arriving one step earlier.
 pub fn scan_path(
     store: &Store,
     identity: &dyn FileIdentity,
     folder: &Path,
 ) -> Result<ScanReportView, OctError> {
+    let root = folder.canonicalize()?;
+
+    if let Some(covering) = covering_folder(&store.folders()?, &root) {
+        return Err(OctError::PathCoveredByWatchedFolder {
+            path: display_path(&root),
+            covering: display_path(&covering.path),
+        });
+    }
+
     let scanner = Scanner::new(store, identity);
-    Ok(ScanReportView::from(scanner.scan(folder)?))
+    Ok(ScanReportView::from(scanner.scan(&root)?))
 }
 
 /// The progress providers this build knows, with their declared capability and live availability.
@@ -219,6 +264,24 @@ pub fn watched_folders(store: &Store) -> Result<Vec<WatchedFolderView>, OctError
         .into_iter()
         .map(WatchedFolderView::from)
         .collect())
+}
+
+/// Computes what removing the watch with `id` would take with it, changing nothing (R27).
+///
+/// The confirmation reads this first, so the count it states is the store's own answer rather
+/// than a guess the screen makes. `None` means the id names no watch.
+pub fn folder_removal(store: &Store, id: i64) -> Result<Option<FolderRemovalView>, OctError> {
+    Ok(store.folder_removal(id)?.map(FolderRemovalView::from))
+}
+
+/// Stops watching the folder with `id`, taking the documents it covers and their positions with it.
+///
+/// The decision is [`Store::forget_folder`]'s, including the guard that keeps a document another
+/// remaining watch still covers. The view it returns is the same plan [`folder_removal`] shows, so
+/// what the confirmation said and what actually left cannot disagree. All this adds is the store
+/// the production command opens.
+pub fn remove_folder(store: &Store, id: i64) -> Result<Option<FolderRemovalView>, OctError> {
+    Ok(store.forget_folder(id)?.map(FolderRemovalView::from))
 }
 
 /// The `settings` key the interface language is stored under. The interface writes it and the
@@ -253,44 +316,59 @@ pub fn set_language(store: &Store, locale: &str) -> Result<(), OctError> {
 
 /// Opens the folder that contains `path` with the platform launcher.
 ///
-/// The document's own path is deliberately not opened: the reader asked for its folder. A folder
-/// that is gone is an honest error rather than a silent no-op — the store can hold a document whose
-/// directory was deleted or moved since the last scan, and "nothing happened" would be the least
-/// useful report of that. The launcher's own failure (no `xdg-open`, say) travels back unchanged.
-///
-/// `launcher` is injected so this can be tested without starting a file manager, exactly as the
-/// scanner takes its identity and the adapters take their spawner.
+/// The document's own path is deliberately not opened: the reader asked for its folder. The launcher
+/// is injected so this can be tested without starting a file manager, exactly as the scanner takes
+/// its identity and the adapters take their spawner.
 pub fn open_containing_folder(
     launcher: &dyn Launcher,
     path: &Path,
 ) -> Result<OpenedFolderView, OctError> {
     let folder = containing_folder(path)?;
+    open_directory(launcher, &folder)
+}
 
-    match fs::metadata(&folder) {
+/// Opens `path`, which must itself be the folder the caller wants on screen (R24).
+///
+/// This is the watched-folder action, and it opens the folder **itself** rather than its parent:
+/// [`open_containing_folder`] answers "where does this document live", and this answers "show me
+/// this folder". Both go through [`open_directory`], so there is one place that decides what an
+/// openable folder is and one place that reports a failure to open it.
+pub fn open_folder(launcher: &dyn Launcher, path: &Path) -> Result<OpenedFolderView, OctError> {
+    open_directory(launcher, path)
+}
+
+/// Opens `folder` with `launcher`, refusing anything that is not a folder on disk right now.
+///
+/// A folder that is gone is an honest error rather than a silent no-op: the store can hold a
+/// document — or a watch — whose directory was deleted or moved since it was last seen, and
+/// "nothing happened" would be the least useful report of that. The launcher's own failure (no
+/// `xdg-open`, say) travels back unchanged.
+fn open_directory(launcher: &dyn Launcher, folder: &Path) -> Result<OpenedFolderView, OctError> {
+    match fs::metadata(folder) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => {
             return Err(OctError::InvalidPath(format!(
-                "the containing path is not a folder: {}",
-                display_path(&folder)
+                "the path is not a folder: {}",
+                display_path(folder)
             )))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(OctError::InvalidPath(format!(
                 "the folder no longer exists: {}",
-                display_path(&folder)
+                display_path(folder)
             )))
         }
         Err(error) => return Err(OctError::Io(error)),
     }
 
-    let viewer = match launcher.launch(&folder, None)? {
+    let viewer = match launcher.launch(folder, None)? {
         LaunchOutcome::Delegated { viewer } => viewer,
         // `oct`'s own reader is a legitimate answer rather than a failure, once it exists.
         LaunchOutcome::OpenedInternally => "oct".to_string(),
     };
 
     Ok(OpenedFolderView {
-        folder: display_path(&folder),
+        folder: display_path(folder),
         viewer,
     })
 }
@@ -538,6 +616,61 @@ mod tests {
         assert!(!folders[1].recursive);
     }
 
+    // --- R27: removal computes its plan first, then carries it out ------------------------------
+
+    #[test]
+    fn folder_removal_plans_before_removing_and_names_the_documents() {
+        let store = in_memory_store();
+        let doomed = store.record_folder("/lib/doomed", true).expect("record");
+        let keep = store.record_folder("/lib/keep", true).expect("record");
+        store
+            .upsert_document(&document("/lib/doomed/gone.pdf", 8, 1))
+            .expect("insert");
+        store
+            .upsert_document(&document("/lib/keep/stays.pdf", 8, 2))
+            .expect("insert");
+
+        let planned = folder_removal(&store, doomed)
+            .expect("plan")
+            .expect("the watch is known");
+        assert_eq!(planned.folder.id, doomed);
+        assert_eq!(planned.documents, vec!["/lib/doomed/gone.pdf".to_string()]);
+        assert!(planned.kept.is_empty());
+        // The plan changed nothing, so the document is still there to be removed.
+        assert_eq!(store.document_count().expect("count"), 2);
+
+        let removed = remove_folder(&store, doomed)
+            .expect("remove")
+            .expect("the watch was known");
+        assert_eq!(removed, planned, "the removal carries out the plan it showed");
+        assert_eq!(store.document_count().expect("count"), 1);
+        let folders = watched_folders(&store).expect("list folders");
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].id, keep);
+    }
+
+    #[test]
+    fn removing_an_unknown_folder_is_none_and_deletes_nothing() {
+        let store = in_memory_store();
+        let watched = store.record_folder("/lib/doomed", true).expect("record");
+        store
+            .upsert_document(&document("/lib/doomed/gone.pdf", 9, 1))
+            .expect("insert");
+
+        assert!(
+            folder_removal(&store, 404).expect("plan").is_none(),
+            "an unknown id plans nothing"
+        );
+        assert!(
+            remove_folder(&store, 404).expect("remove").is_none(),
+            "an unknown id removes nothing"
+        );
+        assert_eq!(store.folders().expect("list folders").len(), 1);
+        assert_eq!(store.document_count().expect("count"), 1);
+        // The watch that does exist is untouched and still removable.
+        assert!(folder_removal(&store, watched).expect("plan").is_some());
+    }
+
     #[test]
     fn opening_the_containing_folder_asks_the_launcher_for_the_folder() {
         let dir = TempDir::new("open-folder");
@@ -625,6 +758,123 @@ mod tests {
             Err(OctError::Io(error)) => assert!(error.to_string().contains("no xdg-open")),
             other => panic!("expected an io error, got {other:?}"),
         }
+    }
+
+    // --- R22: a subfolder of a watched folder is refused, and the refusal says why ------------
+
+    #[test]
+    fn scanning_a_subfolder_of_a_watched_folder_is_refused_by_name() {
+        let store = in_memory_store();
+        let identity = oct_platform::backends().file_identity;
+        let dir = TempDir::new("nested-scan");
+        let library = dir.path.join("library");
+        let subfolder = library.join("pdfs");
+        std::fs::create_dir_all(&subfolder).expect("create the folders");
+        // The store holds the canonical root, because that is what the scanner records (T6), and
+        // the chosen path is resolved the same way so the two spellings can be compared at all.
+        let watched_root = library.canonicalize().expect("canonical root");
+        store.record_folder(&watched_root, true).expect("record");
+
+        let result = scan_path(&store, identity.as_ref(), &subfolder);
+
+        match result {
+            Err(OctError::PathCoveredByWatchedFolder { path, covering }) => {
+                assert!(path.ends_with("pdfs"), "names the refused folder: {path}");
+                assert!(
+                    covering.ends_with("library"),
+                    "names the folder that already covers it: {covering}"
+                );
+            }
+            other => panic!("expected the nesting refusal, got {other:?}"),
+        }
+        assert_eq!(
+            store.folders().expect("list folders").len(),
+            1,
+            "a refused folder must not be recorded"
+        );
+    }
+
+    #[test]
+    fn scanning_a_folder_a_watch_already_covers_is_refused_for_the_folder_itself_too() {
+        let store = in_memory_store();
+        let identity = oct_platform::backends().file_identity;
+        let dir = TempDir::new("same-scan");
+        let library = dir.path.join("library");
+        std::fs::create_dir_all(&library).expect("create the folder");
+        let watched_root = library.canonicalize().expect("canonical root");
+        store.record_folder(&watched_root, true).expect("record");
+
+        let result = scan_path(&store, identity.as_ref(), &library);
+        assert!(
+            matches!(result, Err(OctError::PathCoveredByWatchedFolder { .. })),
+            "re-adding the watched folder is the same refusal, not a second watch: {result:?}"
+        );
+        assert_eq!(store.folders().expect("list folders").len(), 1);
+    }
+
+    #[test]
+    fn the_refusal_reads_as_a_sentence_naming_the_covering_folder() {
+        // The interface renders `OctError`'s own message, so the message — not only the two fields —
+        // has to carry the answer: "it was blocked" without "by which one" is a half-answer.
+        let error = OctError::PathCoveredByWatchedFolder {
+            path: "/library/pdfs/book".to_string(),
+            covering: "/library/pdfs".to_string(),
+        };
+        let message = error.to_string();
+
+        assert!(message.contains("/library/pdfs/book"), "names the choice: {message}");
+        assert!(
+            message.contains("/library/pdfs"),
+            "names the covering folder: {message}"
+        );
+        assert!(
+            message.contains("already covered") && message.contains("not added"),
+            "states what happened and why: {message}"
+        );
+    }
+
+    // --- R24: a watched folder opens itself, not its parent ------------------------------------
+
+    #[test]
+    fn opening_a_watched_folder_asks_the_launcher_for_that_folder_itself() {
+        let dir = TempDir::new("open-watched");
+        let folder = dir.path.join("libros");
+        std::fs::create_dir_all(&folder).expect("create the folder");
+        std::fs::write(folder.join("Cosmos.pdf"), b"not really a pdf").expect("write a file");
+
+        let launcher = RecordingLauncher::new();
+        let opened = open_folder(&launcher, &folder).expect("open the watched folder");
+
+        assert_eq!(opened.folder, display_path(&folder));
+        assert_eq!(opened.viewer, "test-file-manager");
+
+        let calls = launcher.calls.lock().expect("the recording lock");
+        assert_eq!(calls.len(), 1, "exactly one launch");
+        assert_eq!(calls[0].0, folder, "the folder itself, not its parent");
+        assert_eq!(calls[0].1, None, "opening a folder is not a page request");
+    }
+
+    #[test]
+    fn opening_a_watched_folder_that_is_gone_is_an_honest_error() {
+        let dir = TempDir::new("gone-watched");
+        let folder = dir.path.join("libros");
+        std::fs::create_dir_all(&folder).expect("create the folder");
+        // The watch outlives the folder it names: nothing re-checks the disk until someone asks.
+        std::fs::remove_dir_all(&folder).expect("remove the folder");
+
+        let launcher = RecordingLauncher::new();
+        let result = open_folder(&launcher, &folder);
+
+        match result {
+            Err(OctError::InvalidPath(message)) => {
+                assert!(message.contains("libros"), "names the folder: {message}");
+            }
+            other => panic!("expected an InvalidPath error, got {other:?}"),
+        }
+        assert!(
+            launcher.calls.lock().expect("the recording lock").is_empty(),
+            "a folder that is gone must not be launched"
+        );
     }
 
     // --- R1: the language the interface and the tray share ------------------------------------

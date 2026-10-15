@@ -126,3 +126,124 @@ export function describeWatchedFolders(
   }
   return folders.length === 0 ? t("settings.folders.empty") : null;
 }
+
+/**
+ * The path components of `path`, ignoring empty ones.
+ *
+ * Two paths are compared component by component and never by the characters they spell: `/library/pdfs-old`
+ * shares the whole string prefix `/library/pdfs` and is a different folder. Every "is this inside that"
+ * question in the interface goes through this one function so there is one rule rather than three.
+ */
+export function pathSegments(path: string): string[] {
+  return path.split("/").filter((part) => part !== "");
+}
+
+/**
+ * The watched folder that already covers `candidate`, or `null` when none does (R22).
+ *
+ * Adding a folder inside a watched one would watch the same files twice and split one library across two
+ * records, so the interface refuses it — and it has to name the offender, because "it was blocked" with
+ * no "by which one" is a half-answer. The interface does this check as well as the Rust side so the
+ * explanation can be in the reader's own language; the Rust side enforces it because it is the truth.
+ *
+ * The comparison is by path SEGMENT and never by string prefix: `/library/pdfs-old` is not inside
+ * `/library/pdfs`, and a prefix comparison would say it is. A path equal to a watched one is covered, and
+ * so is a deeper one; a shorter or unrelated path is not.
+ */
+export function coveringFolder(
+  folders: readonly WatchedFolder[],
+  candidate: string,
+): WatchedFolder | null {
+  const wanted = pathSegments(candidate);
+
+  // When more than one watch covers the choice, the TIGHTEST one is named — the same rule the Rust
+  // side applies, so the alert and the error speak about the same folder instead of two folders that
+  // are both technically true.
+  return folders.reduce<WatchedFolder | null>((tightest, folder) => {
+    const watched = pathSegments(folder.path);
+    const covers =
+      wanted.length >= watched.length &&
+      watched.every((part, index) => part === wanted[index]);
+    if (!covers) {
+      return tightest;
+    }
+    return tightest === null || watched.length > pathSegments(tightest.path).length
+      ? folder
+      : tightest;
+  }, null);
+}
+
+/**
+ * A folder the interface refused to add, and the path that was refused (R22).
+ *
+ * The candidate is carried alongside the covering folder because the *sentence* depends on both: when the
+ * two name the same folder, telling the reader it is inside itself explains nothing.
+ */
+export interface FolderRefusal {
+  covered: WatchedFolder;
+  candidate: string;
+}
+
+/**
+ * The sentence that explains why a chosen folder was not added (R22, R26).
+ *
+ * The covering folder can be the chosen path itself — `/lib` is inside `/lib` — and telling a person that
+ * a folder is inside itself is true and useless: they learn nothing they did not already know. The two
+ * cases get their own sentences, and the case is decided here rather than in the screen, because a screen
+ * that had to work out which sentence applied would be a second implementation of the same rule.
+ */
+export function describeCoveredFolder(
+  covered: WatchedFolder,
+  candidate: string,
+  t: Translate,
+): string {
+  return isSamePath(covered.path, candidate)
+    ? t("settings.folders.coveredSelf")
+    : t("settings.folders.covered", { folder: covered.path });
+}
+
+/** Whether two paths name the same folder, compared component by component. */
+function isSamePath(one: string, other: string): boolean {
+  const left = pathSegments(one);
+  const right = pathSegments(other);
+  return left.length === right.length && left.every((part, index) => part === right[index]);
+}
+
+/**
+ * What removing one watch would take with it, as the store computes it (R27).
+ *
+ * This is the store's answer and not the interface's guess: the same computation the removal itself
+ * carries out is read first, so the number the confirmation states and the number of documents that
+ * actually leave cannot disagree.
+ */
+export interface FolderRemoval {
+  folder: WatchedFolder;
+  /** Paths of the documents that leave the library. */
+  documents: string[];
+  /** Paths of the documents that stay because another remaining watch still covers them. */
+  kept: string[];
+}
+
+/**
+ * What the confirmation says about how much the removal takes (R27).
+ *
+ * A destructive action states its size before it happens, and "0" is not a smaller number: when the
+ * folder has no document in the library the sentence says so, because "0 documents leave your library"
+ * reads as a failure rather than as the answer.
+ *
+ * Nothing leaving has TWO different reasons, and they must not share a sentence. A folder can be empty of
+ * the library, or every document in it can be covered by another remaining watch — the guard that keeps a
+ * nested folder from being emptied. Saying the first thing when the second is true would deny documents
+ * that are in the library and in the very sentence that follows.
+ */
+export function describeRemoval(removal: FolderRemoval, t: Translate): string {
+  const count = removal.documents.length;
+  if (count === 0) {
+    return removal.kept.length > 0
+      ? t("settings.folders.removalAllKept")
+      : t("settings.folders.removalNone");
+  }
+  return count === 1
+    ? t("settings.folders.removalOne")
+    : t("settings.folders.removalMany", { count });
+}

@@ -22,3 +22,4 @@ tauri = { version = "2", features = ["tray-icon"] }
 # of `tauri`); the commands need it directly to derive `Serialize` for the values they return over
 # IPC. No new crate enters the dependency graph.
 serde = { workspace = true }
+tauri-plugin-dialog = "2.8.3"

@@ -3,6 +3,9 @@ import { catalogues, translate } from "./i18n";
 import { STALE_AFTER_DAYS, homeCategories } from "./library";
 import {
   categoryDefinition,
+  coveringFolder,
+  describeCoveredFolder,
+  describeRemoval,
   describeWatchedFolders,
   hashForScreen,
   hashForView,
@@ -117,5 +120,127 @@ describe("the string catalogue", () => {
       expect(value.trim(), `English value for ${key}`).not.toBe("");
       expect(catalogues.es[key]?.trim(), `Spanish value for ${key}`).not.toBe("");
     }
+  });
+});
+
+describe("a folder already covered by a watched one", () => {
+  const watched = (id: number, path: string): WatchedFolder => ({
+    id,
+    path,
+    recursive: true,
+    enabled: true,
+  });
+
+  // R22 (L41): the user asked that adding a subfolder of a watched folder be refused with an alert
+  // explaining why. This is the rule the interface uses to explain it in the reader's own language.
+  it("names the folder that covers a subfolder of it", () => {
+    const folders = [watched(1, "/lib/pdfs"), watched(2, "/other")];
+
+    expect(coveringFolder(folders, "/lib/pdfs/novelas")?.path).toBe("/lib/pdfs");
+  });
+
+  // The trap this rule exists to avoid: a string-prefix comparison would call `/lib/pdfs-old` inside
+  // `/lib/pdfs`, refuse a folder the person is entitled to watch, and say something untrue about why.
+  it("treats a sibling that shares a prefix as unrelated", () => {
+    expect(coveringFolder([watched(1, "/lib/pdfs")], "/lib/pdfs-old")).toBeNull();
+  });
+
+  it("covers the same folder, deeper ones, and nothing unrelated", () => {
+    const folders = [watched(1, "/lib/pdfs")];
+
+    expect(coveringFolder(folders, "/lib/pdfs")?.id).toBe(1);
+    expect(coveringFolder(folders, "/lib/pdfs/")?.id).toBe(1);
+    expect(coveringFolder(folders, "/lib/pdfs/2024/enero")?.id).toBe(1);
+    expect(coveringFolder(folders, "/music")).toBeNull();
+    expect(coveringFolder(folders, "/lib")).toBeNull();
+  });
+});
+
+describe("the sentence that explains a refusal", () => {
+  const folder = (id: number, path: string): WatchedFolder => ({
+    id,
+    path,
+    recursive: true,
+    enabled: true,
+  });
+
+  // #56 (R26): the store's own UNIQUE index would refuse the duplicate anyway, but the covering folder
+  // would be the chosen path itself, and the sentence read "that folder is inside <the folder you just
+  // chose>". True, and useless. Being already watched is its own sentence.
+  it("says a folder is already watched when it covers itself", () => {
+    const watched = folder(1, "/lib/pdfs");
+
+    expect(describeCoveredFolder(watched, "/lib/pdfs", english)).toBe(
+      "That folder is already watched, so it was not added.",
+    );
+    // A trailing separator is the same folder, not a different one.
+    expect(describeCoveredFolder(watched, "/lib/pdfs/", english)).toBe(
+      "That folder is already watched, so it was not added.",
+    );
+  });
+
+  it("names the covering folder when it is a different one", () => {
+    const watched = folder(1, "/lib/pdfs");
+
+    expect(describeCoveredFolder(watched, "/lib/pdfs/novelas", english)).toBe(
+      "That folder is inside /lib/pdfs, which is already watched, so it was not added.",
+    );
+  });
+
+  it("says it in Spanish too", () => {
+    const watched = folder(1, "/lib/pdfs");
+
+    expect(describeCoveredFolder(watched, "/lib/pdfs", spanish)).toBe(
+      "Esa carpeta ya está vigilada, así que no se agregó.",
+    );
+    expect(describeCoveredFolder(watched, "/lib/pdfs/novelas", spanish)).toContain(
+      "está dentro de /lib/pdfs",
+    );
+  });
+});
+
+describe("what a removal takes with it", () => {
+  const removal = (documents: number, kept = 0) => ({
+    folder: { id: 1, path: "/lib/pdfs", recursive: true, enabled: true },
+    documents: Array.from({ length: documents }, (_, index) => `/lib/pdfs/${index}.pdf`),
+    kept: Array.from({ length: kept }, (_, index) => `/lib/inner/${index}.pdf`),
+  });
+
+  // R27 (L42): the confirmation states how much leaves the library before anything happens, and the
+  // count comes from the store's own plan rather than from a guess the screen makes about it.
+  it("states the count, and says one as one", () => {
+    expect(describeRemoval(removal(1), english)).toBe(
+      "1 document of this folder leaves your library.",
+    );
+    expect(describeRemoval(removal(7), english)).toBe(
+      "7 documents of this folder leave your library.",
+    );
+    expect(describeRemoval(removal(1), spanish)).toBe(
+      "1 documento de esta carpeta sale de tu biblioteca.",
+    );
+  });
+
+  // The guard creates a second way for nothing to leave, and it is NOT the same fact: the documents are
+  // in the library and another remaining watch still covers them. Saying the folder has nothing in the
+  // library would be false, and the sentence that follows would contradict it.
+  it("distinguishes an empty folder from one whose documents another watch still covers", () => {
+    expect(describeRemoval(removal(0, 3), english)).toBe(
+      "Every document of this folder stays: another watched folder still covers it.",
+    );
+    expect(describeRemoval(removal(0, 3), spanish)).toBe(
+      "Todos los documentos de esta carpeta se quedan: otra carpeta vigilada todavía los cubre.",
+    );
+    expect(describeRemoval(removal(0, 3), english)).not.toContain("is in your library");
+  });
+
+  // "0 documents leave your library" reads as a failure rather than as the answer: when the folder has
+  // nothing in the library, the sentence says what is actually happening — only the watch goes.
+  it("says so when no document is involved", () => {
+    expect(describeRemoval(removal(0), english)).toBe(
+      "No document of this folder is in your library, so only the watch is removed.",
+    );
+    expect(describeRemoval(removal(0), spanish)).toBe(
+      "No hay ningún documento de esta carpeta en tu biblioteca, así que solo se quita la vigilancia.",
+    );
   });
 });

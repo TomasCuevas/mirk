@@ -59,8 +59,9 @@
 //!   latest progress, ordered by path, and nothing narrower — the first screen needed exactly that
 //!   and no more;
 //! - writes and reads for `open_events`, `viewers` and `suggestions`; the `folders` table has only
-//!   what the scanner (T6) needs: [`Store::record_folder`], [`Store::folders`] and
-//!   [`WatchedFolder`];
+//!   what its callers need: [`Store::record_folder`], [`Store::folders`], [`Store::forget_folder`],
+//!   [`Store::folder_removal`], [`WatchedFolder`] and the pure [`covering_folder`] rule that
+//!   decides whether a folder is already covered by a watch (R20, R22, R27);
 //! - metadata writes (`size`, `mtime`, `discovered_via`, `platform`, `status`) — the
 //!   [`oct_core::Document`] value type does not carry them yet, so [`Store::upsert_document`]
 //!   leaves those columns unset for the scanner (T6) to fill;
@@ -246,6 +247,54 @@ pub struct WatchedFolder {
     pub enabled: bool,
 }
 
+/// What removing one watch takes with it (R27).
+///
+/// Removing a watched folder removes the documents that live inside it and their reading positions:
+/// the user asked for exactly that, because a folder they stopped watching should leave their
+/// library. Two guards keep it from being a trap. A document **another remaining watch still
+/// covers** is kept, so removing an outer folder cannot empty a folder that is still watched. And a
+/// position is recoverable from the viewer's own metadata — re-watching the folder brings it back
+/// through the launch sweep — which is why the confirmation may say so; nothing in this crate
+/// enforces that, it is a fact about the provider layer.
+///
+/// Both vectors hold stored `documents.path` values, sorted by path so two consecutive calls agree
+/// and a caller can diff them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderRemoval {
+    /// The watch being removed.
+    pub folder: WatchedFolder,
+    /// Documents inside `folder` that no other remaining watch covers: these leave the library.
+    pub documents: Vec<String>,
+    /// Documents inside `folder` that another remaining watch still covers: these stay.
+    pub kept: Vec<String>,
+}
+
+/// The result of planning a removal: [`FolderRemoval`]'s paths plus the ids needed to delete them.
+///
+/// One computation feeds both the read-only plan and the removal itself, so the count the interface
+/// states and the rows that actually leave cannot disagree.
+struct FolderRemovalPlan {
+    folder: WatchedFolder,
+    /// `(documents.id, documents.path)`, sorted by path.
+    documents: Vec<(i64, String)>,
+    kept: Vec<String>,
+}
+
+impl FolderRemovalPlan {
+    /// Drops the ids, leaving the caller-facing [`FolderRemoval`].
+    fn into_removal(self) -> FolderRemoval {
+        FolderRemoval {
+            folder: self.folder,
+            documents: self
+                .documents
+                .into_iter()
+                .map(|(_, path)| path)
+                .collect(),
+            kept: self.kept,
+        }
+    }
+}
+
 /// A SQLite connection to `oct`'s database.
 ///
 /// `Store` is intentionally the only handle: callers never see a `rusqlite::Connection`, so the
@@ -253,6 +302,25 @@ pub struct WatchedFolder {
 #[derive(Debug)]
 pub struct Store {
     connection: Connection,
+}
+
+/// The watched folder that covers `path`, when one does, preferring the tightest one.
+///
+/// "Covers" means `path` is the watched folder itself or a folder inside it, and the question is
+/// asked of **path components**, never of the characters they spell. `/library/pdfs-old` shares the
+/// whole string prefix `/library/pdfs` and is a different folder; `Path::starts_with` compares whole
+/// components, so it answers that correctly where a `starts_with` on the rendered path would not. A
+/// trailing separator on the watched path changes nothing either, because `Path` drops it before
+/// comparing.
+///
+/// The tightest covering folder wins so a refusal can name the folder that actually bounds the
+/// user's choice: with both `/library` and `/library/pdfs` watched, a candidate inside `pdfs` is
+/// covered by both, and `pdfs` is the answer that explains itself.
+pub fn covering_folder<'a>(folders: &'a [WatchedFolder], path: &Path) -> Option<&'a WatchedFolder> {
+    folders
+        .iter()
+        .filter(|folder| path.starts_with(&folder.path))
+        .max_by_key(|folder| folder.path.components().count())
 }
 
 impl Store {
@@ -643,6 +711,98 @@ impl Store {
                 Ok(self.connection.last_insert_rowid())
             }
         }
+    }
+
+    /// Computes what removing the watch with `id` would take with it, changing nothing (R27).
+    ///
+    /// This is what lets the interface state a real count before doing something irreversible: the
+    /// number the confirmation shows and the number [`Store::forget_folder`] removes come from the
+    /// same computation, so they cannot disagree. `None` means the id names no watch — and a
+    /// caller that proceeds anyway still deletes nothing.
+    pub fn folder_removal(&self, id: i64) -> Result<Option<FolderRemoval>, OctError> {
+        Ok(self
+            .plan_folder_removal(id)?
+            .map(FolderRemovalPlan::into_removal))
+    }
+
+    /// Removes the watched folder with `id` and the documents it covers, returning what it took.
+    ///
+    /// **The watch and its documents go together (R27), and that reverses an earlier rule.** The
+    /// first design left the library alone, arguing that a folder *finds* documents rather than
+    /// makes them exist. The user has since said what they actually meant — *"Elimine la carpeta
+    /// de 'Borges' pero el PDF que allí estaba, sigue apareciendo en mi biblioteca"* — so a folder
+    /// they stopped watching takes its documents and their positions with it.
+    ///
+    /// Two guards keep that from being a trap. A document **another remaining watch still covers**
+    /// is kept, so removing an outer folder cannot empty a folder that is still watched. And an id
+    /// the table does not hold answers `None` and deletes **nothing at all**, where the earlier
+    /// signature said `Ok(false)` for the same request.
+    ///
+    /// The deletes and the folder row are one transaction, so an interrupted removal cannot leave
+    /// documents whose watch is gone (or a watch whose documents are gone); `ON DELETE CASCADE` on
+    /// `progress.doc_id` and `open_events.doc_id` carries the rest. [`Store::folder_removal`]
+    /// computes exactly this without changing anything.
+    pub fn forget_folder(&self, id: i64) -> Result<Option<FolderRemoval>, OctError> {
+        let Some(plan) = self.plan_folder_removal(id)? else {
+            return Ok(None);
+        };
+
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(storage_error)?;
+        for (document_id, _) in &plan.documents {
+            transaction
+                .execute("DELETE FROM documents WHERE id = ?1", params![document_id])
+                .map_err(storage_error)?;
+        }
+        transaction
+            .execute("DELETE FROM folders WHERE id = ?1", params![id])
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+
+        Ok(Some(plan.into_removal()))
+    }
+
+    /// Works out which documents a removal would take and which a remaining watch still covers.
+    ///
+    /// "Inside the folder" is [`Path::starts_with`] on whole components, never a string prefix —
+    /// the same rule [`covering_folder`]'s own doc-comment explains, so `/library/pdfs-old` is
+    /// not inside `/library/pdfs` — and the coverage guard reuses [`covering_folder`] over the
+    /// **remaining** watches rather than reimplementing it.
+    fn plan_folder_removal(&self, id: i64) -> Result<Option<FolderRemovalPlan>, OctError> {
+        let folders = self.folders()?;
+        let Some(folder) = folders.iter().find(|folder| folder.id == id).cloned() else {
+            return Ok(None);
+        };
+        let remaining: Vec<WatchedFolder> = folders
+            .into_iter()
+            .filter(|candidate| candidate.id != id)
+            .collect();
+
+        let mut documents = Vec::new();
+        let mut kept = Vec::new();
+        for entry in self.library()? {
+            let document_id = entry.document.id;
+            let document_path = path_to_string(&entry.document.document.path)?;
+            if !Path::new(&document_path).starts_with(&folder.path) {
+                continue;
+            }
+            if covering_folder(&remaining, Path::new(&document_path)).is_some() {
+                kept.push(document_path);
+            } else {
+                documents.push((document_id, document_path));
+            }
+        }
+
+        documents.sort_by(|left, right| left.1.cmp(&right.1));
+        kept.sort();
+
+        Ok(Some(FolderRemovalPlan {
+            folder,
+            documents,
+            kept,
+        }))
     }
 
     /// Every document in the library, each with its most recent reading position and provenance.
@@ -1223,5 +1383,97 @@ mod tests {
 
         let after = std::fs::read(&path).expect("read the database bytes");
         assert_eq!(after, before, "a database already current must not be rewritten");
+    }
+
+    /// A watched folder whose single document has a position and an open event, for the removal tests
+    /// below. It returns the store, the folder's id and the document's id.
+    fn a_watch_with_one_read_document() -> (Store, i64, i64) {
+        let store = Store::open_in_memory().expect("open in memory");
+        let folder = store
+            .record_folder("/library/watched", true)
+            .expect("record the folder");
+        let document_id = store
+            .upsert_document(&Document::new("/library/watched/book.pdf"))
+            .expect("insert the document");
+        store
+            .record_progress(
+                document_id,
+                &StoredProgress::new(7, Some(80), ProgressSource::Manual, Confidence::Manual),
+            )
+            .expect("record a position");
+        store
+            .connection
+            .execute(
+                "INSERT INTO open_events (doc_id, pid, viewer_id, started_at) VALUES (?1, 1, NULL, 0)",
+                params![document_id],
+            )
+            .expect("record an open event");
+        (store, folder, document_id)
+    }
+
+    /// R27's atomicity claim: the documents and the watch row go together. A test that only exercises a
+    /// SUCCESSFUL removal cannot tell one transaction from two statements in a row, so this one makes
+    /// the second statement fail and asserts the first was undone rather than left behind. The failure
+    /// is injected with a trigger because the store exposes no seam for an artificial error, and adding
+    /// one would test the seam instead of the transaction.
+    #[test]
+    fn an_interrupted_removal_leaves_the_watch_and_its_documents_alone() {
+        let (store, folder, document_id) = a_watch_with_one_read_document();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER refuse_to_forget BEFORE DELETE ON folders \
+                 BEGIN SELECT RAISE(ABORT, 'the second statement fails'); END;",
+            )
+            .expect("install the trigger");
+
+        let outcome = store.forget_folder(folder);
+
+        assert!(
+            outcome.is_err(),
+            "the injected failure has to reach the caller, got {outcome:?}"
+        );
+        assert_eq!(
+            store.document_count().expect("count the documents"),
+            1,
+            "the document must come back when the watch could not be removed"
+        );
+        assert_eq!(
+            store.folders().expect("read the folders").len(),
+            1,
+            "the watch must survive its own failed removal"
+        );
+        assert_eq!(
+            store
+                .progress_for_document(document_id)
+                .expect("read the position")
+                .len(),
+            1,
+            "the position must come back with the document"
+        );
+        let events: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM open_events", [], |row| row.get(0))
+            .expect("count the open events");
+        assert_eq!(events, 1, "the open event must come back with the document");
+    }
+
+    /// The cascade R27 relies on for the rows that hang off a document. `progress` is asserted through
+    /// the public interface by the removal tests in `tests/store.rs`; `open_events` has no public
+    /// reader yet, so its rows are counted here — which is also what would catch the foreign-key
+    /// pragma being dropped, since without it nothing deletes them and the count stays at one.
+    #[test]
+    fn removing_a_watch_takes_the_open_events_of_its_documents() {
+        let (store, folder, _document_id) = a_watch_with_one_read_document();
+
+        let removed = store.forget_folder(folder).expect("remove the watch");
+
+        assert!(removed.is_some(), "the watch was there to remove");
+        assert_eq!(store.document_count().expect("count the documents"), 0);
+        let events: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM open_events", [], |row| row.get(0))
+            .expect("count the open events");
+        assert_eq!(events, 0, "an open event cannot outlive its document");
     }
 }
