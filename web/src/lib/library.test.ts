@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { translate } from "./i18n";
 import {
   CATEGORY_REFRESH_MS,
+  LIBRARY_REFRESH_MS,
   STALE_AFTER_SECONDS,
   categoryEntries,
   currentUnixSeconds,
@@ -17,6 +18,7 @@ import {
   progressFraction,
   sortEntries,
   startCategoryRefresh,
+  startLibraryRefresh,
   titleFromPath,
   type LibraryEntry,
   type Progress,
@@ -503,5 +505,51 @@ describe("paginating the listing", () => {
     expect(empty.page).toBe(1);
     expect(empty.pageCount).toBe(1);
     expect(empty.total).toBe(0);
+  });
+});
+
+describe("re-reading the listing", () => {
+  /**
+   * #46. The listing changes without the interface being touched: the tracker writes a position every few
+   * seconds, so a document gains its first record or reaches its last page while the reader is looking at
+   * Inicio. Re-reading only at mount made the screen look dead for as long as the application worked.
+   */
+  it("re-reads on its own clock and stops when the application goes away", () => {
+    vi.useFakeTimers();
+    try {
+      let reads = 0;
+      const stop = startLibraryRefresh(() => {
+        reads += 1;
+      });
+
+      vi.advanceTimersByTime(LIBRARY_REFRESH_MS - 1);
+      expect(reads).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(reads).toBe(1);
+      vi.advanceTimersByTime(LIBRARY_REFRESH_MS);
+      expect(reads).toBe(2);
+
+      // A timer that outlives the application would keep reading a store nobody is looking at.
+      stop();
+      vi.advanceTimersByTime(LIBRARY_REFRESH_MS * 3);
+      expect(reads).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-reads fast enough to look alive and slowly enough to be free", () => {
+    // The tracker writes at most once per few seconds, so a tick faster than that reads for facts that
+    // cannot have changed; a tick measured in minutes would let a document that just finished sit in the
+    // wrong carousel long enough to be seen. Five seconds and a minute are the bounds of that argument.
+    expect(LIBRARY_REFRESH_MS).toBeGreaterThanOrEqual(5_000);
+    expect(LIBRARY_REFRESH_MS).toBeLessThanOrEqual(60_000);
+  });
+
+  it("keeps its own number rather than reusing the category clock's", () => {
+    // One number serving both would be wrong for one of them: the category rule is measured in days and
+    // the listing changes in seconds. Pinning the two apart is what stops a later tidy-up from merging
+    // them into the slower one and quietly bringing the defect back.
+    expect(LIBRARY_REFRESH_MS).not.toBe(CATEGORY_REFRESH_MS);
   });
 });

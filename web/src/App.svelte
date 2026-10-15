@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { translate, type Locale } from "./lib/i18n";
   import {
+    startLibraryRefresh,
     type FolderActionStatus,
     type HomeCategory,
     type LibraryEntry,
@@ -109,6 +110,27 @@
       libraryError = String(error);
     } finally {
       libraryLoading = false;
+    }
+  }
+
+  // R28 (#46). The listing is re-read while the application runs, because the facts it lists change on
+  // their own: the tracker records a position every few seconds in the desktop process, so a document
+  // gains its first record, moves through its pages, and reaches its last one without the reader touching
+  // the interface. Reading it only at mount and after a scan made the screen look dead for as long as the
+  // application was working — which is the defect this function exists to remove.
+  //
+  // It is deliberately NOT `loadLibrary`: that one raises the loading state, and "reading the library" may
+  // only be said when there is nothing on screen yet. Raising it here would flash an empty grid over a
+  // listing that is already there, once per interval.
+  async function refreshLibrary(): Promise<void> {
+    try {
+      entries = await invoke<LibraryEntry[]>("list_library");
+      libraryError = null;
+    } catch (error) {
+      // A failed re-read is reported where the first load's failure is reported, because it is the same
+      // inability to read the library — and it clears on the next success, at most one interval away, so a
+      // transient failure heals itself instead of leaving a listing that looks current and is not.
+      libraryError = String(error);
     }
   }
 
@@ -265,6 +287,7 @@
     // screen through the same path — the hash listener above is what actually moves. A request that
     // names no screen is ignored rather than guessed at: it comes from outside the interface.
     let stopListening: Unlisten | null = null;
+    let stopLibraryRefresh: (() => void) | null = null;
     let cancelled = false;
 
     if (inTauri) {
@@ -272,6 +295,12 @@
       void loadLibrary();
       void loadProviders();
       void loadFolders();
+      // R28: the same interval keeps the listing current, and it starts with the application rather than
+      // with a screen, because the listing is what the screens receive. Outside the shell there is no store
+      // to re-read, so the clock does not start.
+      stopLibraryRefresh = startLibraryRefresh(() => {
+        void refreshLibrary();
+      });
       void listen<string>(OPEN_SCREEN_EVENT, (screen) => {
         if (isScreen(screen)) {
           window.location.hash = hashForScreen(screen);
@@ -301,6 +330,7 @@
       cancelled = true;
       window.removeEventListener("hashchange", sync);
       stopListening?.();
+      stopLibraryRefresh?.();
     };
   });
 </script>

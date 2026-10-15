@@ -522,6 +522,35 @@ export function startCategoryRefresh(onTick: () => void): () => void {
 }
 
 /**
+ * How often the running application re-reads the library listing, in milliseconds.
+ *
+ * The listing changes on its own while the application runs: the tracker writes a reading position every
+ * few seconds from the desktop process (and writes nothing when the position has not changed), so a
+ * document gains its first record, moves through its pages, and reaches its last one without anybody
+ * touching the interface. Re-reading only at mount made the screen look dead for as long as the
+ * application was working — the reader had to relaunch it to see Inicio change.
+ *
+ * **Fifteen seconds** is the design point: four small reads a minute against a local SQLite database, and a
+ * lag shorter than the time it takes to read a page. Matching the tracker's own three-second tick would buy
+ * freshness nothing can see, and a whole minute would leave a document that just finished sitting in "in
+ * progress" long enough to be noticed.
+ */
+export const LIBRARY_REFRESH_MS = 15_000;
+
+/**
+ * Starts the clock that re-reads the library listing, and returns the function that stops it.
+ *
+ * The same shape as [`startCategoryRefresh`], and for the same reason: the caller passes what to re-read and
+ * owns the state, so the clock itself is testable with fake timers and no DOM. It keeps its own constant
+ * because the two answer different questions — one re-evaluates a rule measured in days, the other re-reads
+ * facts that change in seconds — and one number serving both would be wrong for one of them.
+ */
+export function startLibraryRefresh(reload: () => void): () => void {
+  const timer = setInterval(reload, LIBRARY_REFRESH_MS);
+  return () => clearInterval(timer);
+}
+
+/**
  * The documents in one home category (R4 / B3).
  *
  * `now` is passed in rather than read from the clock so the rule is testable without a browser and
