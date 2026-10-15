@@ -984,6 +984,87 @@ rather than an invented number.
 - **U9** R19 — **done** (`667bec5`): the page count as a badge on the cover's bottom-right, mirroring the
   folder action at its top-right, drawn only when the count is known (`L40`)
 
+## Specs — the watched folders (round 5, L41)
+
+Five items the user listed after using the folder chooser, in their order. Two are what they saw and three
+are behaviour.
+
+- **R20 — A watched folder can be removed.** Verbatim: *"Se tendria que poder eliminar una carpeta
+vigilida."* Removing a watch is not deleting a library: the folder stops being watched and the documents
+and their positions stay, because the user asked to stop watching, not to forget what they read.
+- **R21 — The watched folder's path is smaller.** Verbatim: *"El texto que indica la URL de las carpeta
+vigilada deberia ser un poco más pequeño."* It is the least important thing on that row and currently
+reads as the most important.
+- **R22 — A subfolder of a watched folder is refused, and the refusal says why.** Verbatim: *"No se tendria
+que dejar añadir una subcarpeta de una carpeta que ya esta vigilida. Cuando el usuario quiera hacer eso, se
+le tendria que dar una alerta explicando por que se bloqueo y no se agrego la nueva carpeta que
+selecciono."* The message names the folder that already covers the choice, because "it was blocked" with no
+"by which one" is a half-answer. The rule compares path components, never string prefixes: `/lib/pdfs-old`
+is not inside `/lib/pdfs`, and a string comparison would say it is.
+- **R23 — The folder section stops looking broken.** Verbatim: *"La UI de la seccion para seleccionar
+carpetas es HORRIBLE"*, with two screenshots. The cause is a layout fact rather than a taste: the form is a
+flex row, so the chooser button, the disclosure and the scan button were laid out on one line with no
+hierarchy, and the scan result broke a path across lines at the same weight as everything else. The section
+is reorganised so the order of the task is the order on screen — choose or type, see the path, then scan —
+with the path in a secondary size.
+- **R24 — A watched folder opens from its path.** Verbatim: *"En la seccion de carpetas vigiladas, se tiene
+que permitir hacer clic sobre la URL y que se abra la carpeta en el explorador"*. It opens the folder
+itself, which `open_containing_folder` does not do.
+
+### Tasks — round 5
+
+- **U10** R20, R21, R22, R23, R24 — watched folders: removal, a smaller path, a refused subfolder that says
+  why, a section that reads in the order of the task, and a path that opens the folder
+
+## Specs — the scan section, the alert, and what removing a watch means (round 6, L42)
+
+Three items from the user's first look at `U10`'s result. The third changes a rule `U10` had already written
+down, and the newest word wins.
+
+- **R25 — The scan section's composition.** Verbatim: *"La estructura/composicion de la seccion 'Escanear
+una carpeta' no me gusta, es fea esa seccion."* The cause is visible in the screenshot they attached, and it
+is composition rather than size: the section is a stack of six blocks of equal weight — two identical dark
+buttons, three lines of text, the browser's default disclosure triangle, and a path broken mid-word — with
+nothing grouping the things that belong together. The redesign puts the two ACTIONS in one row (choosing a
+folder and scanning it), the field-like readout of the chosen path under them, and the manual entry as a
+quiet link rather than a disclosure box. Two decisions inside that composition are worth writing down,
+because they are taste and the next reader might otherwise "fix" them: the scan action is the prominent one
+and stays disabled until there is a path (it is the action the panel exists for, and a disabled submit
+button is a shape every form already teaches), and the confirmation states the count rather than listing
+document names (the modal already names the folder they are all inside, the count tells the size of the
+loss, and a wall of paths in a confirm dialog is noise at the moment a person wants a decision).
+- **R26 — The refusal is a modal, not a line under the form.** Verbatim: *"La alerta ... no debe aparecer
+debajo, tiene que aparecer en un modal/dialog."* The interface gets a modal of its own rather than the
+native dialog plugin's message box, for two reasons: it keeps the words in the catalogue where every other
+word of the interface lives, and the same modal is what the removal in `R27` needs to state its consequence
+before doing something irreversible. The refusal's own sentence is fixed at the same time
+(`#56`): re-adding a folder that is already watched returns the chosen path as its own covering folder, so
+the alert read *"that folder is inside <the folder you just chose>, which is already watched"*. A person
+learns nothing from being told that a folder is inside itself, so the covering folder being the candidate
+is its own sentence.
+- **R27 — Removing a watch takes its documents with it.** Verbatim: *"Elimine la carpeta de 'Borges' pero el
+PDF que allí estaba, sigue apareciendo en mi biblioteca."* `R20` had said the opposite — that removing a
+watch leaves the documents alone — and the user has now said what they actually mean, which is that a
+folder they stopped watching should leave their library. **The consequence is destructive and is stated
+before it happens**: the documents inside that folder are removed from the library, together with their
+positions, and the confirmation names how many. Two guards: documents still covered by ANOTHER remaining
+watch stay (the user's own store already holds a nested pair, so removing the outer folder must not empty
+a folder that is still watched), and a position is not lost for good even when it is removed — the viewer
+still holds it in its own metadata, so re-watching the folder brings it back through the launch sweep.
+That last sentence is what makes the confirmation honest rather than scary, and it is the reason to say it.
+**The count is not a guess the interface makes**: the same computation that performs the removal can be read
+first, so the number the modal states and the number of rows that actually leave are answers to the same
+question, given by the same code. What they are **not** is a reserved snapshot — they are two calls, the
+second one re-reads the store, and a store that changed in between can make the confirmation stale by the
+time it is answered. The sentence used to claim the two numbers "cannot disagree", which is more than the
+code does; naming the window is the honest version.
+
+### Tasks — round 6
+
+- **U11** R25, R26, R27 — the scan section rebuilt around its two actions, a modal for the refusal (and for
+the self-covered sentence, `#56`), and a removal that takes its documents with it after stating the count
+  the same computation will carry out
+
 **How a unit lands (L26).** A unit is done when the user says they like it, not when the checks pass.
 The sequence is: implement → run the checks (tests, build, and the engine measurement where one applies)
 → rebuild the binary and hand the running application over → **wait** → commit with its tests and docs
@@ -2254,3 +2335,125 @@ reasoning, and the first where the wrong side was the maintainer's own reading o
 **Debt avoided**: the `.pages` rule went with the markup that used it, so nothing was left dead behind
 this change — the same discipline that produced its own task for the dead `status` chain instead of a
 hurried removal.
+
+## L41 — five things about watched folders
+
+> Hay algunas cositas de UI y de funcionalidad que deberiamos pulir, ya que me han molestado un poco:
+>
+> - Se tendria que poder eliminar una carpeta vigilida.
+> - El texto que indica la URL de las carpetas vigiladas deberia ser un poco más pequeño.
+> - No se tendria que dejar añadir una subcarpeta de una carpeta que ya esta vigilida. Cuando el usuario quiera hacer eso, se le tendria que dar una alerta explicando por que se bloqueo y no se agrego la nueva carpeta que selecciono.
+> - La UI de la seccion para seleccionar carpetas es HORRIBLE (dos capturas de pantalla)
+> - En la seccion de carpetas vigiladas, se tiene que permitir hacer clic sobre la URL y que se abra la carpeta en el explorador
+
+The list arrived within an hour of the chooser landing, and it reads the way the most useful feedback in
+this log reads: three items about behaviour that was missing and two about what the screen looks like. One
+of them — refusing a subfolder of a watched folder — is a rule the application should have been able to
+enforce on its own from the beginning. All five are specified as `R20`–`R24` above.
+
+**The layout item has a cause rather than a taste**, and the user's screenshots are what makes it fixable
+without guessing: the section's form is a flex row, so "Elegir carpeta", the manual-entry disclosure and
+"Escanear" landed on one line as if they were all the same kind of thing, and the scan result broke a path
+across lines at the same weight as everything else around it.
+
+## L42 — the section, the alert, and what removing a watch means
+
+> Hay cosas para corregir aun:
+>
+> - La estructura/composicion de la seccion "Escanear una carpeta" no me gusta, es fea esa seccion.
+> - La alerta [captura] no debe aparecer debajo, tiene que aparecer en un modal/dialog.
+> - Elimine la carpeta de "Borges" pero el PDF que allí estaba, sigue apareciendo en mi biblioteca.
+
+The first two are the same section seen twice, and the third is a rule this log had already recorded the
+wrong way round.
+
+**The composition, read from their screenshot.** After `R23` the section stopped being a flex row, but it
+became a column of six blocks of equal weight — two identical dark buttons, the path, the reread line, the
+browser's own disclosure triangle, and the alert at the bottom. Making a list vertical is not the same as
+composing it. `R25` is therefore about grouping: the two ACTIONS belong in one row, because choosing a
+folder and scanning it are the two things a person can do here; the chosen path belongs under them as a
+field-like readout rather than as prose; and the manual entry is an alternative route to the same field, so
+it reads as a link and not as a box.
+
+**The modal is also the honest place for a destructive decision.** The user asked for the alert to be a
+dialog; the removal in `R27` needs exactly the same thing, so one modal serves both instead of two shapes
+doing one job. That is why the interface gets its own modal rather than the native message box the dialog
+plugin could open: the words stay in the catalogue with every other word of the interface, and the modal
+can state a consequence with a count in it.
+
+**`R27` reverses a decision, and the reversal is the user's to make.** `R20` said removing a watch leaves
+the documents alone; the user has now seen what that means in practice and said what they meant. The
+dangerous half is worth naming plainly: this deletes rows from `documents` and their positions from
+`progress`. Two guards make it safe enough to offer — a document still covered by another remaining watch
+is kept, and the positions are recoverable because the viewer's own metadata still holds them, so re-watching
+the folder brings them back through the launch sweep. The confirmation states the count and that sentence
+before it does anything, and a destructive operation needs an independent check afterwards, not only the
+author's own tests.
+
+**The verification found two things worth writing down.** The first is a correction to my own words in
+`R27`, and the correction is the honest half: the sentence claimed the number the modal states and the
+number of rows that actually leave *cannot disagree*, because both come from the same computation. They come
+from the same computation, yes — but they are two calls, and the second one re-reads the store. The
+verifier demonstrated it: it read an empty plan, inserted a document, and watched the confirmation's own
+number become stale. The sentence now says what is true — same question, same code — and names the window
+as the residual. This is the fourth time in this document that the measurement corrected a sentence rather
+than the code (`A2`, `R14`, `#53`), and the pattern is worth keeping in view: a spec sentence is a claim
+like any other, and a claim nobody can falsify is the one that rots.
+
+The second is a test that was missing for a claim the code already made. `forget_folder` deletes the
+documents and the watch row in one transaction, and *nothing in the suite could tell that from two
+statements in a row*, because every test exercised a removal that succeeded. The test added now injects a
+failure with a SQLite trigger and asserts the first delete came back — and it was falsified by replacing
+the transaction with two plain statements, which left the document deleted and the test red
+(`left: 0, right: 1`). The cascade onto `open_events` got a test in the same pass, for the same reason: it
+was true, and nothing would have noticed it stopping being true.
+
+**Residuals this unit leaves, named rather than hidden.** (1) *The confirmation is not a reserved
+snapshot* — the plan and the removal are two calls, described above. Single-process today, so nothing can
+change in that window; the window is real all the same. (2) *`suggestions` rows are not touched*: they
+carry a path and no document foreign key, so a suggestion pointing inside a removed folder stays where it
+is. The criterion is about library documents and this is outside it, but no policy is stated for a
+suggestion whose folder is gone, and this is where that is recorded. (3) *Documents are identified from the
+snapshot the plan read*, and the store keeps its single-writer assumption, unchanged by this unit. (4) *The
+tracking loop cannot resurrect a removed document*, and that is verified rather than assumed:
+`track_open_documents` and `sweep_library` iterate `store.library()` and insert nothing, and the desktop
+process starts no folder watcher. When the live watcher is wired into it (a later task), it must not re-add
+what a removal took out. (5) *The recoverability sentence assumes the viewer is what kept the
+position.* It says the position is kept by the viewer and comes back, which is true for the positions this
+build records — every stored row today is `evince-gvfs/exact`, read from the viewer's own metadata. A
+position recorded by hand would not come back that way, and `ProgressSource::Manual` exists in the store
+with no writer yet, so the sentence is honest about the source it describes and would need to change if a
+manual source ever lands.
+
+## L43 — U10 and U11 land together, and the number the modal promises is the number it deletes
+
+Two units, one commit, and the reason is a fact rather than a shortcut: `U6`, `U10` and `U11` meet in
+`crates/oct-desktop/src/main.rs` and in one screen, and `U11` changes a signature `U10` had just written —
+`remove_folder` answered `bool` and answers the plan it carried out now. Splitting them would mean
+committing a revision that never ran; the revision that did run is the one this log already described at
+11:42. The user reviewed the three in one round, approved the result in their own words, and that is what
+lands.
+
+What the round cost and what it bought: **one defect of my own design**, found by the worker's flag rather
+than by a test — the confirmation said a folder had nothing in the library when in fact another watch
+covered everything in it, which is one sentence for two different facts and is now two sentences. **A spec
+sentence that claimed more than the code does**: `R27` promised the count shown and the count removed
+*cannot disagree*, and they are two calls against a store that is re-read, so the sentence now names that
+window as the residual it is. And **two claims that were true with no test able to notice them stopping
+being true**: the removal's transaction, and the cascade onto `open_events`. Six falsifications in total,
+each restored byte-identical, each reported with the test that went red and its message.
+
+The honest count as it stands: **182 Rust tests** (was 173), **104 tests in the interface** (was 85), clippy
+clean, `tsc` clean. And the chain that proves the running application is this code rather than last hour's:
+dist 12:17:48 < binary 12:22:39 < process 12:23:10, pid 130761, stderr empty, tray registered.
+
+One decision from the worker's handover deserves to be here rather than only in the task list, because it is
+the rule a future reader is most likely to "fix": removing a **nested inner** folder keeps its documents,
+because the outer watch still finds them and deleting them would be undone by the next scan of that folder.
+The guard asks "does any *remaining* watch cover this document", and an ancestor watch is a remaining watch.
+
+The test the user ran is worth recording because **their store is what shaped it**: `Borges` and
+`Programación` had already been removed with the OLD rule, so neither was in the watched list and there was
+no "Quitar" to press — the orphaned PDF sitting in their library was the proof of the old behaviour. The
+round trip therefore became: add Borges back, remove it, and watch the modal say one document and the PDF
+leave Biblioteca.
