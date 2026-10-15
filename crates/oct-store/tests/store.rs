@@ -21,6 +21,15 @@ fn document(path: &str, identity: FileId) -> Document {
     doc
 }
 
+/// Unix seconds, the unit both `progress.read_at` and `progress.updated_at` are stored in. A local
+/// mirror of the store's own clock so the tests can bracket a write rather than trust one instant.
+fn unix_now() -> i64 {
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after the epoch");
+    i64::try_from(duration.as_secs()).expect("Unix seconds fit an i64")
+}
+
 // --- S1: the documented tables -----------------------------------------------------------------
 
 #[test]
@@ -71,6 +80,142 @@ fn progress_keeps_source_and_confidence_distinct_after_a_round_trip() {
 
     let rows = store.progress_for_document(doc_id).expect("read progress");
     assert_eq!(rows, vec![from_viewer, by_hand]);
+}
+
+#[test]
+fn a_reading_time_round_trips_through_library_and_per_document_reads() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let doc_id = store
+        .upsert_document(&Document::new("/library/read.pdf"))
+        .expect("insert document");
+
+    let read_at = 1_700_000_000;
+    store
+        .record_progress(
+            doc_id,
+            &StoredProgress::new(
+                5,
+                Some(80),
+                ProgressSource::External("evince-gvfs"),
+                Confidence::Exact,
+            )
+            .with_read_at(Some(read_at)),
+        )
+        .expect("record progress");
+
+    let rows = store.progress_for_document(doc_id).expect("read progress");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].read_at, Some(read_at),
+        "the reading time must survive the round trip"
+    );
+
+    let library = store.library().expect("list the library");
+    assert_eq!(library.len(), 1);
+    assert_eq!(
+        library[0].progress.as_ref().and_then(|progress| progress.read_at),
+        Some(read_at),
+        "the listing must carry the reading time with the rest of the row"
+    );
+
+    // A row read back can be written again unchanged: `read_at` travels with the value, so a caller
+    // that re-records what it read does not silently drop the reading time.
+    let read_back = rows[0].clone();
+    store
+        .record_progress(doc_id, &read_back)
+        .expect("re-record what was read");
+    let again = store.progress_for_document(doc_id).expect("read progress");
+    assert_eq!(again.len(), 2);
+    assert_eq!(
+        again[1], read_back,
+        "a stored row must survive a read-and-write round trip unchanged"
+    );
+}
+
+#[test]
+fn progress_written_without_a_reading_time_reads_back_as_unknown() {
+    // The defect this slice removes: the write time was standing in for the reading time. A caller
+    // that knows only where the reader is must not be taken to claim when they read it.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let doc_id = store
+        .upsert_document(&Document::new("/library/read.pdf"))
+        .expect("insert document");
+
+    store
+        .record_progress(
+            doc_id,
+            &StoredProgress::new(5, Some(80), ProgressSource::Native, Confidence::Exact),
+        )
+        .expect("record progress");
+
+    let rows = store.progress_for_document(doc_id).expect("read progress");
+    assert_eq!(
+        rows[0].read_at, None,
+        "no source said when this was read, so the answer is `None`, not a fabricated time"
+    );
+    // Explicitly not the two tempting substitutes: the row's own write time, and zero.
+    assert_ne!(rows[0].read_at, Some(0), "unknown is not the epoch");
+
+    let library = store.library().expect("list the library");
+    let entry = &library[0];
+    assert_eq!(
+        entry.progress.as_ref().and_then(|progress| progress.read_at),
+        None
+    );
+    assert_ne!(
+        entry.progress.as_ref().and_then(|progress| progress.read_at),
+        entry.progress_recorded_at,
+        "the reading time must not be filled in from the row's write time"
+    );
+    assert!(
+        entry.progress_recorded_at.is_some(),
+        "the app still records when it wrote the row"
+    );
+}
+
+#[test]
+fn writing_a_row_stamps_its_own_time_even_when_the_reading_time_is_old() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let doc_id = store
+        .upsert_document(&Document::new("/library/read.pdf"))
+        .expect("insert document");
+
+    let a_year: i64 = 365 * 24 * 60 * 60;
+    let before = unix_now();
+    let old = before - a_year;
+    store
+        .record_progress(
+            doc_id,
+            &StoredProgress::new(
+                5,
+                Some(80),
+                ProgressSource::External("evince-gvfs"),
+                Confidence::Exact,
+            )
+            .with_read_at(Some(old)),
+        )
+        .expect("record progress");
+    let after = unix_now();
+
+    let library = store.library().expect("list the library");
+    let entry = &library[0];
+    let recorded_at = entry.progress_recorded_at.expect("a write time");
+    assert!(
+        recorded_at >= before && recorded_at <= after,
+        "the write time must be now ({before}..={after}), got {recorded_at}"
+    );
+    assert_ne!(
+        recorded_at, old,
+        "the write time must not be the year-old reading time"
+    );
+    assert_eq!(
+        entry.progress.as_ref().and_then(|progress| progress.read_at),
+        Some(old),
+        "the reading time must stay what the source reported"
+    );
 }
 
 // --- S3: portable identity, never only a path -------------------------------------------------
@@ -289,18 +434,24 @@ fn a_setting_round_trips_and_an_absent_key_reads_as_none() {
 }
 
 #[test]
-fn reopening_a_version_3_database_changes_nothing() {
+fn reopening_a_current_database_changes_nothing() {
     let (_dir, path) = temp_db();
     {
-        let store = Store::open(&path).expect("migrate a fresh database to version 3");
-        assert_eq!(store.schema_version().expect("version"), 3);
+        let store = Store::open(&path).expect("migrate a fresh database");
+        assert_eq!(
+            store.schema_version().expect("version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
         store.set_setting("language", "es").expect("write a setting");
     }
     let before = std::fs::read(&path).expect("read the database bytes");
 
     {
         let store = Store::open(&path).expect("reopen a current database");
-        assert_eq!(store.schema_version().expect("version"), 3);
+        assert_eq!(
+            store.schema_version().expect("version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(
             store.get_setting("language").expect("read"),
             Some("es".to_string()),
@@ -311,7 +462,7 @@ fn reopening_a_version_3_database_changes_nothing() {
     let after = std::fs::read(&path).expect("read the database bytes");
     assert_eq!(
         before, after,
-        "reopening a version-3 database must not rewrite it"
+        "reopening a current database must not rewrite it"
     );
 }
 
@@ -333,6 +484,202 @@ fn a_database_from_a_newer_build_is_refused_rather_than_downgraded() {
 
     let error = Store::open(&path).expect_err("a newer schema must be refused");
     assert!(matches!(error, OctError::Storage(_)), "unexpected: {error:?}");
+}
+
+#[test]
+fn a_step_that_fails_on_the_way_to_v4_leaves_the_database_at_v3_untouched() {
+    // Every migration step is one transaction, so a step that fails must leave the recorded version
+    // and every existing row exactly as they were. The success path cannot show that: only a step
+    // that actually fails can tell one transaction from "do the work, then stamp the version".
+    //
+    // The failure needs no seam and no mock. A database is built with real rows and the store's own
+    // current schema — so `progress` already has `read_at` — and then only its version stamp is
+    // rewound to 3. Reopening it runs the V4 step, `ALTER TABLE progress ADD COLUMN read_at`, against
+    // a table that already has that column, which SQLite refuses with "duplicate column name".
+    let (_dir, path) = temp_db();
+
+    let document_id;
+    let read_at = 1_700_000_000;
+    {
+        let store = Store::open(&path).expect("build a current database");
+        let mut doc = document("/library/at-risk.pdf", FileId::Posix { dev: 3, ino: 17 });
+        doc.pages = Some(120);
+        doc.title = Some("At risk".to_string());
+        document_id = store.upsert_document(&doc).expect("insert the document");
+        store
+            .record_progress(
+                document_id,
+                &StoredProgress::new(
+                    12,
+                    Some(120),
+                    ProgressSource::External("evince-gvfs"),
+                    Confidence::Exact,
+                )
+                .with_read_at(Some(read_at)),
+            )
+            .expect("record the position");
+        store.set_setting("language", "es").expect("write a setting");
+    }
+
+    // The write time is stamped by `unix_now`, so it is captured before the failure rather than
+    // guessed afterwards; the assertion below is that it does not move.
+    let recorded_before: i64 = {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.query_row(
+            "SELECT updated_at FROM progress WHERE doc_id = ?1",
+            rusqlite::params![document_id],
+            |row| row.get(0),
+        )
+        .expect("read the write time")
+    };
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.pragma_update(None, "user_version", 3i64)
+            .expect("rewind the version stamp to the pre-V4 database shape");
+    }
+
+    // 1. The failing step reaches the caller rather than being swallowed or papered over.
+    let error = Store::open(&path).expect_err("the V4 step must fail when `read_at` already exists");
+    assert!(
+        matches!(error, OctError::Storage(_)),
+        "a failed migration must surface as a storage error, got {error:?}"
+    );
+
+    // 2. The version was not stamped ahead of work that did not happen.
+    let raw = rusqlite::Connection::open(&path).expect("open raw");
+    let version: i64 = raw
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("read the version");
+    assert_eq!(
+        version, 3,
+        "a failed V4 step must leave the database at version 3, not claim version 4"
+    );
+
+    // 3. Every pre-existing value is still readable: the document, its position with its provenance
+    //    and reading time, the row's own write time, and the setting the previous step recorded.
+    let (path_value, title, pages): (String, Option<String>, Option<i64>) = raw
+        .query_row(
+            "SELECT path, title, pages FROM documents WHERE id = ?1",
+            rusqlite::params![document_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("the document must survive the failed migration");
+    assert_eq!(path_value, "/library/at-risk.pdf");
+    assert_eq!(title.as_deref(), Some("At risk"));
+    assert_eq!(pages, Some(120));
+
+    let (page, total, source, confidence, stored_read_at, updated_at): (
+        i64,
+        Option<i64>,
+        String,
+        String,
+        Option<i64>,
+        i64,
+    ) = raw
+        .query_row(
+            "SELECT page, total, source, confidence, read_at, updated_at \
+             FROM progress WHERE doc_id = ?1",
+            rusqlite::params![document_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .expect("the position must survive the failed migration");
+    assert_eq!(page, 12);
+    assert_eq!(total, Some(120));
+    assert_eq!(source, "evince-gvfs");
+    assert_eq!(confidence, "exact");
+    assert_eq!(stored_read_at, Some(read_at));
+    assert_eq!(
+        updated_at, recorded_before,
+        "the row's write time must not move under a failed migration"
+    );
+
+    let language: String = raw
+        .query_row("SELECT value FROM settings WHERE key = 'language'", [], |row| {
+            row.get(0)
+        })
+        .expect("the setting must survive the failed migration");
+    assert_eq!(language, "es");
+
+    // 4. No half-applied state: the column the failing step wanted to add is still there exactly
+    //    once, the table keeps its documented columns, and no table was created or dropped.
+    let mut statement = raw
+        .prepare("SELECT name FROM pragma_table_info('progress')")
+        .expect("prepare");
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        columns.iter().filter(|name| name.as_str() == "read_at").count(),
+        1,
+        "the failed ADD COLUMN must not have left a second `read_at`; columns: {columns:?}"
+    );
+    for documented in [
+        "id",
+        "doc_id",
+        "page",
+        "total",
+        "source",
+        "confidence",
+        "read_at",
+        "updated_at",
+    ] {
+        assert!(
+            columns.iter().any(|name| name == documented),
+            "the failed step must not have removed `{documented}`; columns: {columns:?}"
+        );
+    }
+    assert_eq!(
+        columns.len(),
+        8,
+        "the progress table must keep its eight columns, found {columns:?}"
+    );
+
+    let tables: Vec<String> = raw
+        .prepare(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        tables,
+        vec![
+            "documents",
+            "folders",
+            "open_events",
+            "progress",
+            "settings",
+            "suggestions",
+            "viewers",
+        ],
+        "the failed migration must not have created or dropped a table"
+    );
+
+    let document_count: i64 = raw
+        .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+        .expect("count the documents");
+    let progress_count: i64 = raw
+        .query_row("SELECT COUNT(*) FROM progress", [], |row| row.get(0))
+        .expect("count the positions");
+    assert_eq!(
+        (document_count, progress_count),
+        (1, 1),
+        "no row may be lost or duplicated by a failed migration"
+    );
 }
 
 // --- S7: paths are opaque UTF-8 and are not Unicode-normalised --------------------------------
@@ -432,7 +779,16 @@ fn the_schema_has_the_documented_columns_of_every_table() {
         ),
         (
             "progress",
-            &["id", "doc_id", "page", "total", "source", "confidence", "updated_at"],
+            &[
+                "id",
+                "doc_id",
+                "page",
+                "total",
+                "source",
+                "confidence",
+                "read_at",
+                "updated_at",
+            ],
         ),
         (
             "open_events",

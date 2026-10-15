@@ -9,7 +9,7 @@
 //! | Table | Purpose |
 //! | --- | --- |
 //! | `documents` | One row per PDF: path, portable identity, size, mtime, page count, title, author, how it was discovered, when first and last seen. |
-//! | `progress` | Reading position **with its provenance**: page, total, `source`, `confidence`, when recorded. |
+//! | `progress` | Reading position **with its provenance**: page, total, `source`, `confidence`, when read, when recorded. |
 //! | `open_events` | Intervals during which a document was open: document, process, viewer, start, end. |
 //! | `viewers` | Known viewers and their declared capability, so it is not recomputed on every launch. |
 //! | `folders` | Directories the user nominated as the source of truth, plus whether the watcher is enabled. |
@@ -204,6 +204,24 @@ CREATE TABLE settings (
 );
 ";
 
+/// Version 4: `progress` records **when the reader read**, separately from when the app wrote the
+/// row.
+///
+/// `updated_at` keeps its meaning untouched — when the app wrote the row — and gains a sibling,
+/// `read_at`, which only a source that observed a reading may fill. A `NULL` says the app **does
+/// not know**, and that is a distinct fact from "read long ago": the launch sweep writes a position
+/// for every known document, so a whole library answers with one moment, and inferring a reading
+/// time from it would fabricate evidence the app never had.
+///
+/// Added as a migration rather than by editing an earlier schema, because all of them are
+/// **frozen**: a database an earlier build already created reports their versions, and editing the
+/// text would leave that database without the column forever while claiming otherwise. `ALTER TABLE
+/// ... ADD COLUMN` is idempotent in the sense that matters here because the recorded version gates
+/// it: it runs only on the V3 -> V4 step, once, and the step is stamped in its own transaction.
+const SCHEMA_V4: &str = "
+ALTER TABLE progress ADD COLUMN read_at INTEGER;
+";
+
 /// A stored document, together with its database id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentRecord {
@@ -304,6 +322,11 @@ pub struct Store {
     connection: Connection,
 }
 
+/// The `progress` columns [`Store::library`] reads for a document's latest row, in select order:
+/// page, total, source, confidence, read time, write time. Named so the tuple does not turn every
+/// call site into a puzzle, and so the read and the write cannot drift apart silently.
+type LatestProgressColumns = (i64, Option<i64>, String, String, Option<i64>, i64);
+
 /// The watched folder that covers `path`, when one does, preferring the tightest one.
 ///
 /// "Covers" means `path` is the watched folder itself or a folder inside it, and the question is
@@ -325,7 +348,7 @@ pub fn covering_folder<'a>(folders: &'a [WatchedFolder], path: &Path) -> Option<
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -593,6 +616,11 @@ impl Store {
     /// Records a reading position with its provenance and returns the new row id.
     ///
     /// [`StoredProgress::page`] is zero-based and is stored unchanged.
+    ///
+    /// **Two times, deliberately separate.** `updated_at` is stamped with `unix_now()` — when the
+    /// app wrote this row, which is a fact the app always has. `read_at` is written from
+    /// [`StoredProgress::read_at`] and is left `NULL` when the caller does not know, so a caller
+    /// cannot accidentally present the write time as a reading time.
     pub fn record_progress(
         &self,
         doc_id: i64,
@@ -600,14 +628,15 @@ impl Store {
     ) -> Result<i64, OctError> {
         self.connection
             .execute(
-                "INSERT INTO progress (doc_id, page, total, source, confidence, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO progress (doc_id, page, total, source, confidence, read_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     doc_id,
                     i64::from(progress.page),
                     progress.total.map(i64::from),
                     progress.source.id(),
                     confidence_id(progress.confidence),
+                    progress.read_at,
                     unix_now()
                 ],
             )
@@ -621,7 +650,7 @@ impl Store {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT page, total, source, confidence FROM progress \
+                "SELECT page, total, source, confidence, read_at FROM progress \
                  WHERE doc_id = ?1 ORDER BY id",
             )
             .map_err(storage_error)?;
@@ -633,13 +662,14 @@ impl Store {
                     row.get::<_, Option<i64>>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
                 ))
             })
             .map_err(storage_error)?;
 
         let mut progress = Vec::new();
         for row in rows {
-            let (page, total, source, confidence) = row.map_err(storage_error)?;
+            let (page, total, source, confidence, read_at) = row.map_err(storage_error)?;
             let page = u32::try_from(page)
                 .map_err(|_| OctError::Storage(format!("stored page {page} is not a page number")))?;
             let total = total
@@ -649,12 +679,15 @@ impl Store {
                     OctError::Storage("stored total is not a valid page count".into())
                 })?;
 
-            progress.push(StoredProgress::new(
-                page,
-                total,
-                parse_progress_source(&source),
-                parse_confidence(&confidence)?,
-            ));
+            progress.push(
+                StoredProgress::new(
+                    page,
+                    total,
+                    parse_progress_source(&source),
+                    parse_confidence(&confidence)?,
+                )
+                .with_read_at(read_at),
+            );
         }
         Ok(progress)
     }
@@ -822,7 +855,7 @@ impl Store {
             .prepare(
                 "SELECT d.id, d.path, d.file_id_kind, d.volume_id, d.file_index, d.content_hash, \
                         d.pages, d.title, d.author, \
-                        p.page, p.total, p.source, p.confidence, p.updated_at \
+                        p.page, p.total, p.source, p.confidence, p.read_at, p.updated_at \
                  FROM documents d \
                  LEFT JOIN progress p ON p.id = (\
                      SELECT p2.id FROM progress p2 WHERE p2.doc_id = d.id \
@@ -843,11 +876,16 @@ impl Store {
                 let author: Option<String> = row.get(8)?;
                 // The LEFT JOIN leaves every `progress` column NULL for a document with none, so
                 // `p.page` is the presence check: it is NOT NULL whenever the row exists.
-                let progress: Option<(i64, Option<i64>, String, String, i64)> =
+                let progress: Option<LatestProgressColumns> =
                     match row.get::<_, Option<i64>>(9)? {
-                        Some(page) => {
-                            Some((page, row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?))
-                        }
+                        Some(page) => Some((
+                            page,
+                            row.get(10)?,
+                            row.get(11)?,
+                            row.get(12)?,
+                            row.get(13)?,
+                            row.get(14)?,
+                        )),
                         None => None,
                     };
                 Ok((
@@ -891,7 +929,7 @@ impl Store {
             })?;
 
             let (progress, progress_recorded_at) = match progress {
-                Some((page, total, source, confidence, updated_at)) => {
+                Some((page, total, source, confidence, read_at, updated_at)) => {
                     let page = u32::try_from(page).map_err(|_| {
                         OctError::Storage(format!("stored page {page} is not a page number"))
                     })?;
@@ -899,12 +937,15 @@ impl Store {
                         OctError::Storage("stored total is not a valid page count".into())
                     })?;
                     (
-                        Some(StoredProgress::new(
-                            page,
-                            total,
-                            parse_progress_source(&source),
-                            parse_confidence(&confidence)?,
-                        )),
+                        Some(
+                            StoredProgress::new(
+                                page,
+                                total,
+                                parse_progress_source(&source),
+                                parse_confidence(&confidence)?,
+                            )
+                            .with_read_at(read_at),
+                        ),
                         Some(updated_at),
                     )
                 }
@@ -1115,6 +1156,15 @@ fn migrate(connection: &mut Connection) -> Result<(), OctError> {
         transaction.commit().map_err(storage_error)?;
     }
 
+    if version < 4 {
+        let transaction = connection.transaction().map_err(storage_error)?;
+        transaction.execute_batch(SCHEMA_V4).map_err(storage_error)?;
+        transaction
+            .pragma_update(None, "user_version", 4i64)
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+    }
+
     Ok(())
 }
 
@@ -1308,12 +1358,100 @@ mod tests {
         (dir, path)
     }
 
+    /// Builds a database exactly as version 3 left it: the V1 schema plus the V2 folder index and
+    /// the V3 settings table, a watched folder, a document with one position, and the version
+    /// stamp. All three schema constants are used directly so the fixture cannot drift away from
+    /// the schemas it reproduces.
+    fn a_version_3_database() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("oct.sqlite3");
+        let connection = Connection::open(&path).expect("open raw");
+        connection
+            .execute_batch(SCHEMA_V1)
+            .expect("create the version 1 schema");
+        connection
+            .execute_batch(SCHEMA_V2)
+            .expect("apply the version 2 migration");
+        connection
+            .execute_batch(SCHEMA_V3)
+            .expect("apply the version 3 migration");
+        connection
+            .execute(
+                "INSERT INTO folders (path, recursive, enabled, added_at) VALUES (?1, 1, 1, 7)",
+                params!["/library/watched"],
+            )
+            .expect("record a folder the way version 3 did");
+        // A document with a position, both written before `read_at` existed, so the fixture is
+        // exactly the shape a real pre-V4 database has when the migration reaches it.
+        connection
+            .execute(
+                "INSERT INTO documents (path, path_normalized, uri, first_seen_at) \
+                 VALUES (?1, ?1, ?2, 9)",
+                params!["/library/read.pdf", "file:///library/read.pdf"],
+            )
+            .expect("record a document the way version 3 did");
+        connection
+            .execute(
+                "INSERT INTO progress (doc_id, page, total, source, confidence, updated_at) \
+                 VALUES (1, 5, 80, ?1, ?2, 99)",
+                params!["native", "exact"],
+            )
+            .expect("record a position the way version 3 did");
+        connection
+            .pragma_update(None, "user_version", 3i64)
+            .expect("stamp version 3");
+        drop(connection);
+        (dir, path)
+    }
+
+    #[test]
+    fn a_version_3_database_gains_read_at_and_keeps_its_rows() {
+        let (_dir, path) = a_version_3_database();
+
+        let store = Store::open(&path).expect("opening migrates the database");
+        assert_eq!(store.schema_version().expect("schema version"), 4);
+
+        // The watch, the document and its position all survive the V3 -> V4 step.
+        let folders = store.folders().expect("list folders");
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].path, PathBuf::from("/library/watched"));
+
+        let library = store.library().expect("list the library");
+        assert_eq!(library.len(), 1);
+        let progress = library[0]
+            .progress
+            .as_ref()
+            .expect("the position must survive the migration");
+        assert_eq!(progress.page, 5);
+        assert_eq!(progress.total, Some(80));
+        // A row written before the column existed has no reading time, and the migration must not
+        // fabricate one out of `updated_at`: "the app does not know" is the honest answer.
+        assert_eq!(
+            progress.read_at, None,
+            "a pre-V4 row must read back as unknown, not as its own write time"
+        );
+
+        // And the column the migration exists for is live afterwards: a reading time round-trips.
+        let doc_id = library[0].document.id;
+        store
+            .record_progress(
+                doc_id,
+                &StoredProgress::new(6, Some(80), ProgressSource::Native, Confidence::Exact)
+                    .with_read_at(Some(1234)),
+            )
+            .expect("record a position with a reading time");
+        let rows = store.progress_for_document(doc_id).expect("read positions");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].read_at, None, "the old row keeps its unknown time");
+        assert_eq!(rows[1].read_at, Some(1234), "the new time survives the migration");
+    }
+
     #[test]
     fn a_version_2_database_gains_settings_and_keeps_its_rows() {
         let (_dir, path) = a_version_2_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 3);
+        assert_eq!(store.schema_version().expect("schema version"), 4);
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -1341,7 +1479,7 @@ mod tests {
         let (_dir, path) = a_version_1_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 3);
+        assert_eq!(store.schema_version().expect("schema version"), 4);
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -1350,7 +1488,7 @@ mod tests {
         assert!(folders[0].recursive);
         assert!(folders[0].enabled);
 
-        // V1 arrives at the same version 3 as everything else, settings table included.
+        // V1 arrives at the same current version as everything else, settings table included.
         store
             .set_setting("language", "es")
             .expect("the settings table must exist after the V1 -> 3 migration");
@@ -1378,7 +1516,7 @@ mod tests {
         let before = std::fs::read(&path).expect("read the database bytes");
 
         let store = Store::open(&path).expect("reopen");
-        assert_eq!(store.schema_version().expect("schema version"), 3);
+        assert_eq!(store.schema_version().expect("schema version"), 4);
         drop(store);
 
         let after = std::fs::read(&path).expect("read the database bytes");

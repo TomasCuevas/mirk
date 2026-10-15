@@ -14,7 +14,14 @@ function entries(count: number): LibraryEntry[] {
     title: `Document ${index}`,
     author: null,
     pages: 10,
-    progress: { page: 1, total: 10, source: "native", confidence: "exact", recordedAt: null },
+    progress: {
+      page: 1,
+      total: 10,
+      source: "native",
+      confidence: "exact",
+      recordedAt: null,
+      readAt: null,
+    },
   }));
 }
 

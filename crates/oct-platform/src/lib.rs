@@ -17,6 +17,13 @@
 //! indistinguishable from a real one, which is the failure mode this project exists to avoid.
 //! Callers are therefore expected to surface `NotSupported` as a missing capability.
 
+/// The desktop's recent-files history (freedesktop `recently-used.xbel`).
+///
+/// Declared on every platform because it is a pure parser: only [`recent::recently_used_path`]
+/// names a Linux location, while the parsing and timestamp logic are platform-independent and
+/// therefore testable wherever the crate is built.
+pub mod recent;
+
 #[cfg(target_os = "linux")]
 mod linux;
 

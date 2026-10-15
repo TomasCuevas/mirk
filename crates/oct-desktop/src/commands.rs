@@ -24,7 +24,10 @@ use crate::shell;
 /// A reading position serialised for the interface, provenance included.
 ///
 /// `source` and `confidence` stay two fields, mirroring the two store columns: the screen renders
-/// them separately and must never be handed a single flattened value.
+/// them separately and must never be handed a single flattened value. `recorded_at` is when the app
+/// wrote the row; `read_at` is when a source observed the reading, and serialises as `readAt` to
+/// match the interface's own spelling. They are deliberately two fields, because a row the app
+/// wrote is not evidence of a reading.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressView {
@@ -33,6 +36,7 @@ pub struct ProgressView {
     pub source: String,
     pub confidence: String,
     pub recorded_at: Option<i64>,
+    pub read_at: Option<i64>,
 }
 
 impl ProgressView {
@@ -43,6 +47,7 @@ impl ProgressView {
             source: progress.source.id().to_string(),
             confidence: confidence_id(progress.confidence),
             recorded_at,
+            read_at: progress.read_at,
         }
     }
 }
@@ -474,6 +479,45 @@ mod tests {
             .find(|entry| entry.id == unread_id)
             .expect("the unread document");
         assert_eq!(unread.progress, None, "no progress must stay absent, not become zero");
+    }
+
+    #[test]
+    fn the_library_view_carries_the_reading_time_apart_from_the_write_time() {
+        let store = in_memory_store();
+        let doc_id = store
+            .upsert_document(&document("/library/read.pdf", 1, 3))
+            .expect("insert");
+
+        // A reading time a year old, written now. Both facts must reach the view, and the write
+        // time must not be allowed to stand in for the reading time.
+        let old = 1_600_000_000;
+        store
+            .record_progress(
+                doc_id,
+                &StoredProgress::new(
+                    4,
+                    Some(80),
+                    ProgressSource::External("evince-gvfs"),
+                    Confidence::Exact,
+                )
+                .with_read_at(Some(old)),
+            )
+            .expect("record");
+
+        let entries = library_entries(&store).expect("list the library");
+        let progress = entries[0].progress.as_ref().expect("progress present");
+        // `ProgressView` derives `Serialize` with `rename_all = "camelCase"`, so `read_at` reaches
+        // the interface as `readAt`, exactly as `recorded_at` reaches it as `recordedAt`.
+        assert_eq!(progress.read_at, Some(old), "the reading time must reach the view");
+        assert!(
+            progress.recorded_at.is_some(),
+            "the row still records when the app wrote it"
+        );
+        assert_ne!(
+            progress.recorded_at,
+            Some(old),
+            "the write time must not be mistaken for the reading time"
+        );
     }
 
     #[test]

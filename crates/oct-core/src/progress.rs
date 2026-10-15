@@ -97,17 +97,37 @@ pub struct StoredProgress {
     pub source: ProgressSource,
     /// How much to trust it.
     pub confidence: Confidence,
+    /// When the reader read this, in Unix seconds, as reported by the source that observed it.
+    ///
+    /// `None` is not "long ago": it is "no source said", and it must stay distinguishable from a
+    /// time. This is a **different fact** from when the app wrote the row, which is why it travels
+    /// as its own field rather than reusing the row's write time.
+    pub read_at: Option<i64>,
 }
 
 impl StoredProgress {
     /// Creates a position with explicit provenance.
+    ///
+    /// No reading time is attached: a caller that does not know when something was read must not be
+    /// taken to claim it does. Attach one with [`StoredProgress::with_read_at`].
     pub fn new(page: u32, total: Option<u32>, source: ProgressSource, confidence: Confidence) -> Self {
         Self {
             page,
             total,
             source,
             confidence,
+            read_at: None,
         }
+    }
+
+    /// The same value with a reading time attached.
+    ///
+    /// The constructor keeps its current shape so existing callers do not grow an argument they do
+    /// not have. `None` remains available and means "no source said" — see
+    /// [`StoredProgress::read_at`].
+    pub fn with_read_at(mut self, read_at: Option<i64>) -> Self {
+        self.read_at = read_at;
+        self
     }
 
     /// Fraction read, in `0.0..=1.0`, or [`None`] when the total page count is unknown.

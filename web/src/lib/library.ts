@@ -32,8 +32,20 @@ export interface Progress {
   source: string;
   /** `"exact"`, `"close-time"`, `"manual"` or `"unknown"`. */
   confidence: string;
-  /** Unix seconds when the position was recorded, or null. */
+  /**
+   * Unix seconds when the position was recorded — when the APP wrote the row. It is a real fact and it is
+   * deliberately not the answer to "when did you read this": the launch sweep writes a whole library at
+   * once, so this says when we looked.
+   */
   recordedAt: number | null;
+  /**
+   * Unix seconds when a source that OBSERVED the reading says it happened, or null for "no source said".
+   *
+   * Null is not "long ago". It is the honest answer for a document no source ever recorded, and it must
+   * stay distinguishable from a time — which is why the category rule and the carousels' order read this
+   * field and not `recordedAt`.
+   */
+  readAt: number | null;
 }
 
 /** One document in the library view. */
@@ -457,7 +469,7 @@ export function paginate<T>(
 // progress sort use — so a category can never disagree with the number printed on the card.
 //
 // **The stale category is measured from `progress.updated_at`**, which the interface receives as
-// `Progress.recordedAt`. `documents.last_opened_at` exists in the schema but nothing ever writes it,
+// `Progress.readAt`. `documents.last_opened_at` exists in the schema but nothing ever writes it,
 // so a query built on it would return confident nonsense (B3).
 
 /** The three summary categories on Inicio. */
@@ -480,7 +492,7 @@ export function isHomeCategory(value: string): value is HomeCategory {
  */
 export const STALE_AFTER_DAYS = 30;
 
-/** The same threshold in Unix seconds, the unit `Progress.recordedAt` is stored in. */
+/** The same threshold in Unix seconds, the unit `Progress.readAt` is stored in. */
 export const STALE_AFTER_SECONDS = STALE_AFTER_DAYS * 24 * 60 * 60;
 
 /**
@@ -497,7 +509,7 @@ export const STALE_AFTER_SECONDS = STALE_AFTER_DAYS * 24 * 60 * 60;
 export const CATEGORY_REFRESH_MS = 60_000;
 
 /**
- * The current time as Unix seconds — the unit `Progress.recordedAt` and the `now` the category rule
+ * The current time as Unix seconds — the unit `Progress.readAt` and the `now` the category rule
  * takes both use.
  *
  * A helper rather than `Math.floor(Date.now() / 1000)` at each call site: if one caller passed
@@ -560,13 +572,30 @@ export function startLibraryRefresh(reload: () => void): () => void {
  * - **finished** — a position is recorded and it is at the end. "At the end" is the same
  *   `progressFraction(...) === 1` the card and the progress sort already use, so the three cannot
  *   disagree about which documents are done.
- * - **stale** — a position is recorded and its own timestamp (`progress.updated_at`) is at least
- *   `staleAfterSeconds` old. This does not depend on a known total: a position without a total is
- *   still a record with a time.
+ * - **stale** — a position is recorded and the READING time a source observed (`progress.read_at`) is at
+ *   least `staleAfterSeconds` old. It is measured from when the person read, never from when the row was
+ *   written: the sweep writes a whole library within a second of starting, so the row's own time says
+ *   nothing about the reading. A record whose reading time is UNKNOWN is not stale: the application cannot
+ *   claim a document was forgotten when no source ever said when it was read, and "no source said" is not
+ *   "long ago".
  *
  * A document with **no** record has nothing to read in any category: it is neither in progress nor
  * finished (there is no position), and not stale either (there is no timestamp). That is the honest
  * answer rather than treating "never opened" as "opened long ago".
+ *
+ * **The order is part of the rule (R29): most recently read first.** The reader asked for it in their own
+ * words, and it lives here rather than in the screen so the carousel, a category's own list and the
+ * ten-tile cap all read one order and cannot disagree about it. What the store knows as "read" is the
+ * moment the position last CHANGED (`progress.updated_at`): nothing writes `documents.last_opened_at`, so a
+ * document that is opened and left on the same page does not move to the front. That is the honest reading
+ * of the fact that exists, and it is the one that matters — a page turn is what makes a document the one
+ * somebody is reading.
+ *
+ * Equal timestamps are the COMMON case rather than a corner: the launch sweep records every known document
+ * within a second or two of starting, so the comparison falls back to the displayed name and then to the
+ * row id. The order is therefore a function of the data alone, which is what stops the tiles from jumping:
+ * this listing is re-read every fifteen seconds, and an order that could change on its own would move the
+ * ten tiles under the reader's hand while they are looking at them.
  */
 export function categoryEntries(
   entries: readonly LibraryEntry[],
@@ -574,20 +603,58 @@ export function categoryEntries(
   now: number,
   staleAfterSeconds: number = STALE_AFTER_SECONDS,
 ): LibraryEntry[] {
-  return entries.filter((entry) => {
-    switch (category) {
-      case "inProgress": {
-        const fraction = progressFraction(entry);
-        return fraction !== null && fraction < 1;
+  return entries
+    .filter((entry) => {
+      switch (category) {
+        case "inProgress": {
+          const fraction = progressFraction(entry);
+          return fraction !== null && fraction < 1;
+        }
+        case "finished":
+          return progressFraction(entry) === 1;
+        case "stale": {
+          const readAt = entry.progress?.readAt ?? null;
+          return readAt !== null && now - readAt >= staleAfterSeconds;
+        }
       }
-      case "finished":
-        return progressFraction(entry) === 1;
-      case "stale": {
-        const recordedAt = entry.progress?.recordedAt ?? null;
-        return recordedAt !== null && now - recordedAt >= staleAfterSeconds;
-      }
-    }
-  });
+    })
+    .sort(byMostRecentlyRead);
+}
+
+/**
+ * Most recently read first, then by the name the reader is shown, then by row id (R29).
+ *
+ * Every entry in a category carries a record, so a missing timestamp can only mean a record whose own
+ * timestamp was never stored. It sorts to the FAR END, and the key that says so is negative infinity
+ * rather than `0`: `0` is not the end of the scale, it is 1970, and a real time below it — a hand-edited
+ * history, a date before the epoch — would be sorted *behind* a document whose recency nobody knows. The
+ * absence of an answer is not an answer, and it must not be able to claim to be the oldest reading either.
+ *
+ * The name comparison is deliberately not `localeCompare`: a tiebreak must not depend on the machine's
+ * locale, or two runs of the same data could order the same carousel differently. It is lowercased before
+ * comparing for the same class of reason — raw code units put `Zebra` before `apple`, and a reader would
+ * read that as a bug in the carousel rather than as a tiebreak — with the original spelling and then the id
+ * settling the cases that differ only by case.
+ */
+function byMostRecentlyRead(left: LibraryEntry, right: LibraryEntry): number {
+  // `-Infinity`, not `0`: see the note above. Two infinities compare equal in the guard below, so the
+  // subtraction that follows can never see `Infinity - Infinity`, which would be `NaN`.
+  const leftAt = left.progress?.readAt ?? Number.NEGATIVE_INFINITY;
+  const rightAt = right.progress?.readAt ?? Number.NEGATIVE_INFINITY;
+  if (leftAt !== rightAt) {
+    return rightAt - leftAt;
+  }
+  const leftTitle = displayTitle(left);
+  const rightTitle = displayTitle(right);
+  const leftKey = leftTitle.toLowerCase();
+  const rightKey = rightTitle.toLowerCase();
+  if (leftKey !== rightKey) {
+    return leftKey < rightKey ? -1 : 1;
+  }
+  if (leftTitle !== rightTitle) {
+    return leftTitle < rightTitle ? -1 : 1;
+  }
+  return left.id - right.id;
 }
 
 /** A human name for a source or provider id, falling back to the id when none is catalogued. */

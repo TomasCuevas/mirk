@@ -61,7 +61,8 @@ const english: Catalogue = {
   "home.finished.definition": "Documents whose recorded position is at the end.",
   "home.stale.title": "Documents you have not opened in a long time",
   "home.stale.definition":
-    "Documents whose recorded reading position is at least {days} days old.",
+    "Documents the viewer last recorded reading at least {days} days ago. A document no source ever \
+recorded is not claimed here.",
   "home.openCategory": "Open full list",
   "home.openCategoryLabel": "Open the full list of {category}",
   "home.categoryEmpty": "Nothing here yet.",
@@ -182,7 +183,8 @@ const spanish: Catalogue = {
   "home.finished.definition": "Documentos cuya posición registrada está al final.",
   "home.stale.title": "Documentos sin abrir durante mucho tiempo",
   "home.stale.definition":
-    "Documentos cuya posición de lectura registrada tiene al menos {days} días.",
+    "Documentos que el visor registró leyendo por última vez hace al menos {days} días. Los que ninguna \
+fuente registró nunca no se listan acá.",
   "home.openCategory": "Abrir la lista completa",
   "home.openCategoryLabel": "Abrir la lista completa de {category}",
   "home.categoryEmpty": "Todavía no hay nada.",

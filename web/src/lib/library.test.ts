@@ -35,6 +35,7 @@ function progress(overrides: Partial<Progress> = {}): Progress {
     source: "native",
     confidence: "exact",
     recordedAt: null,
+    readAt: null,
     ...overrides,
   };
 }
@@ -368,18 +369,29 @@ describe("title fallback", () => {
 
 describe("the home categories", () => {
   // R4 / B3 (L20, L22). The three carousels on Inicio are readings of the stored position, so the
-  // selection is a pure function here and neither SQL nor markup decides it. "A long time" is
-  // measured from `progress.updated_at`, which the UI receives as `Progress.recordedAt`.
-  // `documents.last_opened_at` is deliberately absent from this file: it exists in the schema but
-  // nothing writes it, so it is not a field the interface can even see.
+  // selection is a pure function here and neither SQL nor markup decides it. "A long time" is measured
+  // from when a source that OBSERVED the reading says it happened — `progress.read_at`, which the
+  // interface receives as `Progress.readAt` (R30) — and never from when the row was written, which is when
+  // the app looked. `documents.last_opened_at` is deliberately absent: it exists in the schema but nothing
+  // writes it, so it is not a field the interface can even see.
   const now = 1_700_000_000;
 
   function recorded(
     page: number,
     total: number | null,
-    recordedAt: number | null = now,
+    readAt: number | null = now,
   ): Progress {
-    return progress({ page, total, source: "evince-gvfs", confidence: "exact", recordedAt });
+    // `recordedAt` is deliberately `now` — the row was written a moment ago — while `readAt` carries the
+    // fact under test. Every category test therefore fails if a rule goes back to reading when the APP
+    // looked instead of when the source says the person read: exactly the defect `R30` removed.
+    return progress({
+      page,
+      total,
+      source: "evince-gvfs",
+      confidence: "exact",
+      recordedAt: now,
+      readAt,
+    });
   }
 
   it("counts a recorded position that is not at the end as in progress", () => {
@@ -396,7 +408,7 @@ describe("the home categories", () => {
     expect(categoryEntries([reading, done], "finished", now).map((e) => e.id)).toEqual([2]);
   });
 
-  it("counts a stale record from the record's own timestamp, and has nothing to measure without one", () => {
+  it("counts a stale record from when it was READ, and has nothing to measure without that", () => {
     const stale = entry({ id: 1, progress: recorded(11, 80, now - STALE_AFTER_SECONDS) });
     const fresh = entry({ id: 2, progress: recorded(11, 80, now - 60) });
     // A document with no reading record at all carries no timestamp, so it cannot be "stale" any
@@ -404,6 +416,62 @@ describe("the home categories", () => {
     const never = entry({ id: 3, progress: null });
 
     expect(categoryEntries([stale, fresh, never], "stale", now).map((e) => e.id)).toEqual([1]);
+  });
+
+  it("pulls the two times apart, in both directions", () => {
+    // R30. A row written a year ago but READ a minute ago is not stale: the person read it. A row written
+    // a minute ago but read a year ago is. The launch sweep writes a whole library within a second of
+    // starting, so the row's own time is when the application looked, which is not evidence about the
+    // reader — and this test fails in one direction or the other if a rule ever goes back to reading it.
+    const readRecently = entry({
+      id: 1,
+      progress: progress({
+        page: 3,
+        total: 80,
+        source: "evince-gvfs",
+        confidence: "exact",
+        recordedAt: now - 365 * 86_400,
+        readAt: now - 60,
+      }),
+    });
+    const readLongAgo = entry({
+      id: 2,
+      progress: progress({
+        page: 3,
+        total: 80,
+        source: "evince-gvfs",
+        confidence: "exact",
+        recordedAt: now - 60,
+        readAt: now - STALE_AFTER_SECONDS,
+      }),
+    });
+
+    expect(categoryEntries([readRecently], "stale", now)).toEqual([]);
+    expect(categoryEntries([readLongAgo], "stale", now).map((e) => e.id)).toEqual([2]);
+    // Both are in progress by position, which is a different question from age, and the carousel orders
+    // them by when they were read.
+    expect(categoryEntries([readRecently, readLongAgo], "inProgress", now).map((e) => e.id)).toEqual([
+      1, 2,
+    ]);
+  });
+
+  it("leaves a document whose reading time no source ever recorded out of the stale list", () => {
+    // The honest half of R30: the application cannot say somebody forgot a document when no source ever
+    // said when they read it. It is not stale, and the sentence on screen says so rather than letting the
+    // carousel look empty for no reason.
+    const neverRecorded = entry({
+      id: 1,
+      progress: progress({
+        page: 3,
+        total: 80,
+        source: "evince-gvfs",
+        confidence: "exact",
+        recordedAt: now - 5 * 365 * 86_400,
+        readAt: null,
+      }),
+    });
+
+    expect(categoryEntries([neverRecorded], "stale", now)).toEqual([]);
   });
 
   it("re-evaluates as the clock advances, which is what an open screen's tick drives", () => {
@@ -551,5 +619,134 @@ describe("re-reading the listing", () => {
     // the listing changes in seconds. Pinning the two apart is what stops a later tidy-up from merging
     // them into the slower one and quietly bringing the defect back.
     expect(LIBRARY_REFRESH_MS).not.toBe(CATEGORY_REFRESH_MS);
+  });
+});
+
+describe("the order of the carousels", () => {
+  /**
+   * R29 (L45). The reader asked for it in their own words: the last document they read belongs first, and
+   * the tiles run left to right from the most recent to the oldest. The order lives in the selector rather
+   * than in the screen, so the carousel, a category's own list and the ten-tile cap read one order.
+   */
+  const now = 1_700_000_000;
+  const read = (id: number, readAt: number | null, title: string | null = null): LibraryEntry =>
+    entry({
+      id,
+      title,
+      progress: progress({
+        page: 3,
+        total: 80,
+        source: "evince-gvfs",
+        confidence: "exact",
+        // The order is by when the document was READ. The write time is set to the opposite end of the
+        // scale on purpose, so a rule that sorted by when the app wrote the row would order this the
+        // other way round and fail.
+        readAt,
+        recordedAt: readAt === null ? null : 1_600_000_000,
+      }),
+    });
+
+  it("puts the most recently read document first", () => {
+    const oldest = read(1, now - 1000);
+    const newest = read(2, now - 10);
+    const middle = read(3, now - 100);
+
+    expect(categoryEntries([oldest, newest, middle], "inProgress", now).map((e) => e.id)).toEqual([
+      2, 3, 1,
+    ]);
+  });
+
+  it("keeps every document whose reading time no source recorded after every document that has one", () => {
+    // R30. "No source said" is not 1970 and it is not the newest thing on the shelf: it is the absence of
+    // an answer, and its honest place is the tail. The comparator used to send it to `0`, which is the
+    // START of the scale — so a real time below the epoch sorted *behind* a document nobody knows anything
+    // about. Negative infinity cannot do that: every finite time sorts ahead of it, and the ones with no
+    // time tie only with each other.
+    const preEpoch = read(1, -86_400, "Aaa primera");
+    const unknown = read(2, null, "Zzz ultima");
+    const unknownToo = read(3, null, "Aaa tambien desconocida");
+    const known = read(4, now - 10, "Mmm conocida");
+
+    expect(
+      categoryEntries([unknown, unknownToo, preEpoch, known], "inProgress", now).map((e) => e.id),
+    ).toEqual([4, 1, 3, 2]);
+  });
+
+  it("orders every category by its own records, not only the one that was looked at", () => {
+    // One implementation for three carousels is the point; a rule applied in only one branch would leave
+    // the other two reading as if nobody had touched them.
+    const finishedOlder = entry({
+      id: 1,
+      progress: progress({
+        page: 79,
+        total: 80,
+        source: "evince-gvfs",
+        confidence: "exact",
+        // The order is by when each was READ, so that is what these carry; the row's own write time is
+        // the decoy again, set in the opposite order.
+        recordedAt: now - 10,
+        readAt: now - 1000,
+      }),
+    });
+    const finishedNewer = entry({
+      id: 2,
+      progress: progress({
+        page: 79,
+        total: 80,
+        source: "evince-gvfs",
+        confidence: "exact",
+        recordedAt: now - 1000,
+        readAt: now - 10,
+      }),
+    });
+    const stale = entry({
+      id: 3,
+      progress: progress({
+        page: 3,
+        total: 80,
+        source: "evince-gvfs",
+        confidence: "exact",
+        recordedAt: now - 60,
+        readAt: now - STALE_AFTER_SECONDS - 500,
+      }),
+    });
+    const staler = entry({
+      id: 4,
+      progress: progress({
+        page: 3,
+        total: 80,
+        source: "evince-gvfs",
+        confidence: "exact",
+        recordedAt: now - 60,
+        readAt: now - STALE_AFTER_SECONDS - 90_000,
+      }),
+    });
+
+    expect(
+      categoryEntries([finishedOlder, finishedNewer], "finished", now).map((e) => e.id),
+    ).toEqual([2, 1]);
+    expect(categoryEntries([staler, stale], "stale", now).map((e) => e.id)).toEqual([3, 4]);
+  });
+
+  it("keeps a stable order when a whole sweep lands in the same second", () => {
+    // The launch sweep records every known document within a second or two of starting, so equal
+    // timestamps are the common case rather than a corner. The fallback is the name the reader is shown,
+    // and it has to be a function of the data alone: this listing is re-read every fifteen seconds, and an
+    // order that could drift would move the tiles under the reader's hand while they are looking at them.
+    const zebra = read(1, now - 5, "Zebra");
+    const apple = read(2, now - 5, "apple");
+
+    expect(categoryEntries([zebra, apple], "inProgress", now).map((e) => e.id)).toEqual([2, 1]);
+    // The same set in the other order must not produce a different carousel.
+    expect(categoryEntries([apple, zebra], "inProgress", now).map((e) => e.id)).toEqual([2, 1]);
+  });
+
+  it("sorts a record with no timestamp last, where it claims nothing", () => {
+    // A position whose own time was never stored cannot claim to be the newest. Unknown recency belongs at
+    // the far end of the list rather than at the front, where it would be asserting something false.
+    const unknown = read(1, null);
+    const known = read(2, now - 100_000);
+
+    expect(categoryEntries([unknown, known], "inProgress", now).map((e) => e.id)).toEqual([2, 1]);
   });
 });

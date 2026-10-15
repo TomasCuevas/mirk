@@ -54,7 +54,14 @@ describe("Inicio", () => {
       title: "A",
       author: null,
       pages: 10,
-      progress: { page: 0, total: 10, source: "native", confidence: "exact", recordedAt: null },
+      progress: {
+        page: 0,
+        total: 10,
+        source: "native",
+        confidence: "exact",
+        recordedAt: null,
+        readAt: null,
+      },
     };
     const { body } = render(HomeScreen, { props: homeProps({ entries: [entry] }) });
 
@@ -104,7 +111,14 @@ describe("Inicio", () => {
       title: "A",
       author: null,
       pages: 10,
-      progress: { page: 0, total: 10, source: "native", confidence: "exact", recordedAt: null },
+      progress: {
+        page: 0,
+        total: 10,
+        source: "native",
+        confidence: "exact",
+        recordedAt: null,
+        readAt: null,
+      },
     };
 
     const { body } = render(HomeScreen, { props: homeProps({ entries: [entry] }) });
