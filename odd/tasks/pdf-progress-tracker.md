@@ -971,8 +971,9 @@ count stays where it reads as the document's size; the other goes.
 
 ### Tasks — round 4
 
-- **U8** R16, R17, R18 — the carousels' shape: a bounded strip, no vertical scroll inside it, and one page
-  count on the card
+- **U8** R16, R17, R18 — **done** (`10dae28`): a carousel capped at ten tiles, a strip that scrolls
+  sideways and only sideways, and one page count per card. Also the defect the maintainer introduced and
+the test that was missing — see `L39`
 
 **How a unit lands (L26).** A unit is done when the user says they like it, not when the checks pass.
 The sequence is: implement → run the checks (tests, build, and the engine measurement where one applies)
@@ -2178,3 +2179,43 @@ showed themselves.
 prints the same page count **twice**, above the title and again below it. It is recorded as `R18` rather
 than quietly fixed, for the same reason this log exists — nobody reported it, and it had been on screen
 since the card was last rebuilt.
+
+## L38 — the recalculation, finally committed
+
+> Respondiendo a la pregunta sobre #45, dale nomas
+
+The fix for a defect recorded earlier in this log: a screen that stays open could lie about its
+categories, because `categoryEntries` received the clock once, when the screen mounted. It landed as a
+shared helper in `library.ts`, with its interval as one named constant and one cleanup, used by Inicio
+and by a category's own screen. Committed as `f0a9a8e`.
+
+**Why it waited so long, and what that says.** The user could not approve it by eye because there was
+nothing to see: the carousels were empty for exactly the reason `L35` records — nothing was ever
+ingested — so the fix sat uncommitted through three exchanges while the tracker itself was repaired. It
+was finally accepted on the strength of its four tests rather than of a look. Its rule is "a screen that
+stays open must not lie", and the half it does not cover is still its own task: a document that finishes,
+or that gains its first record, changes the listing rather than the clock.
+
+## L39 — U8: the carousel's shape, and the test that was missing
+
+> Los carruseles siguen teniendo más de 10 items, por lo menos en la seccion "Documentos en curso" que puedo verificar
+
+Three criteria (`R16`–`R18`) and one defect of the maintainer's own. **The defect**: the cap was computed
+and never used — `shown` sat in `BookGrid`'s script while the markup still walked `entries`, so the limit
+was calculated and thrown away. **Why every check missed it**: the build was green, 77 tests were green
+and clippy was clean, and the suite stayed green because **no test covered the rule**. A cap with no test
+cannot fail. It is the second time in this work that the user's eye caught what a green suite could not,
+and both times what was missing was a test of a rule rather than of a part.
+
+**What was done about it**: `BookGrid.test.ts` renders the component through `svelte/server` — the
+technique `BookCard.test.ts` already used — and counts the cards actually drawn: a strip gives ten however
+many the category holds, and a grid gives every entry, so the cap cannot leak into a full list. The RED
+was observed before the fix (`expected 25 to be 10`, with the grid case passing), and the one word that
+fixed it was `{#each shown}`. The bundle's content hash changed with the rebuild, which is the proof that
+the change really reached the binary — the thing that had been in doubt.
+
+**A predicted defect that turned out not to exist.** While fixing the duplicate page line, the maintainer
+argued from the same arithmetic that the fixed height does not count the optional author line, and opened
+a task for it. The user checked: authors **do** show and the cards look clear. So it was dropped rather
+than fixed, and the reason is the same one this log keeps repeating — reasoning from a formula lost to
+looking at the screen.
