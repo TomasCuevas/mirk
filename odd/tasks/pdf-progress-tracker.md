@@ -1191,6 +1191,38 @@ only after the user has approved what they saw. The working tree therefore holds
 uncommitted while it waits, and **only one unit is in flight at a time**, so an unapproved change is
 never mixed with the next one in a diff the user has to read.
 
+
+**L47 — la app viene al mundo en el tray, y vuelve al visor por lo que olvidó (R33, y el defecto de reagregar la carpeta).**
+
+**R33, decidido por el usuario en esas palabras:** *"Si, la app jamas debe arrancar visible"*. La respuesta de plataforma vino
+primero y es la segunda limitación de su tipo: una ventana creada visible se mapea al arrancar y el compositor la enfoca,
+"no enfocar" es sólo una sugerencia que se vuelve a habilitar tras el primer dibujo, y la llamada que lo diría en serio no está
+expuesta por la biblioteca — así que "visible pero nunca enfocada" no es entregable y queda REGISTRADO en vez de prometido. Lo
+que sí es entregable es que la ventana no se mapee nunca: arranca oculta y el tray la muestra, en una acción del usuario, que es
+cuando enfocar está bien. Medido con la lectura honesta que la app hace de su propia ventana: el menú dice "Mostrar OCT" apenas
+arranca y pasa a "Ocultar OCT" cuando se la muestra. Y el cambio expuso el cuarto defecto de la forma recurrente: el arranque le
+pasaba el hecho "visible" al menú a mano, y eso era CIERTO mientras la configuración hacía nacer la ventana visible; cambiar la
+configuración convirtió un hecho verdadero en una mentira y nada podía notarlo — el menú ofrecía "Ocultar" sobre una ventana que
+nadie podía ver.
+
+**EL DEFECTO DE REAGREGAR, reportado por el usuario:** *"Quite la carpeta que tenia vigilada y luego la volvi a agregar... Todos
+los documentos me aparecen en 0%"*. Quitar una carpeta vigilada se lleva sus documentos y sus posiciones — eso es R27, regla del
+propio usuario, y queda como está. Lo que faltaba era la otra mitad: nada volvía a observar después. El barrido de ARRANQUE era
+el único lugar donde se lee el historial del visor y se le pregunta a los proveedores por un documento que nadie tiene abierto, y
+en el arranque no había nada que observar, porque el reescaneo crea los documentos después. El arreglo: el bucle de seguimiento
+vuelve a observar cuando CAMBIA el conjunto de documentos de la biblioteca, y no hace nada cuando no cambió — así el historial se
+sigue leyendo una vez por barrido y nunca una vez por tick. Verificado sobre la biblioteca real, doce segundos después de
+relanzar y sin que el usuario tocara nada: 0 filas pasaron a **29 documentos con posición**, 16 con fecha de lectura, 27 en curso
+y 7 en "hace mucho", **todas las posiciones con fuente evince-gvfs** (observadas, no inventadas), stderr vacío — y los 13
+documentos que el visor ya no recuerda quedan SIN registro en vez de recibir un 0% inventado.
+
+**UNA COSA MÁS QUE EL USUARIO ENCONTRÓ, y la introdujo la nota de primera vez de este mismo proyecto:** durante esos segundos
+posteriores a un reescaneo la lista está momentáneamente vacía, y la pantalla renderizaba su estado VACÍO — la nota que dice que
+todavía no hay nada — mientras el trabajo estaba en curso. Sus palabras: *"por unos segundos, inicio estaba vacia, como si no
+hubiera ninguna carpeta vigilada... No pasa nada si tarda unos segundos en cargar, lo que deberia pasar es que se le muestre al
+usuario algun tipo de loader para que este no crea que hay errores"*. La regla que se sigue de ahí es la misma que este proyecto
+vuelve a aprender: **una pantalla vacía tiene que significar "cargado, y genuinamente vacío", nunca "todavía no cargó"**.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
@@ -2665,7 +2697,17 @@ document said V3 for titles, written before the reading time existed.
   withdrawn self-exit defect: *"me molestaba que saltara la aplicacion sobre lo que estaba haciendo"*. A
   tray-resident companion must be available without interrupting. **The platform answer comes before the
   code**: an earlier spec in this document had to be corrected because tao's `set_maximizable` is an empty
-  function on Linux, and this may be the second such limitation — recorded rather than promised.
+  function on Linux, and this IS the second such limitation, now recorded with its measurement. **DECIDED AND
+  IMPLEMENTED** after the user's answer — *"Si, la app jamas debe arrancar visible"*: the window is created
+  with `"visible": false`, so it exists, loads and works, and is never mapped; an unmapped surface cannot
+  take focus on X11 or on Wayland, and the tray's Show entry already calls show + focus, which is
+  user-initiated and therefore correct. What is NOT deliverable, and is written down so nobody promises it
+  or "fixes" the config back: "visible but never focused" is unreachable with this stack as pinned —
+  `focus: false` only sets the GTK accept-focus hint, tao re-enables `accept_focus` after the first draw,
+  `gtk_window_set_focus_on_map(false)` is not exposed by tao or tauri, and on Wayland the compositor decides
+  with no `_NET_WM_USER_TIME` and no activation tokens available to the application. The line is pinned by a
+  test, because the build only validates the config's shape and a window that started visible again would be
+  reported by nothing except a person being interrupted.
 - **R34 — the first run explains itself.** Found in the user's own words while closing R29: *"No se realmente
   si se recalculan los carruseles, ya que no forma de agregar items al carrusel como tal"*. Nothing was
   broken — a document with no reading record sits in no category, and `oct` never opens a document itself, it
