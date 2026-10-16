@@ -423,12 +423,18 @@ fn ask_for_settings(app: &AppHandle) -> Result<(), String> {
 /// tray lands with the window chrome instead of in a later phase (A3, L20). The icon is the
 /// application's own committed placeholder; there is no visual identity to invent.
 fn setup_tray(app: &AppHandle) -> Result<(), String> {
-    // At launch the window is created visible by the configuration, and that is a fact rather than a
-    // guess — while the platform's own answer at this instant is not one: measured across two
-    // launches, the read right after the window is created sometimes reports it as hidden, which
-    // worded the menu "Show OCT" over a window the user was looking at. Every other refresh reads
-    // the window; this one knows.
-    let menu = current_tray_menu(app, Some(true))?;
+    // At launch the window is created HIDDEN by the configuration, and that is a fact rather than a
+    // guess — while the platform's own answer at this instant is not one: measured across two launches,
+    // the read right after the window is created sometimes reports the opposite of the truth, which
+    // worded the menu "Show OCT" over a window the user was looking at. Every other refresh reads the
+    // window; this one knows.
+    //
+    // This line said `Some(true)` until R33, and it was correct then: the window WAS visible at launch,
+    // because the configuration said so. Changing the configuration made it a lie, and nothing could
+    // notice — the menu would have offered "Hide" over a window nobody could see, so the first click
+    // would have done nothing at all. It is the same shape as three other defects this project has
+    // found: a fact that was true, with no test able to notice it stopping being true.
+    let menu = current_tray_menu(app, Some(false))?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -523,10 +529,22 @@ fn start_tracking() {
         let detector = oct_platform::backends().open_documents;
         let providers = oct_platform::progress_providers();
 
+        // The tick loop's memory of the library's document set. Removing a watched folder takes its
+        // documents and their positions with it (R27); when a rescan re-adds them, this is what
+        // notices the set changed and runs the launch sweep again, so the readings come back from
+        // the viewer instead of staying at 0%.
+        let mut watch = track::LibraryWatch::default();
+
         // S5: catch up once, over every known document, so a position written while the
         // application was closed is recorded instead of lost.
         match open_store() {
-            Ok(store) => report_tracking(&track::sweep_library(&store, &providers)),
+            Ok(store) => {
+                report_tracking(&track::sweep_library(&store, &providers));
+                // The sweep just observed this exact set, so seeding the watch keeps the first tick,
+                // three seconds later, from re-reading the history for a set that has not changed. It
+                // costs one extra library query at launch and saves a whole recently-used.xbel parse.
+                watch.seed(&store);
+            }
             Err(error) => eprintln!("the launch sweep could not open the store: {error}"),
         }
 
@@ -535,11 +553,19 @@ fn start_tracking() {
         loop {
             std::thread::sleep(track::POLL_INTERVAL);
             match open_store() {
-                Ok(store) => report_tracking(&track::track_open_documents(
-                    &store,
-                    detector.as_ref(),
-                    &providers,
-                )),
+                Ok(store) => {
+                    // A re-added document is a new set of documents: sweep it as the launch does.
+                    // When the set has not changed this is `None`, so the history is read once per
+                    // sweep and never once per three-second tick.
+                    if let Some(sweep) = watch.refresh(&store, &providers) {
+                        report_tracking(&sweep);
+                    }
+                    report_tracking(&track::track_open_documents(
+                        &store,
+                        detector.as_ref(),
+                        &providers,
+                    ));
+                }
                 Err(error) => eprintln!("the ingestion tick could not open the store: {error}"),
             }
         }
@@ -707,6 +733,36 @@ mod capability_grants {
         assert!(
             CAPABILITIES.contains("core:event:allow-unlisten"),
             "a listener the interface can never remove leaks for the life of the window: {CAPABILITIES}"
+        );
+    }
+}
+
+/// How the application introduces itself (R33).
+///
+/// The user was closing the app because its window jumped over whatever they were doing, and the
+/// platform answer is measured rather than assumed: with tauri 2.12.3 and tao 0.37.1 a window that is
+/// created VISIBLE is mapped at launch and the compositor focuses it, `focus: false` is only a hint that
+/// tao re-enables after the first draw, and `gtk_window_set_focus_on_map` is not exposed at all. An
+/// unmapped surface cannot take focus, so the app starts hidden and the tray is how it is asked for — a
+/// user action, which is exactly when focusing is right.
+///
+/// The line is asserted because nothing else would notice it going away: the build validates the config's
+/// SHAPE, not what it says, and a window that started visible again would only be reported by a person
+/// being interrupted.
+#[cfg(test)]
+mod launch_never_steals_focus {
+    /// `include_str!` fails the BUILD if the file disappears, which is the loud half.
+    const CONFIG: &str = include_str!("../tauri.conf.json");
+
+    #[test]
+    fn the_main_window_is_not_mapped_at_launch() {
+        assert!(
+            CONFIG.contains("\"visible\": false"),
+            "the app must never start visible (R33): {CONFIG}"
+        );
+        assert!(
+            CONFIG.contains("\"label\": \"main\""),
+            "this is the main window's config, so the assertion above is about the right window: {CONFIG}"
         );
     }
 }

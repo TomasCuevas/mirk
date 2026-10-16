@@ -151,6 +151,99 @@ pub fn sweep_library(store: &Store, providers: &[Box<dyn ProgressProvider>]) -> 
     report
 }
 
+/// The library's document-set shape: how many documents it holds, and the highest `documents.id`
+/// among them.
+///
+/// This is the signature the tick compares between calls. `R27` takes a removed folder's documents
+/// with it, and a later rescan re-adds them as NEW rows with NEW, higher ids, so a change in the
+/// count or in the highest id is a change in the set. It is derived from what [`Store::library`]
+/// already returns rather than from a new store method, which is what keeps the rule a plain function
+/// that can be tested without a store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LibraryShape {
+    /// How many documents the library holds.
+    pub documents: usize,
+    /// The highest `documents.id`, or [`None`] for an empty library.
+    pub highest_id: Option<i64>,
+}
+
+impl LibraryShape {
+    /// The shape of `entries`, as [`Store::library`] returns them.
+    pub fn of(entries: &[LibraryEntry]) -> Self {
+        Self {
+            documents: entries.len(),
+            highest_id: entries.iter().map(|entry| entry.document.id).max(),
+        }
+    }
+}
+
+/// Whether the library's set of documents changed since the shape the loop last observed.
+///
+/// The first observation (`None`) is always a change: the loop has never seen this set, so the sweep
+/// it triggers is the one that catches up. A pure function rather than a method so the rule can be
+/// pinned without a store.
+pub fn library_changed(previous: Option<LibraryShape>, current: LibraryShape) -> bool {
+    previous != Some(current)
+}
+
+/// The tick loop's memory of the library's document set (`R27` + `S5`).
+///
+/// Removing a watched folder takes its documents and their positions with it, by the user's own
+/// choice. Re-watching the folder brings the documents back through a rescan, but nothing would ask
+/// the viewer for their readings again: the launch sweep is the only place oct reads the viewer's
+/// history, and at launch there was nothing to observe. This watch closes that gap — when the set of
+/// documents changed it runs the same sweep the launch does, and when it has not it does nothing at
+/// all, so the history is still read once per sweep and never once per three-second tick.
+#[derive(Debug, Default)]
+pub struct LibraryWatch {
+    /// The shape seen at the last observation, or [`None`] before the first one.
+    seen: Option<LibraryShape>,
+}
+
+impl LibraryWatch {
+    /// Records the library's current shape WITHOUT sweeping.
+    ///
+    /// The launch sweep has just observed this exact set, so seeding the watch from it is what keeps
+    /// the first tick, three seconds later, from re-reading the history for a set that has not
+    /// changed. It costs one extra [`Store::library`] query at launch and saves a whole
+    /// `recently-used.xbel` parse; a library that cannot be read here leaves the watch unseeded, and
+    /// the first tick's [`LibraryWatch::refresh`] reports that failure rather than swallowing it.
+    pub fn seed(&mut self, store: &Store) {
+        if let Ok(entries) = store.library() {
+            self.seen = Some(LibraryShape::of(&entries));
+        }
+    }
+
+    /// Runs the launch sweep when the set of documents changed, and nothing when it has not.
+    ///
+    /// `None` means the set is the one already observed — the common case, once per tick. `Some`
+    /// carries the sweep's report, including an empty one, so "nothing changed" and "a sweep that
+    /// found nothing" stay distinguishable. A library that cannot be read is reported through the
+    /// returned report, never swallowed and never mistaken for an unchanged set.
+    pub fn refresh(
+        &mut self,
+        store: &Store,
+        providers: &[Box<dyn ProgressProvider>],
+    ) -> Option<TrackReport> {
+        let entries = match store.library() {
+            Ok(entries) => entries,
+            Err(error) => {
+                let mut report = TrackReport::default();
+                report
+                    .failures
+                    .push(format!("the library could not be read: {error}"));
+                return Some(report);
+            }
+        };
+        let current = LibraryShape::of(&entries);
+        if !library_changed(self.seen, current) {
+            return None;
+        }
+        self.seen = Some(current);
+        Some(sweep_library(store, providers))
+    }
+}
+
 /// The sweep's body, with the history injected.
 ///
 /// The decision is separable from where the history lives for the same reason the providers are
@@ -879,6 +972,126 @@ mod tests {
             store.progress_for_document(doc_id).expect("read back").is_empty(),
             "a provider that cannot run is not asked"
         );
+    }
+
+    // --- the trigger: a re-add is observed again ------------------------------------------------
+
+    /// The user's report: they stopped watching a folder and added it again, and every document read
+    /// 0%. `R27` takes a removed folder's documents and their positions with it, which is intended;
+    /// what was missing is that nothing RE-OBSERVES after the rescan re-adds them. The readings must
+    /// come back from the viewer, not from oct, so the loop notices the set of documents changed and
+    /// runs the launch sweep again.
+    ///
+    /// The test walks exactly that: a recorded position, the folder removal that takes it, the rescan
+    /// that re-adds the document as a NEW row with no progress, and then the loop's own decision. The
+    /// second document keeps the table non-empty so the re-add cannot reuse the removed row's id, which
+    /// is what "a new row" means.
+    #[test]
+    fn a_readded_document_is_observed_again_by_the_triggered_sweep() {
+        let store = in_memory_store();
+        let watched = store.record_folder("/lib", true).expect("record the watch");
+        let gone = store
+            .upsert_document(&document("/lib/Cosmos.pdf", 1, 1))
+            .expect("insert");
+        store
+            .upsert_document(&document("/keep/Other.pdf", 2, 2))
+            .expect("insert a document that stays");
+        store.record_progress(gone, &position(11)).expect("record");
+
+        // The loop has already observed this library: the launch sweep ran and the watch was seeded.
+        let mut watch = LibraryWatch::default();
+        watch.seed(&store);
+        assert!(
+            watch.refresh(&store, &[]).is_none(),
+            "a set that has not changed is not swept"
+        );
+
+        // The user stops watching the folder: the document and its position go with it (R27).
+        store
+            .forget_folder(watched)
+            .expect("remove")
+            .expect("the watch was known");
+        assert!(
+            store.progress_for_document(gone).expect("read").is_empty(),
+            "the removal takes the position with the document"
+        );
+
+        // The user adds the folder again. A rescan re-adds the document as a NEW row: new id, no progress.
+        let readded = store
+            .upsert_document(&document("/lib/Cosmos.pdf", 1, 1))
+            .expect("re-add");
+        assert_ne!(readded, gone, "the rescan's row is a new one, not the removed row");
+        assert!(
+            store.progress_for_document(readded).expect("read").is_empty(),
+            "the re-added document has no progress yet"
+        );
+
+        // The loop's own decision: the set of documents changed, so the launch sweep runs again and
+        // asks the viewer, which is the honest source of the reading.
+        let provider = FakeProvider::new("evince-gvfs", &["evince"])
+            .answering("/lib/Cosmos.pdf", Answer::At(11));
+        let report = watch
+            .refresh(&store, &[Box::new(provider)])
+            .expect("the changed set is swept");
+
+        assert_eq!(report.recorded.len(), 1, "{report:?}");
+        assert_eq!(report.recorded[0].doc_id, readded, "the reading landed on the new row");
+        assert_eq!(report.recorded[0].progress.page, 11);
+        let stored = store.progress_for_document(readded).expect("read back");
+        assert_eq!(
+            stored.last().expect("a position").page,
+            11,
+            "the viewer's reading is back"
+        );
+    }
+
+    /// The other half of the rule: a three-second tick over a library whose set of documents has not
+    /// changed must do nothing at all, so the history is read once per sweep and never once per tick.
+    #[test]
+    fn an_unchanged_library_is_not_swept_again() {
+        let store = in_memory_store();
+        store
+            .upsert_document(&document("/lib/Cosmos.pdf", 1, 1))
+            .expect("insert");
+        let mut watch = LibraryWatch::default();
+        watch.seed(&store);
+
+        let provider = FakeProvider::new("evince-gvfs", &["evince"])
+            .answering("/lib/Cosmos.pdf", Answer::At(11));
+        let asked = provider.recorder();
+
+        assert!(
+            watch.refresh(&store, &[Box::new(provider)]).is_none(),
+            "the same set is not swept again"
+        );
+        assert!(
+            asked.lock().expect("the recording lock").is_empty(),
+            "an unchanged library is not even asked about"
+        );
+    }
+
+    /// The shape rule itself: the first observation is a change, a re-add changes the highest id even
+    /// when the count is the same, a removal changes the count, and an equal shape is not a change.
+    #[test]
+    fn a_changed_document_set_is_what_the_shape_notices() {
+        let one = LibraryShape { documents: 1, highest_id: Some(1) };
+        assert!(
+            library_changed(None, one),
+            "the loop has never seen this set, so its first sweep is a change"
+        );
+        assert!(!library_changed(Some(one), one), "the same set is not news");
+        assert!(
+            library_changed(Some(one), LibraryShape { documents: 2, highest_id: Some(2) }),
+            "a re-add changes the count"
+        );
+        assert!(
+            library_changed(
+                Some(LibraryShape { documents: 2, highest_id: Some(2) }),
+                LibraryShape { documents: 2, highest_id: Some(3) }
+            ),
+            "a re-add with the same count is still a change: the new row has a higher id"
+        );
+        assert_eq!(LibraryShape::of(&[]), LibraryShape { documents: 0, highest_id: None });
     }
 
     // --- R30: when the document was read ---------------------------------------------------------
