@@ -333,6 +333,47 @@ export function displayTitle(entry: LibraryEntry): string {
   return entry.title;
 }
 
+// --- Covers (R32) ----------------------------------------------------------------------------
+//
+// A card's cover is rendered by the application on demand and cached beside the database. The
+// interface's whole job is to ask for it and to keep the placeholder when the answer is "none" —
+// never a broken image, never a stand-in that pretends to be a cover.
+
+/** The shape of `tauri.ts`'s `invoke`, so a test can hand a card a fake instead of a webview. */
+export type CoverInvoke = (
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<unknown>;
+
+/**
+ * The image source a card may display, or `null` when the placeholder must stand.
+ *
+ * Only a non-empty string is an image. This is the single place the never-a-broken-image rule is
+ * decided, so a card cannot end up with `src=""` — which a browser renders as a request for the
+ * page itself — or with `src="null"`, the string a careless template produces from a null answer.
+ */
+export function coverSource(cover: unknown): string | null {
+  return typeof cover === "string" && cover !== "" ? cover : null;
+}
+
+/**
+ * A document's cover, or `null` when it has none (R32).
+ *
+ * A rejected request counts as "no cover" too: the command already turns an unreadable document
+ * into a null rather than an error, and a cover is not worth a failure message on a card. The reason
+ * is reported by the Rust side, where this application reports what it cannot do.
+ */
+export async function fetchCover(
+  entry: LibraryEntry,
+  invoke: CoverInvoke,
+): Promise<string | null> {
+  try {
+    return coverSource(await invoke("document_cover", { id: entry.id }));
+  } catch {
+    return null;
+  }
+}
+
 // --- Filtering and sorting ------------------------------------------------------------------
 //
 // Both run over the listing the screen already holds. The decision is recorded in L19 with its

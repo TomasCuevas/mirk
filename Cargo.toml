@@ -32,6 +32,12 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # avoid the `image` rendering stack, which page counting and metadata do not need.
 # License: MIT OR Apache-2.0, GPL-3.0 compatible.
 pdfium-render = { version = "0.8", default-features = false, features = ["pdfium_latest", "thread_safe"] }
+# The one encoder the cover path needs (R32). `pdfium-render` can render a page but its PNG/JPEG
+# conveniences live behind the deliberately-disabled `image` feature, and re-enabling that stack is
+# what this workspace kept out. `png` writes exactly the one format a cover is stored in and nothing
+# else; it is already in the dependency graph (tauri-codegen and tray-icon use it), so no new crate
+# enters the build. License: MIT OR Apache-2.0, GPL-3.0 compatible.
+png = "0.18"
 sha2 = "0.10"
 serde_json = "1"
 # Linux file watching, used only by `oct-platform` behind `#[cfg(target_os = "linux")]`.

@@ -5,6 +5,7 @@ import {
   LIBRARY_REFRESH_MS,
   STALE_AFTER_SECONDS,
   categoryEntries,
+  coverSource,
   currentUnixSeconds,
   describeProgressView,
   describeProvenance,
@@ -13,6 +14,7 @@ import {
   describeProviderRegistry,
   describeScanSummary,
   displayTitle,
+  fetchCover,
   filterEntries,
   libraryView,
   paginate,
@@ -20,6 +22,7 @@ import {
   sortEntries,
   startCategoryRefresh,
   startLibraryRefresh,
+  type CoverInvoke,
   type LibraryEntry,
   type Progress,
   type SortKey,
@@ -791,5 +794,46 @@ describe("the order of the carousels", () => {
     const known = read(2, now - 100_000);
 
     expect(categoryEntries([unknown, known], "inProgress", now).map((e) => e.id)).toEqual([2, 1]);
+  });
+});
+
+/**
+ * R32: a card's cover is asked for on demand, and "there is no cover" is a placeholder rather than
+ * an error. The command already turns an unreadable document into `null`; the interface's job is to
+ * keep that a placeholder and to make an empty `src` impossible.
+ */
+describe("a document's cover", () => {
+  it("asks the application for the cover of the document's own row", async () => {
+    const invoke = vi.fn<CoverInvoke>(async () => "data:image/png;base64,AAAA");
+
+    await expect(fetchCover(entry({ id: 7 }), invoke)).resolves.toBe(
+      "data:image/png;base64,AAAA",
+    );
+    // The row id, not the path: the cover belongs to the document the store knows.
+    expect(invoke).toHaveBeenCalledWith("document_cover", { id: 7 });
+  });
+
+  it("keeps the placeholder when the application has no cover", async () => {
+    const invoke = vi.fn<CoverInvoke>(async () => null);
+
+    await expect(fetchCover(entry(), invoke)).resolves.toBeNull();
+  });
+
+  it("keeps the placeholder rather than reporting an error when the request fails", async () => {
+    const invoke = vi.fn<CoverInvoke>(async () => {
+      throw new Error("pdfium is missing");
+    });
+
+    await expect(fetchCover(entry(), invoke)).resolves.toBeNull();
+  });
+
+  it("treats anything that is not a non-empty string as no cover", () => {
+    // The single rule that makes an empty `src` impossible: a browser renders `src=""` as a request
+    // for the page itself, and `src="null"` as a broken image.
+    expect(coverSource("data:image/png;base64,AAAA")).toBe("data:image/png;base64,AAAA");
+    expect(coverSource(null)).toBeNull();
+    expect(coverSource(undefined)).toBeNull();
+    expect(coverSource("")).toBeNull();
+    expect(coverSource(42)).toBeNull();
   });
 });

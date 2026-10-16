@@ -1,11 +1,15 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { Translate } from "../lib/i18n";
   import {
+    coverSource,
     describeProgressView,
     displayTitle,
+    fetchCover,
     type FolderActionStatus,
     type LibraryEntry,
   } from "../lib/library";
+  import { invoke } from "../lib/tauri";
 
   let {
     entry,
@@ -13,13 +17,43 @@
     status,
     onOpenFolder,
     onEditTitle,
+    cover,
   }: {
     entry: LibraryEntry;
     t: Translate;
     status: FolderActionStatus | null;
     onOpenFolder: (entry: LibraryEntry) => void;
     onEditTitle: (entry: LibraryEntry) => void;
+    /**
+     * The cover the caller already has, when it has one. The grid does not pass it — a card asks the
+     * application for its own cover on mount (R32) — but a caller that already knows a cover avoids
+     * the round trip, and a test can render the card with one without a webview.
+     */
+    cover?: string | null;
   } = $props();
+
+  // The cover the card asked for on mount (R32). It stays `null` until the application answers with
+  // an image, so a missing cover and a cover still being produced both leave the placeholder up.
+  let fetchedCover = $state<string | null>(null);
+  const imageSource = $derived(coverSource(cover === undefined ? fetchedCover : cover));
+
+  onMount(() => {
+    if (cover !== undefined) {
+      // The caller already knows: there is nothing to ask for.
+      return;
+    }
+    // `live` stops a late answer from writing into a card that has already been torn down, which
+    // would be a state update after unmount rather than a cover nobody would ever see.
+    let live = true;
+    void fetchCover(entry, invoke).then((source) => {
+      if (live) {
+        fetchedCover = source;
+      }
+    });
+    return () => {
+      live = false;
+    };
+  });
 
   // The card's progress, as a fraction to draw and a number to place on it (R7).
   const view = $derived(describeProgressView(entry, t));
@@ -40,7 +74,16 @@
        nothing to belong to (L27); anchored here it reads as an action on the document's own body, and
        it will still read that way once real covers replace the placeholder. -->
   <div class="cover-wrap">
-    <div class="cover" style="aspect-ratio: 9 / 11" aria-hidden="true">{t("card.cover")}</div>
+    {#if imageSource !== null}
+      <!-- The document's real cover (R32). Its shape matches the placeholder's (`aspect-ratio` is
+           declared inline on both), so a card does not change height when the image arrives; and
+           `object-fit: contain` shows the whole page rather than cropping the part of it that
+           carries a title. The `alt` is empty because the heading below already names the
+           document: a second copy of the same name would be read out twice. -->
+      <img class="cover-image" src={imageSource} alt="" style="aspect-ratio: 9 / 11" />
+    {:else}
+      <div class="cover" style="aspect-ratio: 9 / 11" aria-hidden="true">{t("card.cover")}</div>
+    {/if}
 
     <!-- R31: the title-edit action sits on the cover's TOP-LEFT, mirroring the containing-folder
          action at its top-right, because they are the same kind of thing: an action on the document's
@@ -204,6 +247,19 @@
     color: #8b95a3;
     font-size: 0.8rem;
     text-align: center;
+  }
+
+  /* R32: the real cover occupies exactly the placeholder's rectangle. `width` and the inline
+     `aspect-ratio` fix the box; `object-fit: contain` letterboxes a page of any ratio inside it
+     instead of cropping it, and the white background is what shows in the letterbox. */
+  .cover-image {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #e2e6eb;
+    border-radius: 0.4rem;
+    background: #ffffff;
+    object-fit: contain;
   }
 
   /* The fixed height of the text block. Like the cover ratio, the height is declared inline on the

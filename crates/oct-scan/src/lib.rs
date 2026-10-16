@@ -71,8 +71,10 @@ use oct_core::{Document, FileIdentity, OctError};
 use oct_store::Store;
 use pdfium_render::prelude::{PdfDocumentMetadataTagType, Pdfium};
 
+mod cover;
 mod watch;
 
+pub use cover::{cover_for, CoverOutcome, COVER_WIDTH};
 pub use watch::{WatchBridge, WatchOutcome};
 
 /// The remedies named by every pdfium failure, so the error is actionable on its own and a caller
@@ -166,6 +168,26 @@ fn bind_pdfium(library: &PdfiumLibrary) -> Result<Pdfium, OctError> {
     bindings
         .map(Pdfium::new)
         .map_err(|error| pdfium_unavailable(format!("{error:?}")))
+}
+
+/// Binds the pdfium native library the same way every scan does.
+///
+/// The cover path (R32) runs outside a scan pass — a card asks for a cover on demand — but it must
+/// resolve the library by exactly the same rules as page counting, so this reuses
+/// [`resolve_pdfium_library`] and the vendor directory instead of growing a second discovery path.
+/// Tests call it too, so a cover test and a scan test cannot disagree about where pdfium comes from.
+///
+/// A library that cannot be found or loaded is one actionable [`OctError::ComponentUnavailable`],
+/// exactly as [`Scanner::scan`] reports it.
+pub fn bind_pdfium_library() -> Result<Pdfium, OctError> {
+    bind_pdfium_specifying(std::env::var_os("OCT_PDFIUM_LIB").map(PathBuf::from).as_deref())
+}
+
+/// [`bind_pdfium_library`]'s testable core: the explicit library path is a parameter rather than
+/// process state, so resolution can be exercised without mutating the environment.
+fn bind_pdfium_specifying(explicit: Option<&Path>) -> Result<Pdfium, OctError> {
+    let library = resolve_pdfium_library(explicit, &vendor_pdfium_directory())?;
+    bind_pdfium(&library)
 }
 
 /// A PDF whose page count and metadata were read and persisted.
@@ -304,11 +326,7 @@ impl<'a> Scanner<'a> {
     /// Crate-visible so [`WatchBridge`] can bind once before it starts watching, turning a missing
     /// library into one actionable error instead of one failure per event.
     pub(crate) fn pdfium(&self) -> Result<Pdfium, OctError> {
-        let library = resolve_pdfium_library(
-            self.explicit_pdfium.as_deref(),
-            &vendor_pdfium_directory(),
-        )?;
-        bind_pdfium(&library)
+        bind_pdfium_specifying(self.explicit_pdfium.as_deref())
     }
 
     /// Records `folder`, walks it, counts and persists every PDF found, and returns a report.

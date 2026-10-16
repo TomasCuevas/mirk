@@ -9,6 +9,8 @@ description = "Watched-folder PDF scanning for oct"
 oct-core = { workspace = true }
 oct-store = { workspace = true }
 pdfium-render = { workspace = true }
+# The cover's PNG encoder (R32). See the workspace manifest for why this one crate and no more.
+png = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

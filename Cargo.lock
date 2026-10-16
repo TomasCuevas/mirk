@@ -2419,6 +2419,7 @@ dependencies = [
  "oct-core",
  "oct-store",
  "pdfium-render",
+ "png 0.18.1",
  "tempfile",
 ]
 

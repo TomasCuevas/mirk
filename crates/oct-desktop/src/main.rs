@@ -19,7 +19,7 @@
 // Prevents an extra console window from appearing alongside the app on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use commands::{
     FolderRemovalView, LibraryEntryView, OpenedFolderView, ProviderView, ScanReportView,
@@ -166,6 +166,26 @@ fn set_document_title(id: i64, title: Option<String>) -> Result<(), String> {
     commands::set_document_title(&store, id, title.as_deref()).map_err(error_message)
 }
 
+/// Returns the cover of the document with `id` as a PNG data URL, or `null` when it has none (R32).
+///
+/// The work runs on [`tauri::async_runtime::spawn_blocking`] because rendering is CPU-bound and
+/// pdfium is single-threaded behind this binding: a cover must never occupy the thread that paints
+/// the interface while it is produced. The command itself decides nothing — the cache, the render
+/// and the data URL are [`commands::document_cover`]'s, which is tested without an application.
+///
+/// `null` is the honest answer for a document that cannot be read, and it is not an error: the card
+/// keeps its placeholder. The reason is written to stderr inside `commands::document_cover`.
+#[tauri::command]
+async fn document_cover(id: i64) -> Result<Option<String>, String> {
+    let data_directory = data_directory()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = open_store()?;
+        commands::document_cover(&store, id, &data_directory).map_err(error_message)
+    })
+    .await
+    .map_err(|error| format!("the cover task could not run: {error}"))?
+}
+
 /// Scans `folder` into the library and returns the report, including any per-file failure.
 #[tauri::command]
 fn scan_folder(folder: String) -> Result<ScanReportView, String> {
@@ -298,6 +318,20 @@ fn chosen_folder(chosen: Option<FilePath>) -> Result<Option<String>, String> {
 fn open_store() -> Result<Store, String> {
     let path = database_path().map_err(error_message)?;
     Store::open(path).map_err(error_message)
+}
+
+/// The application's data directory: the directory the database lives in (L20).
+///
+/// The covers live beside the database rather than in a directory of their own resolved a second
+/// time, so "the same place the database lives" is a fact of one path instead of two functions that
+/// have to agree. `oct_store::database_path` already names that directory, and this takes its
+/// parent rather than re-reading `$XDG_DATA_HOME` here.
+fn data_directory() -> Result<PathBuf, String> {
+    let database = database_path().map_err(error_message)?;
+    database
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| format!("the database path has no directory: {}", database.display()))
 }
 
 /// The language stored in the production database, or an error naming the failure.
@@ -621,6 +655,7 @@ fn main() {
             start_drag,
             list_library,
             set_document_title,
+            document_cover,
             scan_folder,
             progress_providers,
             watched_folders,

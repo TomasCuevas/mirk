@@ -142,3 +142,43 @@ describe("the reader's title", () => {
     expect(named).not.toContain(english("card.titleLabelYours"));
   });
 });
+
+/**
+ * R32: a card shows the document's real cover when the application has one, and its existing
+ * placeholder otherwise.
+ *
+ * The card asks the application for its cover on mount, and SSR does not run lifecycle hooks, so a
+ * server render always shows the placeholder — which is what the first test pins. Passing `cover`
+ * directly is how the image branch is pinned without a webview, and an empty string is the case
+ * that would otherwise become `src=""`.
+ */
+describe("the card's cover", () => {
+  const props = { t: english, status: null, onOpenFolder: () => {}, onEditTitle: () => {} };
+
+  it("shows its placeholder, and no image, until there is a cover", () => {
+    const { body } = render(BookCard, { props: { ...props, entry: entry() } });
+
+    expect(body).toContain(english("card.cover"));
+    expect(body).not.toContain("<img");
+  });
+
+  it("shows the real cover, with no placeholder, when the application has one", () => {
+    const source = "data:image/png;base64,AAAA";
+    const { body } = render(BookCard, {
+      props: { ...props, entry: entry(), cover: source },
+    });
+
+    expect(body).toContain(`src="${source}"`);
+    expect(body).not.toContain(english("card.cover"));
+  });
+
+  it("keeps the placeholder when the answer is no cover at all", () => {
+    // An empty string is not an image: `src=""` would ask the browser for the page itself.
+    const { body } = render(BookCard, {
+      props: { ...props, entry: entry(), cover: "" },
+    });
+
+    expect(body).toContain(english("card.cover"));
+    expect(body).not.toContain("<img");
+  });
+});

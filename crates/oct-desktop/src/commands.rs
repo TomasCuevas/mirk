@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use oct_core::{FileIdentity, LaunchOutcome, Launcher, OctError, StoredProgress};
-use oct_scan::{ScanReport, Scanner};
+use oct_scan::{cover_for, CoverOutcome, ScanReport, Scanner};
 use oct_store::{covering_folder, FolderRemoval, LibraryEntry, Store, WatchedFolder};
 use serde::Serialize;
 
@@ -240,6 +240,140 @@ pub fn library_entries(store: &Store) -> Result<Vec<LibraryEntryView>, OctError>
 /// document named in this application can always be restored to the title the file itself carries.
 pub fn set_document_title(store: &Store, id: i64, title: Option<&str>) -> Result<(), OctError> {
     store.set_user_title(id, title)
+}
+
+// --- R32: a document's cover, rendered on demand and cached in the application's data directory ---
+
+/// The directory covers live in: `<data directory>/covers` (L20).
+///
+/// The data directory is passed in rather than read here, exactly like every other collaborator in
+/// this module: `main.rs` derives it from `oct_store::database_path`, so the covers and the database
+/// live in one place by construction instead of by two functions agreeing.
+pub fn covers_directory(data_directory: &Path) -> PathBuf {
+    data_directory.join("covers")
+}
+
+/// The cached cover file for the document with `id`.
+///
+/// Named by the document's row id, not by its path: a document that moves keeps its row (the store
+/// follows identity), so a path-derived name would lose the cached cover on a move and leave the old
+/// file behind. This half renders page one only; when the reader's choice arrives (V6) it changes
+/// what is rendered into this same file.
+fn cover_file(covers_directory: &Path, id: i64) -> PathBuf {
+    covers_directory.join(format!("{id}.png"))
+}
+
+/// A document's cover as a data URL, or `None` when it cannot be shown (R32).
+///
+/// `None` is reserved for facts about the **document**: it has no readable PDF (encrypted, deleted,
+/// unreadable), or the id names no row. Those keep the card's placeholder and the reason goes to
+/// stderr, where this application reports everything it cannot do. A failure of the application's
+/// own storage — the covers directory, the write, a missing pdfium — is returned as an error instead,
+/// because reporting "this document has no cover" when the disk refused the write would be a lie
+/// about the document. Either way nothing reaches a screen as an error: the card turns a rejected
+/// request into its placeholder too.
+pub fn document_cover(
+    store: &Store,
+    id: i64,
+    data_directory: &Path,
+) -> Result<Option<String>, OctError> {
+    let Some(document) = document_path(store, id)? else {
+        // An id that names nothing is "no cover", the same answer as a document with no readable
+        // PDF. The interface only ever asks about documents it is showing, so this is a race at
+        // worst, not a caller error worth a message on screen.
+        return Ok(None);
+    };
+
+    let cover_path = cover_file(&covers_directory(data_directory), id);
+
+    let pdfium = oct_scan::bind_pdfium_library().map_err(|error| {
+        eprintln!(
+            "the cover of {} could not be produced: {error}",
+            display_path(&document)
+        );
+        error
+    })?;
+
+    let cached = match cover_for(&pdfium, &cover_path, &document) {
+        Ok(CoverOutcome::Ready { path }) => path,
+        Ok(CoverOutcome::Unavailable { reason }) => {
+            // A fact about the document: no cover, no error, and the reason is written down.
+            eprintln!("no cover for {}: {reason}", display_path(&document));
+            return Ok(None);
+        }
+        Err(error) => {
+            eprintln!(
+                "the cover of {} could not be produced: {error}",
+                display_path(&document)
+            );
+            return Err(error);
+        }
+    };
+
+    match fs::read(&cached) {
+        Ok(bytes) => Ok(Some(png_data_url(&bytes))),
+        Err(error) => {
+            eprintln!(
+                "the cover of {} could not be read back: {error}",
+                display_path(&document)
+            );
+            Err(error.into())
+        }
+    }
+}
+
+/// The path of the document with `id`, or `None` when the id names nothing.
+///
+/// The cover belongs to the document row, not to a path the interface hands back, so the path is
+/// resolved from the store. The listing is the only lookup `oct-store` exposes today; it is ordered
+/// by path, which is irrelevant to a `find` by id.
+fn document_path(store: &Store, id: i64) -> Result<Option<PathBuf>, OctError> {
+    Ok(store
+        .library()?
+        .into_iter()
+        .find(|entry| entry.document.id == id)
+        .map(|entry| entry.document.document.path))
+}
+
+/// `bytes` as a PNG `data:` URL for an `<img src>`.
+///
+/// A data URL is deliberate: Tauri's asset protocol would need a new configuration entry plus a
+/// capability grant, and a 400 px cover is small, so the extra protocol surface buys nothing. The
+/// base64 is written here rather than pulled in as a dependency — the standard alphabet is twenty
+/// lines, and this workspace adds a crate only when it earns its place.
+fn png_data_url(bytes: &[u8]) -> String {
+    const PREFIX: &str = "data:image/png;base64,";
+    let mut url = String::with_capacity(PREFIX.len() + bytes.len().div_ceil(3) * 4);
+    url.push_str(PREFIX);
+    base64_encode(bytes, &mut url);
+    url
+}
+
+/// The RFC 4648 standard alphabet.
+const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Appends the Base64 encoding of `bytes` to `out`.
+fn base64_encode(bytes: &[u8], out: &mut String) {
+    for chunk in bytes.chunks(3) {
+        let first = u32::from(chunk[0]);
+        let second = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let third = u32::from(chunk.get(2).copied().unwrap_or(0));
+        let triple = (first << 16) | (second << 8) | third;
+
+        out.push(BASE64_ALPHABET[(triple >> 18) as usize & 0x3f] as char);
+        out.push(BASE64_ALPHABET[(triple >> 12) as usize & 0x3f] as char);
+        out.push(if chunk.len() > 1 {
+            BASE64_ALPHABET[(triple >> 6) as usize & 0x3f] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            BASE64_ALPHABET[triple as usize & 0x3f] as char
+        } else {
+            '='
+        });
+    }
 }
 
 /// Scans `folder` into `store` and returns what happened.
@@ -1089,6 +1223,53 @@ mod tests {
             get_language(&store).expect("read"),
             None,
             "an unknown stored value is reported as no language, not as one"
+        );
+    }
+
+    // --- R32: the cover's data URL and its file name ------------------------------------------
+
+    #[test]
+    fn the_cover_is_a_png_data_url_in_the_rfc_4648_encoding() {
+        // RFC 4648's own vectors, so the encoder is pinned against the standard rather than against
+        // itself. The three padding lengths are the cases that can go wrong.
+        let encoded = |input: &[u8]| {
+            let mut out = String::new();
+            base64_encode(input, &mut out);
+            out
+        };
+        assert_eq!(encoded(b""), "");
+        assert_eq!(encoded(b"f"), "Zg==");
+        assert_eq!(encoded(b"fo"), "Zm8=");
+        assert_eq!(encoded(b"foo"), "Zm9v");
+        assert_eq!(encoded(b"foob"), "Zm9vYg==");
+        assert_eq!(encoded(b"fooba"), "Zm9vYmE=");
+        assert_eq!(encoded(b"foobar"), "Zm9vYmFy");
+
+        // The full URL: the prefix a browser needs, then the PNG signature's own encoding, so the
+        // bytes the interface receives are an image and not text pretending to be one.
+        let url = png_data_url(b"\x89PNG\r\n\x1a\n");
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
+        assert_eq!(&url["data:image/png;base64,".len()..], "iVBORw0KGgo=");
+    }
+
+    #[test]
+    fn the_cover_file_is_named_by_the_document_id_inside_the_covers_directory() {
+        assert_eq!(
+            covers_directory(Path::new("/data/oct")),
+            PathBuf::from("/data/oct/covers")
+        );
+        assert_eq!(
+            cover_file(Path::new("/data/oct/covers"), 42),
+            PathBuf::from("/data/oct/covers/42.png")
+        );
+    }
+
+    #[test]
+    fn an_id_that_names_no_document_has_no_cover_and_no_error() {
+        let store = in_memory_store();
+        assert_eq!(
+            document_cover(&store, 999, Path::new("/data/oct")).expect("no document, no cover"),
+            None
         );
     }
 }
