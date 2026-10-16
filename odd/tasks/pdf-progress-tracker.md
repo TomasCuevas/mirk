@@ -1223,6 +1223,28 @@ hubiera ninguna carpeta vigilada... No pasa nada si tarda unos segundos en carga
 usuario algun tipo de loader para que este no crea que hay errores"*. La regla que se sigue de ahí es la misma que este proyecto
 vuelve a aprender: **una pantalla vacía tiene que significar "cargado, y genuinamente vacío", nunca "todavía no cargó"**.
 
+
+**L48 — el estado vacío dejó de mentir: mientras algo carga, se ve un loader (el defecto que el propio proyecto introdujo).**
+
+El usuario lo reportó así: *"tarda unos segundos en cargar todo, por lo que pase de la carpeta ajustes a inicio y
+por unos segundos, inicio estaba vacia, como si no hubiera ninguna carpeta vigilada... No pasa nada si tarda unos
+segundos en cargar, lo que deberia pasar es que se le muestre al usuario algun tipo de loader para que este no crea
+que hay errores"*. La causa: durante esos segundos la lista está vacía DE VERDAD, y la pantalla renderizaba su
+estado vacío — la nota de primera vez que este proyecto agregó unas horas antes — que es verdadera sobre una
+biblioteca vacía y falsa en ese momento, porque no falta nada: el trabajo está en curso.
+
+La regla quedó en una función pura y con nombre: **el contenido siempre gana; "vacío" sólo se muestra cuando no hay
+nada en curso; y el refresco silencioso de quince segundos NO cuenta como "en curso"** — eso último es lo que
+impide que parpadee una pantalla que ya muestra documentos, y es una restricción, no un detalle. El test que
+reproduce el caso del usuario (una recarga en curso con la lista vacía muestra el loader y no la nota) falló antes
+del arreglo con el cuerpo recibido conteniendo justamente la frase falsa.
+
+Residuos, escritos: la pantalla de una CATEGORÍA quedó fuera de las superficies del trabajador y todavía podía
+mostrar su mensaje vacío durante un escaneo (se cierra como seguimiento inmediato); y sólo hay test de pantalla
+para Inicio, mientras la biblioteca se cubre con la regla pura más el chequeo de tipos. La lección que se guarda es
+la que este proyecto ya escribió cuatro veces y volvió a necesitar: **una pantalla vacía tiene que significar
+"cargado, y genuinamente vacío", nunca "todavía no cargó"**.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
