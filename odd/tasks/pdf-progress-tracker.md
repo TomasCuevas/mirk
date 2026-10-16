@@ -1245,6 +1245,19 @@ para Inicio, mientras la biblioteca se cubre con la regla pura más el chequeo d
 la que este proyecto ya escribió cuatro veces y volvió a necesitar: **una pantalla vacía tiene que significar
 "cargado, y genuinamente vacío", nunca "todavía no cargó"**.
 
+
+**L49 — cerrado el último lugar donde una pantalla vacía podía mentir: la pantalla de una categoría.**
+
+El defecto del estado vacío (L48) tenía un tercer lugar: la lista completa que abre el botón de un carrusel seguía
+decidiendo por su cuenta, con una bandera que sólo conocía el final de la primera carga — no un escaneo en curso ni
+el trabajo de quitar una carpeta — así que durante esos segundos mostraba su propia frase de vacío. Ahora usa la
+misma regla compartida que Inicio y la Biblioteca, con la misma bandera real. El test del trabajador reprodujo el
+caso del usuario en esa pantalla (el cuerpo recibido contenía la frase falsa) y su falsificación ignoró la bandera,
+volviendo al rojo exacto. 127 tests de interfaz y tipos limpios.
+
+Con esto la frase que este proyecto necesitó cinco veces queda sin ningún lugar donde incumplirse: **una pantalla
+vacía significa "cargado, y genuinamente vacío", nunca "todavía no cargó"**.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
