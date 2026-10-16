@@ -166,7 +166,55 @@ fn set_document_title(id: i64, title: Option<String>) -> Result<(), String> {
     commands::set_document_title(&store, id, title.as_deref()).map_err(error_message)
 }
 
-/// Returns the cover of the document with `id` as a PNG data URL, or `null` when it has none (R32).
+/// Sets or clears the page the reader chose for the document's cover (R32).
+///
+/// `page: None` restores the default, the first page, and is a legitimate action rather than an error.
+/// The page arrives zero-based from the interface, exactly as it is stored; the interface converts from
+/// the one-based number it shows, at its own boundary.
+#[tauri::command]
+fn set_cover_page(id: i64, page: Option<u32>) -> Result<(), String> {
+    let store = open_store()?;
+    commands::set_cover_page(&store, id, page).map_err(error_message)
+}
+
+/// Opens the system file browser and installs the image the reader chose as the cover (R32).
+///
+/// The dialog is driven from Rust for exactly the reasons [`pick_folder`] documents: the interface
+/// talks to our thin commands, not to a plugin, so no capability file changes and the decision stays
+/// testable in [`commands::set_cover_image`].
+///
+/// The contract is: `true` when an image was chosen and installed, `false` when the user cancelled,
+/// and `Err` for a real failure — including a chosen file that is not an image, which
+/// [`commands::set_cover_image`] refuses as an invalid argument. Cancel is a normal answer and never an
+/// error, so the interface can close its modal in both cases without inventing a message.
+#[tauri::command]
+async fn choose_cover_image(id: i64, app: AppHandle) -> Result<bool, String> {
+    let chosen = chosen_file(
+        app.dialog()
+            .file()
+            .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+            .blocking_pick_file(),
+    )?;
+    let Some(source) = chosen else {
+        return Ok(false);
+    };
+
+    let data_directory = data_directory()?;
+    let store = open_store()?;
+    commands::set_cover_image(&store, id, &data_directory, Some(Path::new(&source)))
+        .map_err(error_message)?;
+    Ok(true)
+}
+
+/// Removes the image the reader supplied, so the document shows whichever page it shows (R32).
+#[tauri::command]
+fn remove_cover_image(id: i64) -> Result<(), String> {
+    let data_directory = data_directory()?;
+    let store = open_store()?;
+    commands::set_cover_image(&store, id, &data_directory, None).map_err(error_message)
+}
+
+/// Returns the cover of the document with `id` as a data URL, or `null` when it has none (R32).
 ///
 /// The work runs on [`tauri::async_runtime::spawn_blocking`] because rendering is CPU-bound and
 /// pdfium is single-threaded behind this binding: a cover must never occupy the thread that paints
@@ -306,6 +354,26 @@ fn chosen_folder(chosen: Option<FilePath>) -> Result<Option<String>, String> {
             match path.to_str() {
                 Some(path) => Ok(Some(path.to_string())),
                 None => Err(format!("the chosen folder is not valid UTF-8: {}", path.display())),
+            }
+        }
+    }
+}
+
+/// The frozen result of an image choice (R32): the path as a `String`, `None` for a cancel, or an error.
+///
+/// Deliberately the same shape as [`chosen_folder`] and, like it, kept apart from the command so the
+/// contract can be asserted without opening a native dialog. A cancel is a normal answer; only a choice
+/// that cannot become a UTF-8 path is a failure, because every path this project stores is UTF-8 (R7).
+fn chosen_file(chosen: Option<FilePath>) -> Result<Option<String>, String> {
+    match chosen {
+        None => Ok(None),
+        Some(path) => {
+            let path = path
+                .into_path()
+                .map_err(|error| format!("the chosen image could not be read as a path: {error}"))?;
+            match path.to_str() {
+                Some(path) => Ok(Some(path.to_string())),
+                None => Err(format!("the chosen image is not valid UTF-8: {}", path.display())),
             }
         }
     }
@@ -655,6 +723,9 @@ fn main() {
             start_drag,
             list_library,
             set_document_title,
+            set_cover_page,
+            choose_cover_image,
+            remove_cover_image,
             document_cover,
             scan_folder,
             progress_providers,
@@ -721,7 +792,7 @@ mod tests {
     // chosen folder is its path, and a choice that cannot be a path is an error rather than a silent
     // `None` — the one failure mode that would be indistinguishable from a cancel to the interface.
 
-    use super::{chosen_folder, FilePath};
+    use super::{chosen_file, chosen_folder, FilePath};
     use std::path::PathBuf;
     use std::str::FromStr;
 
@@ -745,6 +816,32 @@ mod tests {
         // an `Err`, never as `Ok(None)`, which the interface would render as a cancel.
         let chosen = FilePath::from_str("content://com.example/document/1").expect("parse a URI");
         assert!(chosen_folder(Some(chosen)).is_err());
+    }
+
+    // --- R32: the image chooser's frozen contract ---------------------------------------------
+    //
+    // The same three answers as the folder chooser, for the same reasons: cancelling is normal, a
+    // chosen file is its path, and a choice that cannot be a path is an error rather than a silent
+    // `None` the interface would read as a cancel.
+
+    #[test]
+    fn cancelling_the_image_chooser_is_a_normal_answer() {
+        assert_eq!(chosen_file(None), Ok(None));
+    }
+
+    #[test]
+    fn a_chosen_image_becomes_its_path() {
+        let chosen = FilePath::from(PathBuf::from("/home/u/Pictures/cover.png"));
+        assert_eq!(
+            chosen_file(Some(chosen)),
+            Ok(Some("/home/u/Pictures/cover.png".to_string()))
+        );
+    }
+
+    #[test]
+    fn an_image_choice_that_cannot_be_a_path_is_an_error() {
+        let chosen = FilePath::from_str("content://com.example/document/1").expect("parse a URI");
+        assert!(chosen_file(Some(chosen)).is_err());
     }
 }
 

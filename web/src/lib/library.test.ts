@@ -5,6 +5,9 @@ import {
   LIBRARY_REFRESH_MS,
   STALE_AFTER_SECONDS,
   categoryEntries,
+  coverEditor,
+  coverPageFromInput,
+  coverPageInput,
   coverSource,
   currentUnixSeconds,
   describeProgressView,
@@ -14,6 +17,9 @@ import {
   describeProviderRegistry,
   describeScanSummary,
   displayTitle,
+  editorClosesAfterCommit,
+  editorEntry,
+  editorRefreshesLibrary,
   fetchCover,
   filterEntries,
   libraryView,
@@ -835,5 +841,128 @@ describe("a document's cover", () => {
     expect(coverSource(undefined)).toBeNull();
     expect(coverSource("")).toBeNull();
     expect(coverSource(42)).toBeNull();
+  });
+});
+
+/**
+ * R32: the reader can choose a page of their own or supply an image, and the editor has to speak the
+ * store's own language while showing a person one-based numbers.
+ *
+ * The conversion and the "is there an image to remove" decision are pure functions rather than
+ * conditions in the modal's markup, for the same reason `titleEditor` is: a rule nothing checks drifts,
+ * and a test cannot click a modal.
+ */
+describe("the cover editor", () => {
+  it("shows the first page when the reader has not chosen one", () => {
+    // `null` means the default, and the default is page one — not page zero, which is not a number a
+    // person reads.
+    expect(coverPageInput(entry({ coverPage: null }))).toBe("1");
+    expect(coverEditor(entry({ coverPage: null })).page).toBe("1");
+  });
+
+  it("shows the chosen page one-based, the way a person counts pages", () => {
+    // The store keeps zero-based pages; a chosen page 12 is shown as 13.
+    expect(coverPageInput(entry({ coverPage: 12 }))).toBe("13");
+  });
+
+  it("turns what the reader typed back into a zero-based page or the default", () => {
+    expect(coverPageFromInput("13")).toEqual({ ok: true, page: 12 });
+    expect(coverPageFromInput("1")).toEqual({ ok: true, page: 0 });
+    // A number input can hand back a number, and the same field can hand back an emptied value as
+    // `""`, `null` or `undefined`; all of them work and all of them mean the default.
+    expect(coverPageFromInput(13)).toEqual({ ok: true, page: 12 });
+    // Empty is the plain default: the first page, stored as `null`, the value the one rule treats as
+    // the first page rather than as a choice the reader made.
+    expect(coverPageFromInput("   ")).toEqual({ ok: true, page: null });
+    expect(coverPageFromInput("")).toEqual({ ok: true, page: null });
+    expect(coverPageFromInput(null)).toEqual({ ok: true, page: null });
+    expect(coverPageFromInput(undefined)).toEqual({ ok: true, page: null });
+  });
+
+  it("refuses a page that is not a positive whole number rather than inventing one", () => {
+    for (const refused of ["abc", "0", "-3", "1.5", "12px"]) {
+      expect(coverPageFromInput(refused), refused).toEqual({ ok: false });
+    }
+  });
+
+  it("offers to remove the image only when the reader actually supplied one", () => {
+    expect(coverEditor(entry({ coverImage: null })).hasImage).toBe(false);
+    expect(coverEditor(entry({ coverImage: "12-cover.png" })).hasImage).toBe(true);
+    // A blank value is not an image, the same way a blank title is not a title: nothing to remove.
+    expect(coverEditor(entry({ coverImage: "   " })).hasImage).toBe(false);
+  });
+});
+
+/**
+ * R32, corrected: the ONE editor edits a title AND a cover, and a cover action must not decide the
+ * title.
+ *
+ * The pencil opens a single modal whose title field is prefilled, and the draft in that field is
+ * decided by Cancel or Save alone. The cover has its own actions inside it — a page, an image, the
+ * removal of that image. The trap this pins: a successful cover action used to CLOSE the editor, which
+ * destroyed a title the reader had typed but not saved, without a word. The component test environment
+ * cannot type into a field, so the rule the screen follows lives in `library.ts` and is reached here.
+ */
+describe("what a successful commit does to the document editor", () => {
+  it("keeps the editor open after a cover action, so an undecided title draft survives", () => {
+    // Closing is how the draft dies. A cover action decides the cover and NOTHING ELSE, so it must
+    // leave the editor — and the title being written in it — exactly where it is. Cancel and Save are
+    // the only controls that decide a title, and neither of them was pressed.
+    expect(editorClosesAfterCommit("cover")).toBe(false);
+  });
+
+  it("closes the editor only when the title's own controls decide the title", () => {
+    // Save writes the draft and Restore replaces it; both end the edit, so both close.
+    expect(editorClosesAfterCommit("title")).toBe(true);
+  });
+});
+
+/**
+ * R32, corrected: the editor's facts come from the listing the interface now holds, not from the
+ * snapshot it was opened with, and a completed cover change refreshes that listing.
+ *
+ * The two defects the user hit are one rule stated twice: the listing was not re-read after a cover
+ * action (so the chosen page came back empty), and the entry the editor showed was the snapshot taken
+ * before the change (so the reader's own title appeared to be lost). The dialogue cannot be clicked, so
+ * both halves are pinned here as the state the editor must derive.
+ */
+describe("the document editor and the listing it reads from", () => {
+  const opened = entry({
+    title: "Microsoft Word - Completo.rtf",
+    userTitle: null,
+    coverPage: null,
+    coverImage: null,
+  });
+
+  const current = entry({
+    title: "Padre Rico, Padre Pobre",
+    userTitle: "Padre Rico, Padre Pobre",
+    coverPage: 4,
+    coverImage: "1-cover.png",
+  });
+
+  it("still carries the reader's title after a cover change", () => {
+    // The document's own title is a separate fact a cover action never touched; a refresh that showed
+    // it in place of the reader's is exactly the title "reverting" on screen after an image.
+    const shown = editorEntry([current], opened);
+    expect(displayTitle(shown)).toBe("Padre Rico, Padre Pobre");
+    expect(titleEditor(shown)).toEqual({ value: "Padre Rico, Padre Pobre", yours: true });
+  });
+
+  it("carries the chosen page back, so reopening is not empty", () => {
+    // The page field is one-based; the stored 4 is shown as 5.
+    expect(coverEditor(editorEntry([current], opened)).page).toBe("5");
+  });
+
+  it("keeps the opened entry when the listing no longer names the document", () => {
+    // A refresh cannot be allowed to close an editor over a document the reader is using.
+    expect(editorEntry([entry({ id: 99 })], opened)).toBe(opened);
+  });
+
+  it("refreshes the listing after a cover change, exactly as after a title change", () => {
+    // Without this the listing stayed stale, so the entry a reopened editor seeds from never learned
+    // the chosen page — the defect the user reported as the page not being loaded.
+    expect(editorRefreshesLibrary("cover")).toBe(true);
+    expect(editorRefreshesLibrary("title")).toBe(true);
   });
 });

@@ -81,6 +81,19 @@ pub enum FileId {
     ContentHash(String),
 }
 
+/// What the reader asked a document's cover to be (R32).
+///
+/// This is the **choice**, not the image: the covers directory is the application's business, and
+/// [`Document`] knows nothing about it. The name held by [`CoverChoice::Image`] is the file's name
+/// inside that directory, never a path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoverChoice {
+    /// An image the reader supplied, copied into the covers directory under this file name.
+    Image(String),
+    /// A page of the document, zero-based exactly like every other page in this workspace.
+    Page(u32),
+}
+
 /// A PDF known to the library.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
@@ -109,6 +122,19 @@ pub struct Document {
     /// its own field, instead of overwriting [`Document::title`], is what lets the interface say
     /// whose title it is showing and what makes restoring the document's own title possible at all.
     pub user_title: Option<String>,
+    /// The page the reader chose for the cover, zero-based, or [`None`] for the first page (R32).
+    ///
+    /// `None` is the **default**, not "unknown": the first page is what a document without a choice
+    /// shows. Storing `0` and storing `None` display the same cover, and the distinction exists so
+    /// that "restore the default" is a real action rather than a value the reader has to guess.
+    pub cover_page: Option<u32>,
+    /// The file name of an image the reader supplied, inside the covers directory, or [`None`] (R32).
+    ///
+    /// Only the **name** is kept, never a path: the application copies the reader's file into its own
+    /// covers directory, so the image survives a rescan, a move of the original, or the original
+    /// being deleted. A path outside that directory would be a reference to somebody else's data that
+    /// this application does not own.
+    pub cover_image: Option<String>,
 }
 
 /// A trimmed value, or [`None`] when it held only whitespace.
@@ -143,6 +169,8 @@ impl Document {
             title: None,
             author: None,
             user_title: None,
+            cover_page: None,
+            cover_image: None,
         }
     }
 
@@ -174,6 +202,24 @@ impl Document {
     /// encoding has to be exact. See [`crate::uri`].
     pub fn uri(&self) -> String {
         crate::uri::file_uri_from_path(&self.path)
+    }
+
+    /// The cover to show (R32).
+    ///
+    /// **This is the one place the rule lives**, exactly like [`Document::display_title`]: the
+    /// reader's own image wins when there is one, otherwise the page they chose, otherwise the first
+    /// page. A caller renders what this returns rather than deciding the precedence again, so the
+    /// card, the cached file's name and any future screen cannot disagree about which cover a
+    /// document has.
+    ///
+    /// A blank image name counts as no image, the same way a blank title counts as no title: PDF
+    /// metadata and hand-edited databases can hold an empty string, and `NULL` already means "not
+    /// set", so the two must not be made to mean the same thing in two different ways.
+    pub fn cover_choice(&self) -> CoverChoice {
+        if let Some(image) = non_blank(self.cover_image.as_deref()) {
+            return CoverChoice::Image(image.to_owned());
+        }
+        CoverChoice::Page(self.cover_page.unwrap_or(0))
     }
 }
 
@@ -242,6 +288,42 @@ mod tests {
         document.title = Some("   ".to_string());
 
         assert_eq!(document.display_title(), "report");
+    }
+
+    /// R32: one function decides which cover is shown, and it is the only place that decides.
+    #[test]
+    fn the_readers_image_wins_over_the_page_they_chose() {
+        let mut document = Document::new("/library/report.pdf");
+        document.cover_page = Some(7);
+        document.cover_image = Some("9-cover.png".to_string());
+
+        assert_eq!(
+            document.cover_choice(),
+            CoverChoice::Image("9-cover.png".to_string())
+        );
+    }
+
+    #[test]
+    fn without_an_image_the_page_the_reader_chose_is_shown() {
+        let mut document = Document::new("/library/report.pdf");
+        document.cover_page = Some(7);
+
+        assert_eq!(document.cover_choice(), CoverChoice::Page(7));
+    }
+
+    #[test]
+    fn a_document_with_no_choice_shows_the_first_page() {
+        // The first page is the default, and this is the one place that default lives.
+        assert_eq!(Document::new("/library/report.pdf").cover_choice(), CoverChoice::Page(0));
+    }
+
+    #[test]
+    fn a_blank_image_name_is_treated_as_no_image() {
+        let mut document = Document::new("/library/report.pdf");
+        document.cover_page = Some(4);
+        document.cover_image = Some("   ".to_string());
+
+        assert_eq!(document.cover_choice(), CoverChoice::Page(4));
     }
 
     #[test]

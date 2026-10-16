@@ -813,6 +813,8 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
         "last_opened_at",
         "status",
         "user_title",
+        "cover_page",
+        "cover_image",
     ] {
         assert!(
             columns.iter().any(|name| name == documented),
@@ -821,8 +823,8 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
     }
     assert_eq!(
         columns.len(),
-        20,
-        "the documents table must keep its twenty columns, found {columns:?}"
+        22,
+        "the documents table must keep its twenty-two columns, found {columns:?}"
     );
 
     let tables: Vec<String> = raw
@@ -860,6 +862,286 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
         (1, 1),
         "no row may be lost or duplicated by a failed migration"
     );
+}
+
+#[test]
+fn a_step_that_fails_on_the_way_to_v6_leaves_the_database_at_v5_untouched() {
+    // The same shape as the V4 and V5 atomicity tests, one version later. A database is built with the
+    // store's own current schema — so `documents` already has `cover_page` — and then only its version
+    // stamp is rewound to 5. Reopening it runs the V6 step, `ALTER TABLE documents ADD COLUMN
+    // cover_page INTEGER`, against a table that already has that column, which SQLite refuses with
+    // "duplicate column name". A step stamped before its work would leave the database claiming version
+    // 6 with one column added and the other not; the transaction must leave the version at 5 and every
+    // row untouched.
+    let (_dir, path) = temp_db();
+
+    let document_id;
+    {
+        let store = Store::open(&path).expect("build a current database");
+        let mut doc = document("/library/at-risk.pdf", FileId::Posix { dev: 3, ino: 19 });
+        doc.pages = Some(120);
+        doc.title = Some("The document's own title".to_string());
+        document_id = store.upsert_document(&doc).expect("insert the document");
+        store
+            .set_user_title(document_id, Some("The reader's title"))
+            .expect("name the document");
+        store
+            .set_cover_page(document_id, Some(7))
+            .expect("choose a cover page");
+        store
+            .set_cover_image(document_id, Some("9-cover.png"))
+            .expect("choose a cover image");
+        store
+            .record_progress(
+                document_id,
+                &StoredProgress::new(
+                    12,
+                    Some(120),
+                    ProgressSource::External("evince-gvfs"),
+                    Confidence::Exact,
+                )
+                .with_read_at(Some(1_700_000_000)),
+            )
+            .expect("record the position");
+        store.set_setting("language", "es").expect("write a setting");
+    }
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.pragma_update(None, "user_version", 5i64)
+            .expect("rewind the version stamp to the pre-V6 database shape");
+    }
+
+    // 1. The failing step reaches the caller rather than being swallowed or papered over.
+    let error =
+        Store::open(&path).expect_err("the V6 step must fail when `cover_page` already exists");
+    assert!(
+        matches!(error, OctError::Storage(_)),
+        "a failed migration must surface as a storage error, got {error:?}"
+    );
+
+    // 2. The version was not stamped ahead of work that did not happen.
+    let raw = rusqlite::Connection::open(&path).expect("open raw");
+    let version: i64 = raw
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("read the version");
+    assert_eq!(
+        version, 5,
+        "a failed V6 step must leave the database at version 5, not claim version 6"
+    );
+
+    // 3. Every pre-existing value is still readable: both titles, the cover choice, the page count, the
+    //    position with its reading time, and the setting the previous steps recorded.
+    let (path_value, own_title, user_title, pages): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+    ) = raw
+        .query_row(
+            "SELECT path, title, user_title, pages FROM documents WHERE id = ?1",
+            rusqlite::params![document_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("the document must survive the failed migration");
+    let (cover_page, cover_image): (Option<i64>, Option<String>) = raw
+        .query_row(
+            "SELECT cover_page, cover_image FROM documents WHERE id = ?1",
+            rusqlite::params![document_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("the cover choice must survive the failed migration");
+    assert_eq!(path_value, "/library/at-risk.pdf");
+    assert_eq!(own_title.as_deref(), Some("The document's own title"));
+    assert_eq!(user_title.as_deref(), Some("The reader's title"));
+    assert_eq!(cover_page, Some(7));
+    assert_eq!(cover_image.as_deref(), Some("9-cover.png"));
+    assert_eq!(pages, Some(120));
+
+    let (page, source, stored_read_at): (i64, String, Option<i64>) = raw
+        .query_row(
+            "SELECT page, source, read_at FROM progress WHERE doc_id = ?1",
+            rusqlite::params![document_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("the position must survive the failed migration");
+    assert_eq!(page, 12);
+    assert_eq!(source, "evince-gvfs");
+    assert_eq!(stored_read_at, Some(1_700_000_000));
+
+    let language: String = raw
+        .query_row("SELECT value FROM settings WHERE key = 'language'", [], |row| {
+            row.get(0)
+        })
+        .expect("the setting must survive the failed migration");
+    assert_eq!(language, "es");
+
+    // 4. No half-applied state: the column the failing step wanted to add is still there exactly once,
+    //    the other V6 column was not left behind twice, the table keeps its documented columns, and no
+    //    table was created or dropped.
+    let mut statement = raw
+        .prepare("SELECT name FROM pragma_table_info('documents')")
+        .expect("prepare");
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        columns.iter().filter(|name| name.as_str() == "cover_page").count(),
+        1,
+        "the failed ADD COLUMN must not have left a second `cover_page`; columns: {columns:?}"
+    );
+    assert_eq!(
+        columns.iter().filter(|name| name.as_str() == "cover_image").count(),
+        1,
+        "the failed batch must not have added `cover_image` twice; columns: {columns:?}"
+    );
+    assert_eq!(
+        columns.len(),
+        22,
+        "the documents table must keep its twenty-two columns, found {columns:?}"
+    );
+
+    let tables: Vec<String> = raw
+        .prepare(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        tables,
+        vec![
+            "documents",
+            "folders",
+            "open_events",
+            "progress",
+            "settings",
+            "suggestions",
+            "viewers",
+        ],
+        "the failed migration must not have created or dropped a table"
+    );
+
+    let document_count: i64 = raw
+        .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+        .expect("count the documents");
+    let progress_count: i64 = raw
+        .query_row("SELECT COUNT(*) FROM progress", [], |row| row.get(0))
+        .expect("count the positions");
+    assert_eq!(
+        (document_count, progress_count),
+        (1, 1),
+        "no row may be lost or duplicated by a failed migration"
+    );
+}
+
+// --- R32: the reader's cover choice -------------------------------------------------------------
+
+#[test]
+fn the_readers_cover_choice_round_trips_and_survives_a_restart() {
+    let (_dir, path) = temp_db();
+    let document_id;
+    {
+        let store = Store::open(&path).expect("open");
+        document_id = store
+            .upsert_document(&document("/library/read.pdf", FileId::Posix { dev: 7, ino: 7 }))
+            .expect("insert");
+
+        // Neither choice exists until the reader makes one: the first page is the rule's default and
+        // is not a stored value.
+        let entries = store.library().expect("list");
+        assert_eq!(entries[0].document.document.cover_page, None);
+        assert_eq!(entries[0].document.document.cover_image, None);
+
+        store.set_cover_page(document_id, Some(12)).expect("choose a page");
+        store
+            .set_cover_image(document_id, Some("7-cover.jpg"))
+            .expect("choose an image");
+    }
+
+    // The choice is a stored fact, not something a running process remembers: a fresh open reads the
+    // very page and image the reader picked.
+    let store = Store::open(&path).expect("reopen");
+    let entries = store.library().expect("list after restart");
+    let document = &entries[0].document.document;
+    assert_eq!(document.cover_page, Some(12));
+    assert_eq!(document.cover_image.as_deref(), Some("7-cover.jpg"));
+    // And the one rule reads them back in the right order: the image the reader supplied wins over the
+    // page they chose.
+    assert_eq!(
+        document.cover_choice(),
+        oct_core::domain::CoverChoice::Image("7-cover.jpg".to_string())
+    );
+
+    // Removing the image falls back to the page still on record, not to the default.
+    store
+        .set_cover_image(document_id, None)
+        .expect("remove the image");
+    let entries = store.library().expect("list after removal");
+    assert_eq!(
+        entries[0].document.document.cover_choice(),
+        oct_core::domain::CoverChoice::Page(12)
+    );
+}
+
+#[test]
+fn a_rescan_does_not_clear_the_readers_cover_choice() {
+    // The same rule the reader's title already has (R31): the scanner refreshes the document's own
+    // metadata and must never be able to erase a choice a person made. `upsert_document` simply does
+    // not write the cover columns, so re-scanning a document that gained a page count cannot reset it.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let identity = FileId::Posix { dev: 8, ino: 8 };
+    let document_id = store
+        .upsert_document(&document("/library/read.pdf", identity.clone()))
+        .expect("insert");
+    store.set_cover_page(document_id, Some(3)).expect("choose a page");
+    store
+        .set_cover_image(document_id, Some("8-cover.png"))
+        .expect("choose an image");
+
+    // The rescan: the same document, this time with a page count and a title, exactly what the scanner
+    // supplies. The identity matches, so it updates the row in place.
+    let mut rescanned = document("/library/read.pdf", identity);
+    rescanned.pages = Some(240);
+    rescanned.title = Some("Counted at last".to_string());
+    let same_id = store.upsert_document(&rescanned).expect("rescan");
+    assert_eq!(same_id, document_id, "the rescan updates the same row");
+
+    let entries = store.library().expect("list");
+    let document = &entries[0].document.document;
+    assert_eq!(document.pages, Some(240), "the scan's own fact still lands");
+    assert_eq!(document.cover_page, Some(3), "a rescan must not clear the page");
+    assert_eq!(
+        document.cover_image.as_deref(),
+        Some("8-cover.png"),
+        "a rescan must not clear the image"
+    );
+}
+
+#[test]
+fn a_blank_or_pathlike_cover_image_name_is_refused_as_an_invalid_argument() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let id = store
+        .upsert_document(&document("/library/read.pdf", FileId::Posix { dev: 9, ino: 9 }))
+        .expect("insert");
+
+    for refused in ["", "   ", "/etc/passwd", "a/../b.png", "dir\\x.png"] {
+        let result = store.set_cover_image(id, Some(refused));
+        assert!(
+            matches!(result, Err(OctError::InvalidInput { field, .. }) if field == "cover image"),
+            "`{refused}` must be an invalid argument, got {result:?}"
+        );
+    }
+
+    // Nothing was written by any refusal: `NULL` still means "no image".
+    let entries = store.library().expect("list");
+    assert_eq!(entries[0].document.document.cover_image, None);
 }
 
 // --- S7: paths are opaque UTF-8 and are not Unicode-normalised --------------------------------

@@ -56,3 +56,110 @@ describe("how many tiles a grid draws", () => {
     expect(cardsDrawn(25, "grid")).toBe(25);
   });
 });
+
+/**
+ * The document editor (R32, corrected).
+ *
+ * The pencil used to open a title-only modal while the cover had a control of its own on the card's
+ * bottom-left. The user rejected a third control over a small cover — "everything related to editing
+ * should be on the pencil icon" — so the cover's page, its image and the removal of that image now live
+ * inside the one modal the pencil opens. That modal was never tested; this is the test it never had.
+ *
+ * The modal is the grid's own state, so rendering it needs the grid told which document is open. That
+ * is what `initialEditing` is for: the same kind of render seam as BookCard's `cover`.
+ */
+describe("the document editor", () => {
+  const props = { t: english, folderStatus: null, onOpenFolder: () => {} };
+
+  function document(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
+    return { ...entries(1)[0], ...overrides };
+  }
+
+  function open(entry: LibraryEntry): string {
+    return render(BookGrid, {
+      props: { ...props, entries: [entry], initialEditing: entry },
+    }).body;
+  }
+
+  it("holds the cover controls inside the pencil's modal, not only the title", () => {
+    const body = open(document({ coverImage: "chosen.png" }));
+
+    // One editing surface: the dialog is on screen…
+    expect(body).toContain('role="dialog"');
+    // …and it holds the title editor and the cover: the page field, choosing an image and removing it.
+    expect(body).toContain(english("card.titleLabel"));
+    expect(body).toContain(english("card.coverPageLabel"));
+    expect(body).toContain(english("card.coverChooseImage"));
+    expect(body).toContain(english("card.coverRemoveImage"));
+  });
+
+  it("offers to remove the image only once the reader supplied one", () => {
+    expect(open(document({ coverImage: null }))).not.toContain(english("card.coverRemoveImage"));
+    expect(open(document({ coverImage: "chosen.png" }))).toContain(english("card.coverRemoveImage"));
+  });
+
+  it("leaves the cover itself with no control of its own", () => {
+    const body = open(document());
+
+    // The cover keeps only the page badge, which states a fact rather than opening an editor.
+    expect(body).not.toContain("edit-cover");
+    expect(body).toContain("cover-pages");
+  });
+});
+
+/**
+ * R32, corrected: the editor's facts come from the listing the interface now holds, not from the
+ * snapshot it was opened with.
+ *
+ * A completed cover change refreshes the listing exactly as a completed title change already did, so
+ * by the time the editor states whose title this is or seeds its page field the current entry is in
+ * `entries`. Reading the snapshot instead is how the reader's own title seemed to vanish after an
+ * image was chosen, and how the page they had chosen came back empty when the editor was reopened.
+ * The dialogue cannot be clicked, so what is pinned here is the state it must show for a document the
+ * listing has moved on from — the same state the refresh produces.
+ */
+describe("the document editor and the listing it reads from", () => {
+  const props = { t: english, folderStatus: null, onOpenFolder: () => {} };
+
+  // The entry the editor was opened with, before the cover change reached the listing, and the same
+  // document once the listing has been re-read: the reader's title is back and page 5 is the cover.
+  function snapshotAndCurrent(): { opened: LibraryEntry; current: LibraryEntry } {
+    const base = entries(1)[0];
+    const opened: LibraryEntry = {
+      ...base,
+      title: "Microsoft Word - Completo.rtf",
+      userTitle: null,
+      coverPage: null,
+      coverImage: null,
+    };
+    const current: LibraryEntry = {
+      ...opened,
+      title: "Padre Rico, Padre Pobre",
+      userTitle: "Padre Rico, Padre Pobre",
+      coverPage: 4,
+    };
+    return { opened, current };
+  }
+
+  // Only the dialog, so the card's own copy of the title cannot stand in for the editor's.
+  function dialog(openedEntry: LibraryEntry, currentEntry: LibraryEntry): string {
+    const body = render(BookGrid, {
+      props: { ...props, entries: [currentEntry], initialEditing: openedEntry },
+    }).body;
+    return body.slice(body.indexOf('role="dialog"'));
+  }
+
+  it("still carries the reader's title after a cover change", () => {
+    const { opened, current } = snapshotAndCurrent();
+    const shown = dialog(opened, current);
+    expect(shown).toContain("Padre Rico, Padre Pobre");
+    expect(shown).not.toContain("Microsoft Word - Completo.rtf");
+  });
+
+  it("shows the page the reader chose, so reopening is not empty", () => {
+    const { opened, current } = snapshotAndCurrent();
+    const shown = dialog(opened, current);
+    expect(shown).toContain('value="5"');
+    expect(shown).not.toContain('value="1"');
+  });
+});

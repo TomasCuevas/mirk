@@ -239,6 +239,28 @@ const SCHEMA_V5: &str = "
 ALTER TABLE documents ADD COLUMN user_title TEXT;
 ";
 
+/// Version 6: the reader's cover choice, as two nullable facts on the document (R32).
+///
+/// The default cover is the first page, so `cover_page` is `NULL` for "the first page" — the same
+/// shape `user_title` uses, where `NULL` means "not set" rather than a value. `cover_image` holds the
+/// **file name** of an image the reader supplied, inside the covers directory; a name and not a path,
+/// because the application copies the reader's image into that directory (L20), so the cover survives
+/// a rescan and the original file being moved or deleted.
+///
+/// The precedence between the two — image first, otherwise the page, otherwise the first — is a single
+/// rule in [`oct_core::Document::cover_choice`] and not here: this crate stores the facts and does not
+/// decide what they mean.
+///
+/// Added as a migration rather than by editing an earlier schema, because all of them are **frozen**:
+/// a database an earlier build already created reports their versions, and editing the text would
+/// leave that database without the columns forever while claiming otherwise. Both `ALTER TABLE`
+/// statements run in one transaction with the version stamp, so a step that fails halfway leaves the
+/// version behind and no half-added column (the V6 atomicity test pins exactly that).
+const SCHEMA_V6: &str = "
+ALTER TABLE documents ADD COLUMN cover_page INTEGER;
+ALTER TABLE documents ADD COLUMN cover_image TEXT;
+";
+
 /// A stored document, together with its database id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentRecord {
@@ -365,7 +387,7 @@ pub fn covering_folder<'a>(folders: &'a [WatchedFolder], path: &Path) -> Option<
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 5;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 6;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -612,6 +634,79 @@ impl Store {
         Ok(())
     }
 
+    /// Sets or clears the page the reader chose for the document's cover (R32).
+    ///
+    /// `None` restores the default — the first page — and is a legitimate action, not an error. A
+    /// page is stored zero-based exactly like a reading position, so the interface converts once at
+    /// its own boundary. A page beyond the end is **not** refused here: it is a cover that cannot be
+    /// rendered, which the cover path already reports as "no cover" without an invented message.
+    /// Refusing it in the store would put a second copy of that rule where it does not belong.
+    pub fn set_cover_page(&self, id: i64, page: Option<u32>) -> Result<(), OctError> {
+        let affected = self
+            .connection
+            .execute(
+                "UPDATE documents SET cover_page = ?1 WHERE id = ?2",
+                params![page.map(i64::from), id],
+            )
+            .map_err(storage_error)?;
+
+        if affected == 0 {
+            return Err(OctError::Storage(format!(
+                "no document with id {id} to set a cover page on"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Sets or clears the reader's supplied image for the document's cover (R32).
+    ///
+    /// `file_name` is the **name** of a file inside the covers directory, never a path. `None`
+    /// removes the image, so the document shows whichever page it shows. A blank name is refused as
+    /// the invalid argument it is: `NULL` already means "no image", and an empty string would make
+    /// the column mean two different things. A value carrying a directory part is refused too — the
+    /// application copies the reader's file into its own directory and stores the name it gave it, so
+    /// a caller handing over a path has misunderstood the contract, and joining that path would let a
+    /// hand-edited database point outside the covers directory.
+    pub fn set_cover_image(&self, id: i64, file_name: Option<&str>) -> Result<(), OctError> {
+        let normalized: Option<&str> = match file_name {
+            Some(value) => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err(OctError::InvalidInput {
+                        field: "cover image",
+                        value: value.to_string(),
+                        expected: "a file name inside the covers directory, or no value to remove it"
+                            .to_string(),
+                    });
+                }
+                if trimmed.contains('/') || trimmed.contains('\\') {
+                    return Err(OctError::InvalidInput {
+                        field: "cover image",
+                        value: value.to_string(),
+                        expected: "a plain file name with no directory part".to_string(),
+                    });
+                }
+                Some(trimmed)
+            }
+            None => None,
+        };
+
+        let affected = self
+            .connection
+            .execute(
+                "UPDATE documents SET cover_image = ?1 WHERE id = ?2",
+                params![normalized, id],
+            )
+            .map_err(storage_error)?;
+
+        if affected == 0 {
+            return Err(OctError::Storage(format!(
+                "no document with id {id} to set a cover image on"
+            )));
+        }
+        Ok(())
+    }
+
     /// Finds a document by its portable identity alone, without a path.
     ///
     /// Returns `Ok(None)` when no document carries that identity — an absent document is a normal
@@ -625,7 +720,7 @@ impl Store {
         let row = self
             .connection
             .query_row(
-                "SELECT id, path, file_id_kind, volume_id, file_index, content_hash, pages, title, author, user_title \
+                "SELECT id, path, file_id_kind, volume_id, file_index, content_hash, pages, title, author, user_title, cover_page, cover_image \
                  FROM documents \
                  WHERE file_id_kind = ?1 AND volume_id IS ?2 AND file_index IS ?3 AND content_hash IS ?4 \
                  LIMIT 1",
@@ -642,13 +737,29 @@ impl Store {
                         row.get::<_, Option<String>>(7)?,
                         row.get::<_, Option<String>>(8)?,
                         row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<i64>>(10)?,
+                        row.get::<_, Option<String>>(11)?,
                     ))
                 },
             )
             .optional()
             .map_err(storage_error)?;
 
-        let Some((id, path, kind, volume, index, hash, pages, title, author, user_title)) = row else {
+        let Some((
+            id,
+            path,
+            kind,
+            volume,
+            index,
+            hash,
+            pages,
+            title,
+            author,
+            user_title,
+            cover_page,
+            cover_image,
+        )) = row
+        else {
             return Ok(None);
         };
 
@@ -662,6 +773,10 @@ impl Store {
             .map(u32::try_from)
             .transpose()
             .map_err(|_| OctError::Storage("stored page count is not a valid page number".into()))?;
+        let cover_page = cover_page
+            .map(u32::try_from)
+            .transpose()
+            .map_err(|_| OctError::Storage("stored cover page is not a valid page number".into()))?;
 
         Ok(Some(DocumentRecord {
             id,
@@ -672,6 +787,8 @@ impl Store {
                 title,
                 author,
                 user_title,
+                cover_page,
+                cover_image,
             },
         }))
     }
@@ -917,7 +1034,7 @@ impl Store {
             .connection
             .prepare(
                 "SELECT d.id, d.path, d.file_id_kind, d.volume_id, d.file_index, d.content_hash, \
-                        d.pages, d.title, d.author, d.user_title, \
+                        d.pages, d.title, d.author, d.user_title, d.cover_page, d.cover_image, \
                         p.page, p.total, p.source, p.confidence, p.read_at, p.updated_at \
                  FROM documents d \
                  LEFT JOIN progress p ON p.id = (\
@@ -938,17 +1055,19 @@ impl Store {
                 let title: Option<String> = row.get(7)?;
                 let author: Option<String> = row.get(8)?;
                 let user_title: Option<String> = row.get(9)?;
+                let cover_page: Option<i64> = row.get(10)?;
+                let cover_image: Option<String> = row.get(11)?;
                 // The LEFT JOIN leaves every `progress` column NULL for a document with none, so
                 // `p.page` is the presence check: it is NOT NULL whenever the row exists.
                 let progress: Option<LatestProgressColumns> =
-                    match row.get::<_, Option<i64>>(10)? {
+                    match row.get::<_, Option<i64>>(12)? {
                         Some(page) => Some((
                             page,
-                            row.get(11)?,
-                            row.get(12)?,
                             row.get(13)?,
                             row.get(14)?,
                             row.get(15)?,
+                            row.get(16)?,
+                            row.get(17)?,
                         )),
                         None => None,
                     };
@@ -963,6 +1082,8 @@ impl Store {
                     title,
                     author,
                     user_title,
+                    cover_page,
+                    cover_image,
                     progress,
                 ))
             })
@@ -981,6 +1102,8 @@ impl Store {
                 title,
                 author,
                 user_title,
+                cover_page,
+                cover_image,
                 progress,
             ) = row.map_err(storage_error)?;
 
@@ -992,6 +1115,9 @@ impl Store {
             )?;
             let pages = pages.map(u32::try_from).transpose().map_err(|_| {
                 OctError::Storage("stored page count is not a valid page number".into())
+            })?;
+            let cover_page = cover_page.map(u32::try_from).transpose().map_err(|_| {
+                OctError::Storage("stored cover page is not a valid page number".into())
             })?;
 
             let (progress, progress_recorded_at) = match progress {
@@ -1028,6 +1154,8 @@ impl Store {
                         title,
                         author,
                         user_title,
+                        cover_page,
+                        cover_image,
                     },
                 },
                 progress,
@@ -1238,6 +1366,16 @@ fn migrate(connection: &mut Connection) -> Result<(), OctError> {
         transaction.execute_batch(SCHEMA_V5).map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 5i64)
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+        version = 5;
+    }
+
+    if version < 6 {
+        let transaction = connection.transaction().map_err(storage_error)?;
+        transaction.execute_batch(SCHEMA_V6).map_err(storage_error)?;
+        transaction
+            .pragma_update(None, "user_version", 6i64)
             .map_err(storage_error)?;
         transaction.commit().map_err(storage_error)?;
     }
@@ -1537,7 +1675,7 @@ mod tests {
         let (_dir, path) = a_version_4_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 5);
+        assert_eq!(store.schema_version().expect("schema version"), 6);
 
         // The document's own title survives the V4 -> V5 step untouched, and it reads back with no
         // reader's title: the migration adds a fact, it does not invent one.
@@ -1548,6 +1686,11 @@ mod tests {
             Some("The document's own title")
         );
         assert_eq!(library[0].document.document.user_title, None);
+
+        // The V6 columns exist as well, and they start empty: no cover choice was ever made for a
+        // document that predates them, and `None` is the rule's own default (the first page).
+        assert_eq!(library[0].document.document.cover_page, None);
+        assert_eq!(library[0].document.document.cover_image, None);
 
         // The column the migration exists for is live afterwards, and the reader's title wins for
         // display while the document's own title stays stored exactly as it was.
@@ -1573,7 +1716,7 @@ mod tests {
         let (_dir, path) = a_version_3_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 5);
+        assert_eq!(store.schema_version().expect("schema version"), 6);
 
         // The watch, the document and its position all survive the V3 -> V4 step.
         let folders = store.folders().expect("list folders");
@@ -1615,7 +1758,7 @@ mod tests {
         let (_dir, path) = a_version_2_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 5);
+        assert_eq!(store.schema_version().expect("schema version"), 6);
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -1643,7 +1786,7 @@ mod tests {
         let (_dir, path) = a_version_1_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 5);
+        assert_eq!(store.schema_version().expect("schema version"), 6);
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -1680,7 +1823,7 @@ mod tests {
         let before = std::fs::read(&path).expect("read the database bytes");
 
         let store = Store::open(&path).expect("reopen");
-        assert_eq!(store.schema_version().expect("schema version"), 5);
+        assert_eq!(store.schema_version().expect("schema version"), 6);
         drop(store);
 
         let after = std::fs::read(&path).expect("read the database bytes");

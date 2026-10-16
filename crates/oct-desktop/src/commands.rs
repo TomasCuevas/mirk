@@ -14,7 +14,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use oct_core::{FileIdentity, LaunchOutcome, Launcher, OctError, StoredProgress};
+use oct_core::domain::CoverChoice;
+use oct_core::{Document, FileIdentity, LaunchOutcome, Launcher, OctError, StoredProgress};
 use oct_scan::{cover_for, CoverOutcome, ScanReport, Scanner};
 use oct_store::{covering_folder, FolderRemoval, LibraryEntry, Store, WatchedFolder};
 use serde::Serialize;
@@ -71,6 +72,10 @@ pub struct LibraryEntryView {
     pub author: Option<String>,
     pub pages: Option<u32>,
     pub progress: Option<ProgressView>,
+    /// The page the reader chose for the cover, zero-based, or `null` for the first page (R32).
+    pub cover_page: Option<u32>,
+    /// The file name of an image the reader supplied, inside the covers directory, or `null` (R32).
+    pub cover_image: Option<String>,
 }
 
 impl From<LibraryEntry> for LibraryEntryView {
@@ -88,6 +93,8 @@ impl From<LibraryEntry> for LibraryEntryView {
             user_title: document.document.user_title.clone(),
             author: document.document.author,
             pages: document.document.pages,
+            cover_page: document.document.cover_page,
+            cover_image: document.document.cover_image.clone(),
             progress: progress
                 .as_ref()
                 .map(|progress| ProgressView::new(progress, progress_recorded_at)),
@@ -242,6 +249,110 @@ pub fn set_document_title(store: &Store, id: i64, title: Option<&str>) -> Result
     store.set_user_title(id, title)
 }
 
+/// Sets or clears the page the reader chose for one document's cover (R32).
+///
+/// `page` is zero-based, exactly as pages are stored everywhere in this workspace; the interface
+/// converts from the one-based number it shows. `None` restores the default, the first page, and is a
+/// legitimate action rather than an error. The decision itself — a `NULL` page meaning the first —
+/// lives in [`Document::cover_choice`], so this command only carries the reader's answer there.
+pub fn set_cover_page(store: &Store, id: i64, page: Option<u32>) -> Result<(), OctError> {
+    store.set_cover_page(id, page)
+}
+
+/// Copies the reader's chosen image into the covers directory and records its name (R32).
+///
+/// `source` is a path the native dialog returned; `None` removes the image the reader had set. The
+/// file is **copied**, never referenced: the image is the reader's data, and it must survive a rescan,
+/// the original being moved, or the original being deleted. The copy's name is derived from the
+/// document's row id and the image's own format, so it cannot collide with another document's cover,
+/// and the value recorded is that name alone — never a path outside the covers directory.
+///
+/// The image is judged by its first bytes before anything is written. A file that is not an image is
+/// refused as [`OctError::InvalidInput`] — the variant this project added for exactly this kind of lie
+/// (R35) — and never as a storage failure: the database was never involved, and reporting it as one
+/// would send whoever reads the log to look at the disk. Checking signatures needs no dependency, and
+/// the browser's `<img>` remains the thing that actually decodes the image.
+pub fn set_cover_image(
+    store: &Store,
+    id: i64,
+    data_directory: &Path,
+    source: Option<&Path>,
+) -> Result<(), OctError> {
+    let Some(source) = source else {
+        // Removing the image leaves the file on disk until another image replaces it. That is
+        // deliberate: the file is inert once nothing references it, and deleting user data on an
+        // action shaped like "undo" is how a reader loses an image they meant to keep.
+        return store.set_cover_image(id, None);
+    };
+
+    let bytes = fs::read(source)?;
+    let Some(mime) = image_mime(&bytes) else {
+        return Err(OctError::InvalidInput {
+            field: "cover image",
+            value: display_path(source),
+            expected: "a PNG, JPEG, GIF, WebP or BMP image".to_string(),
+        });
+    };
+
+    let covers = covers_directory(data_directory);
+    fs::create_dir_all(&covers)?;
+    let file_name = format!("{id}-cover.{}", image_extension(mime));
+    write_atomically(&covers.join(&file_name), &bytes)?;
+    store.set_cover_image(id, Some(&file_name))
+}
+
+/// The MIME type of an image, judged by its first bytes.
+///
+/// A dependency-free signature check: enough to refuse a file that is not an image at all, and to
+/// label the data URL for the formats people actually have. It is deliberately not a decoder — the
+/// application copies the reader's bytes and the browser's `<img>` decides whether they render, so
+/// nothing here needs to understand the image.
+fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    const PNG: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if bytes.starts_with(PNG) {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    None
+}
+
+/// The file extension a copy of an image with this MIME type is stored under.
+fn image_extension(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        _ => "img",
+    }
+}
+
+/// Writes `bytes` to `path` through a sibling temporary file and a rename.
+///
+/// The same shape the cover cache uses: a half-written image must never be served, and the rename is
+/// atomic on one filesystem, which the sibling guarantees.
+fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), OctError> {
+    let temporary = path.with_extension("tmp");
+    fs::write(&temporary, bytes)?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
 // --- R32: a document's cover, rendered on demand and cached in the application's data directory ---
 
 /// The directory covers live in: `<data directory>/covers` (L20).
@@ -253,58 +364,116 @@ pub fn covers_directory(data_directory: &Path) -> PathBuf {
     data_directory.join("covers")
 }
 
-/// The cached cover file for the document with `id`.
+/// The cached cover file for one page of the document with `id`.
 ///
-/// Named by the document's row id, not by its path: a document that moves keeps its row (the store
-/// follows identity), so a path-derived name would lose the cached cover on a move and leave the old
-/// file behind. This half renders page one only; when the reader's choice arrives (V6) it changes
-/// what is rendered into this same file.
-fn cover_file(covers_directory: &Path, id: i64) -> PathBuf {
-    covers_directory.join(format!("{id}.png"))
+/// Named by the document's row id AND the page, and that second half is the point (R32). A cover is
+/// cached on disk and served from that file forever, so a name without the page would keep serving
+/// the old page after the reader chose another one — a stale cover presented as the current one.
+/// Carrying the page means a changed choice simply asks for a different file: the cache is never
+/// invalidated, it is outgrown, and the old file stops being reachable rather than becoming wrong.
+/// The row id still anchors the cover to a document (a document that moves keeps its row).
+fn cover_file(covers_directory: &Path, id: i64, page: u32) -> PathBuf {
+    covers_directory.join(format!("{id}-p{page}.png"))
 }
 
 /// A document's cover as a data URL, or `None` when it cannot be shown (R32).
 ///
+/// The choice is [`Document::cover_choice`]'s: the reader's own image when there is one, otherwise the
+/// page they chose, otherwise the first page. This function only ACTS on that answer; it does not
+/// decide it, so the card and any future screen cannot disagree about which cover a document has.
+///
 /// `None` is reserved for facts about the **document**: it has no readable PDF (encrypted, deleted,
-/// unreadable), or the id names no row. Those keep the card's placeholder and the reason goes to
-/// stderr, where this application reports everything it cannot do. A failure of the application's
-/// own storage — the covers directory, the write, a missing pdfium — is returned as an error instead,
-/// because reporting "this document has no cover" when the disk refused the write would be a lie
-/// about the document. Either way nothing reaches a screen as an error: the card turns a rejected
-/// request into its placeholder too.
+/// unreadable), the reader's image file is missing or is not an image, or the id names no row. Those
+/// keep the card's placeholder and the reason goes to stderr, where this application reports
+/// everything it cannot do. A failure of the application's own storage — the covers directory, the
+/// write, a missing pdfium — is returned as an error instead, because reporting "this document has no
+/// cover" when the disk refused the write would be a lie about the document. Either way nothing
+/// reaches a screen as an error: the card turns a rejected request into its placeholder too.
 pub fn document_cover(
     store: &Store,
     id: i64,
     data_directory: &Path,
 ) -> Result<Option<String>, OctError> {
-    let Some(document) = document_path(store, id)? else {
+    let Some(document) = document_by_id(store, id)? else {
         // An id that names nothing is "no cover", the same answer as a document with no readable
         // PDF. The interface only ever asks about documents it is showing, so this is a race at
         // worst, not a caller error worth a message on screen.
         return Ok(None);
     };
 
-    let cover_path = cover_file(&covers_directory(data_directory), id);
+    let covers = covers_directory(data_directory);
+    match document.cover_choice() {
+        CoverChoice::Image(name) => cover_from_image(&covers, &name, &document.path),
+        CoverChoice::Page(page) => cover_from_page(&covers, id, page, &document.path),
+    }
+}
+
+/// The reader's own image, read from the covers directory as a data URL.
+///
+/// Only the file's own name is ever joined: a stored value carrying a directory part is not a name,
+/// and this is the second line of defence against a hand-edited database pointing outside the covers
+/// directory. A file that is gone, or whose first bytes are not an image, is a fact about that file —
+/// no cover and a reason in the log, never a broken image on screen.
+fn cover_from_image(
+    covers: &Path,
+    name: &str,
+    document: &Path,
+) -> Result<Option<String>, OctError> {
+    let Some(file_name) = Path::new(name).file_name() else {
+        return Ok(None);
+    };
+    let path = covers.join(file_name);
+
+    match fs::read(&path) {
+        Ok(bytes) => match image_mime(&bytes) {
+            Some(mime) => Ok(Some(data_url(mime, &bytes))),
+            None => {
+                eprintln!(
+                    "no cover for {}: the supplied image is not an image: {}",
+                    display_path(document),
+                    path.display()
+                );
+                Ok(None)
+            }
+        },
+        Err(error) => {
+            eprintln!(
+                "no cover for {}: the supplied image could not be read: {error}",
+                display_path(document)
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// The chosen page of the document, rendered (or served cached) as a PNG data URL.
+fn cover_from_page(
+    covers: &Path,
+    id: i64,
+    page: u32,
+    document: &Path,
+) -> Result<Option<String>, OctError> {
+    let cover_path = cover_file(covers, id, page);
 
     let pdfium = oct_scan::bind_pdfium_library().map_err(|error| {
         eprintln!(
             "the cover of {} could not be produced: {error}",
-            display_path(&document)
+            display_path(document)
         );
         error
     })?;
 
-    let cached = match cover_for(&pdfium, &cover_path, &document) {
+    let cached = match cover_for(&pdfium, &cover_path, document, page) {
         Ok(CoverOutcome::Ready { path }) => path,
         Ok(CoverOutcome::Unavailable { reason }) => {
             // A fact about the document: no cover, no error, and the reason is written down.
-            eprintln!("no cover for {}: {reason}", display_path(&document));
+            eprintln!("no cover for {}: {reason}", display_path(document));
             return Ok(None);
         }
         Err(error) => {
             eprintln!(
                 "the cover of {} could not be produced: {error}",
-                display_path(&document)
+                display_path(document)
             );
             return Err(error);
         }
@@ -315,24 +484,24 @@ pub fn document_cover(
         Err(error) => {
             eprintln!(
                 "the cover of {} could not be read back: {error}",
-                display_path(&document)
+                display_path(document)
             );
             Err(error.into())
         }
     }
 }
 
-/// The path of the document with `id`, or `None` when the id names nothing.
+/// The document with `id`, cover choice included, or `None` when the id names nothing.
 ///
-/// The cover belongs to the document row, not to a path the interface hands back, so the path is
+/// The cover belongs to the document row, not to a path the interface hands back, so the row is
 /// resolved from the store. The listing is the only lookup `oct-store` exposes today; it is ordered
 /// by path, which is irrelevant to a `find` by id.
-fn document_path(store: &Store, id: i64) -> Result<Option<PathBuf>, OctError> {
+fn document_by_id(store: &Store, id: i64) -> Result<Option<Document>, OctError> {
     Ok(store
         .library()?
         .into_iter()
         .find(|entry| entry.document.id == id)
-        .map(|entry| entry.document.document.path))
+        .map(|entry| entry.document.document))
 }
 
 /// `bytes` as a PNG `data:` URL for an `<img src>`.
@@ -342,9 +511,14 @@ fn document_path(store: &Store, id: i64) -> Result<Option<PathBuf>, OctError> {
 /// base64 is written here rather than pulled in as a dependency — the standard alphabet is twenty
 /// lines, and this workspace adds a crate only when it earns its place.
 fn png_data_url(bytes: &[u8]) -> String {
-    const PREFIX: &str = "data:image/png;base64,";
-    let mut url = String::with_capacity(PREFIX.len() + bytes.len().div_ceil(3) * 4);
-    url.push_str(PREFIX);
+    data_url("image/png", bytes)
+}
+
+/// `bytes` as a `data:` URL of `mime`, for an `<img src>`.
+fn data_url(mime: &str, bytes: &[u8]) -> String {
+    let prefix = format!("data:{mime};base64,");
+    let mut url = String::with_capacity(prefix.len() + bytes.len().div_ceil(3) * 4);
+    url.push_str(&prefix);
     base64_encode(bytes, &mut url);
     url
 }
@@ -1253,15 +1427,132 @@ mod tests {
     }
 
     #[test]
-    fn the_cover_file_is_named_by_the_document_id_inside_the_covers_directory() {
+    fn the_cover_file_carries_the_page_inside_the_covers_directory() {
         assert_eq!(
             covers_directory(Path::new("/data/oct")),
             PathBuf::from("/data/oct/covers")
         );
+        // The page is part of the name (R32): a name without it would keep serving the old page after
+        // the reader chose another one. Two pages, two files, neither one stale.
         assert_eq!(
-            cover_file(Path::new("/data/oct/covers"), 42),
-            PathBuf::from("/data/oct/covers/42.png")
+            cover_file(Path::new("/data/oct/covers"), 42, 0),
+            PathBuf::from("/data/oct/covers/42-p0.png")
         );
+        assert_eq!(
+            cover_file(Path::new("/data/oct/covers"), 42, 7),
+            PathBuf::from("/data/oct/covers/42-p7.png")
+        );
+    }
+
+    #[test]
+    fn the_library_view_carries_the_readers_cover_choice() {
+        let store = in_memory_store();
+        let id = store
+            .upsert_document(&document("/library/read.pdf", 4, 4))
+            .expect("insert");
+
+        // No choice yet: `null` means the first page, and the view says so rather than inventing `0`.
+        let entries = library_entries(&store).expect("list");
+        assert_eq!(entries[0].cover_page, None);
+        assert_eq!(entries[0].cover_image, None);
+
+        set_cover_page(&store, id, Some(4)).expect("choose a page");
+        let entries = library_entries(&store).expect("list again");
+        assert_eq!(entries[0].cover_page, Some(4));
+        assert_eq!(entries[0].cover_image, None);
+    }
+
+    #[test]
+    fn the_reader_supplied_image_wins_over_the_page_they_chose() {
+        // No pdfium is bound and the document's path does not exist: if the page were consulted at all
+        // this test could not produce a cover. It succeeds precisely because the image short-circuits
+        // the page, which is the precedence R32 freezes.
+        let store = in_memory_store();
+        let id = store
+            .upsert_document(&document("/library/gone.pdf", 5, 5))
+            .expect("insert");
+        set_cover_page(&store, id, Some(3)).expect("choose a page");
+
+        let directory = TempDir::new("cover-image");
+        let source = directory.path.join("chosen.png");
+        fs::write(&source, b"\x89PNG\r\n\x1a\nnot really a full png, but the bytes say image")
+            .expect("write the reader's image");
+        set_cover_image(&store, id, &directory.path, Some(&source)).expect("copy the image");
+
+        let cover = document_cover(&store, id, &directory.path)
+            .expect("the image cover is produced")
+            .expect("the image cover exists");
+        assert!(cover.starts_with("data:image/png;base64,"), "{cover}");
+    }
+
+    #[test]
+    fn the_page_the_reader_chose_is_the_page_the_renderer_uses() {
+        // The whole path, pdfium included: the same document rendered at a chosen page comes back as a
+        // cover, while a page the PDF does not have comes back as no cover. If the page were ignored,
+        // the second call would have served page one's cached cover instead of reporting none. That the
+        // two valid pages render different BYTES is pinned in `oct-scan`'s cover tests, where a two-page
+        // PDF with visibly different pages can be built; the repository's fixture has identical pages.
+        let directory = TempDir::new("cover-page");
+        let pdf = directory.path.join("document.pdf");
+        fs::write(
+            &pdf,
+            include_bytes!("../../oct-scan/tests/fixtures/with-info-metadata.pdf"),
+        )
+        .expect("write the fixture");
+
+        let store = in_memory_store();
+        let id = store
+            .upsert_document(&document(
+                pdf.to_str().expect("utf-8 path"),
+                6,
+                6,
+            ))
+            .expect("insert");
+
+        set_cover_page(&store, id, Some(1)).expect("choose page two");
+        let chosen = document_cover(&store, id, &directory.path)
+            .expect("render the chosen page")
+            .expect("page two has a cover");
+        assert!(chosen.starts_with("data:image/png;base64,"), "{chosen}");
+
+        // A page beyond the end is the reader's choice too, and it is no cover rather than an error or
+        // a silently substituted page one.
+        set_cover_page(&store, id, Some(99)).expect("choose a page the PDF does not have");
+        assert_eq!(
+            document_cover(&store, id, &directory.path).expect("no cover, no error"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_image_is_refused_as_an_invalid_argument() {
+        let store = in_memory_store();
+        let id = store
+            .upsert_document(&document("/library/read.pdf", 7, 7))
+            .expect("insert");
+        let directory = TempDir::new("cover-bad-image");
+        let not_an_image = directory.path.join("notes.txt");
+        fs::write(&not_an_image, b"this is text, not a picture").expect("write the text file");
+
+        let result = set_cover_image(&store, id, &directory.path, Some(&not_an_image));
+        match result.expect_err("a non-image must be refused") {
+            OctError::InvalidInput {
+                field,
+                value,
+                expected,
+            } => {
+                // R35: the variant and all three of its fields. A bad argument reported as `Storage`
+                // would send whoever reads the log to look at the disk, which was never involved.
+                assert_eq!(field, "cover image");
+                assert!(value.ends_with("notes.txt"), "{value}");
+                assert!(expected.contains("image"), "{expected}");
+            }
+            other => panic!("a non-image must be an invalid argument, not {other:?}"),
+        }
+
+        // Nothing was written and nothing was recorded: the document still has no image.
+        let entries = library_entries(&store).expect("list");
+        assert_eq!(entries[0].cover_image, None);
     }
 
     #[test]

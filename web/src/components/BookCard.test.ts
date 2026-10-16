@@ -36,12 +36,13 @@ describe("the containing-folder action", () => {
         t: english,
         status: null,
         onOpenFolder: () => {},
-        onEditTitle: () => {},
+        onEditDocument: () => {},
       },
     });
 
     const card = body.slice(body.indexOf("<article"), body.indexOf("</article>"));
-    // R31 added the title-edit pill on the cover's other corner, so the folder action is one of two
+    // R31 added the document-editor pill on the cover's other corner. The cover's own control is gone
+    // (the user rejected a third control over a small cover), so the folder action is one of two
     // controls; its own shape and name are what this test pins.
     expect(card.match(/<button/g)).toHaveLength(2);
 
@@ -65,7 +66,7 @@ describe("the containing-folder action", () => {
   });
 
   it("says nothing at all about the folder action, in any status", () => {
-    const props = { entry: entry(), t: english, onOpenFolder: () => {}, onEditTitle: () => {} };
+    const props = { entry: entry(), t: english, onOpenFolder: () => {}, onEditDocument: () => {} };
     // Compared with Svelte's own SSR comment markers stripped: those are an implementation detail of how
     // a block renders, not what the reader is told — an earlier version of this test failed on them.
     const said = (html: string) => html.replace(/<!--[\s\S]*?-->/g, "");
@@ -99,19 +100,19 @@ describe("the containing-folder action", () => {
  * title apart from the document's own.
  */
 describe("the reader's title", () => {
-  it("puts the title-edit pill on the cover's top-left, named after the document", () => {
+  it("puts the document-editor pill on the cover's top-left, named after the document", () => {
     const { body } = render(BookCard, {
       props: {
         entry: entry({ title: "Cosmos" }),
         t: english,
         status: null,
         onOpenFolder: () => {},
-        onEditTitle: () => {},
+        onEditDocument: () => {},
       },
     });
 
     const card = body.slice(body.indexOf("<article"), body.indexOf("</article>"));
-    const start = card.indexOf("edit-title");
+    const start = card.indexOf("edit-document");
     const buttonStart = card.lastIndexOf("<button", start);
     const button = card.slice(
       buttonStart,
@@ -121,10 +122,31 @@ describe("the reader's title", () => {
     // On the cover, before the folder action, so the two corners do not swap or overlap.
     expect(card.indexOf("cover-wrap")).toBeLessThan(start);
     expect(start).toBeLessThan(card.indexOf("open-folder"));
-    // The accessible name names the document rather than saying a bare "edit".
-    expect(button).toContain('aria-label="Edit the title of Cosmos"');
+    // The accessible name names the DOCUMENT rather than only its title, because the one modal it
+    // opens edits the title AND the cover.
+    expect(button).toContain('aria-label="Edit the document Cosmos"');
     expect(button).toContain('aria-hidden="true"');
     expect(button.replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<[^>]*>/g, "").trim()).toBe("");
+  });
+
+  it("names the document it edits in both languages", () => {
+    const inLocale = (locale: "en" | "es", expected: string) => {
+      const { body } = render(BookCard, {
+        props: {
+          entry: entry({ title: "Cosmos" }),
+          t: translate(locale),
+          status: null,
+          onOpenFolder: () => {},
+          onEditDocument: () => {},
+        },
+      });
+      expect(body, locale).toContain(`aria-label="${expected}"`);
+    };
+
+    // The pencil edits the document, not only its title, and the Spanish says so in the neutral
+    // register this project is unifying on — never voseo.
+    inLocale("en", "Edit the document Cosmos");
+    inLocale("es", "Editar el documento Cosmos");
   });
 
   it("shows the reader's title without printing a note about whose it is", () => {
@@ -132,7 +154,7 @@ describe("the reader's title", () => {
     // replaces it is in the EDITOR — the field says whose title is being edited, and the restore control
     // exists only when there is one to restore — which `titleEditor` keeps in one place and
     // `library.test.ts` pins. This test is the inverse guard: the phrase must not come back onto a card.
-    const props = { t: english, status: null, onOpenFolder: () => {}, onEditTitle: () => {} };
+    const props = { t: english, status: null, onOpenFolder: () => {}, onEditDocument: () => {} };
 
     const named = render(BookCard, {
       props: { ...props, entry: entry({ title: "Mine", userTitle: "Mine" }) },
@@ -153,7 +175,7 @@ describe("the reader's title", () => {
  * that would otherwise become `src=""`.
  */
 describe("the card's cover", () => {
-  const props = { t: english, status: null, onOpenFolder: () => {}, onEditTitle: () => {} };
+  const props = { t: english, status: null, onOpenFolder: () => {}, onEditDocument: () => {} };
 
   it("shows its placeholder, and no image, until there is a cover", () => {
     const { body } = render(BookCard, { props: { ...props, entry: entry() } });
@@ -180,5 +202,29 @@ describe("the card's cover", () => {
 
     expect(body).toContain(english("card.cover"));
     expect(body).not.toContain("<img");
+  });
+});
+
+/**
+ * R32, corrected: the cover carries no control of its own.
+ *
+ * A third control over a small cover was the user's complaint — "another icon was added over the
+ * cover" — and the pencil already means "edit this document". The cover's
+ * page, its image and the removal of that image now live inside the modal the pencil opens, and what
+ * is left on the cover states facts: the page count at the bottom-right, and nothing else. This test
+ * is the inverse guard that keeps the control from coming back.
+ */
+describe("the cover's own corner", () => {
+  const props = { t: english, status: null, onOpenFolder: () => {}, onEditDocument: () => {} };
+
+  it("carries no control, only the page badge", () => {
+    const { body } = render(BookCard, { props: { ...props, entry: entry({ title: "Cosmos" }) } });
+    const card = body.slice(body.indexOf("<article"), body.indexOf("</article>"));
+
+    expect(card).not.toContain("edit-cover");
+    // The two controls that remain are the document-editor pencil and the folder action; the badge is
+    // a fact, not a third control.
+    expect(card.match(/<button/g)).toHaveLength(2);
+    expect(card).toContain("cover-pages");
   });
 });

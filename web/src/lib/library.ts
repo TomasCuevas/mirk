@@ -72,6 +72,16 @@ export interface LibraryEntry {
   /** Page count from the scanner; null when it was never established. */
   pages: number | null;
   progress: Progress | null;
+  /**
+   * The page the reader chose for the cover, zero-based (`coverPage` from the Rust view), or `null`
+   * for the first page (R32). Optional on the type so a listing shaped before R32 still compiles.
+   */
+  coverPage?: number | null;
+  /**
+   * The file name of an image the reader supplied, inside the covers directory, or `null` (R32).
+   * Only a file name travels here: the application owns the copy inside its own directory.
+   */
+  coverImage?: string | null;
 }
 
 /** What the `open_containing_folder` command returns when the folder is opened. */
@@ -333,6 +343,26 @@ export function displayTitle(entry: LibraryEntry): string {
   return entry.title;
 }
 
+/**
+ * The entry the document editor must show, from the listing the interface now holds (R32, corrected).
+ *
+ * The editor is seeded from the entry it was opened with, and that entry is a SNAPSHOT: everything
+ * the store changes afterwards — a title, a cover page, an image — leaves it behind. Showing the
+ * snapshot is how the reader's own title seemed to vanish after a cover action, and how the page they
+ * had chosen came back empty when the editor was reopened. Looking the document up by id in the
+ * current listing is the ONE place both facts are made current at once, so the title and the cover
+ * cannot drift apart.
+ *
+ * The opened entry is the fallback, not an error: a listing that no longer names the document must not
+ * be able to close an editor the reader is using, so the editor keeps the entry it already has.
+ */
+export function editorEntry(
+  entries: readonly LibraryEntry[],
+  opened: LibraryEntry,
+): LibraryEntry {
+  return entries.find((entry) => entry.id === opened.id) ?? opened;
+}
+
 // --- Covers (R32) ----------------------------------------------------------------------------
 //
 // A card's cover is rendered by the application on demand and cached beside the database. The
@@ -372,6 +402,105 @@ export async function fetchCover(
   } catch {
     return null;
   }
+}
+
+/**
+ * What the cover editor holds for one document (R32).
+ *
+ * `page` is the one-based number the field shows, and `hasImage` says whether the "remove the image"
+ * control has anything to act on. It is a function rather than a condition inside the markup for the
+ * same reason `titleEditor` is: a rule that nothing checks drifts, and a test cannot click a modal.
+ */
+export function coverEditor(entry: LibraryEntry): { page: string; hasImage: boolean } {
+  // A blank image name is not an image, the same way a blank title is not a title: the store refuses
+  // to write one, so this only matters for a value that arrived from somewhere less careful.
+  const hasImage = entry.coverImage != null && entry.coverImage.trim() !== "";
+  return { page: coverPageInput(entry), hasImage };
+}
+
+/**
+ * The one-based page the cover editor shows for a document (R32).
+ *
+ * The store keeps pages zero-based and `null` means the first page, so the field shows `1` for a
+ * document nobody has chosen a page for. The conversion lives here, at the only boundary that shows a
+ * page to a person, exactly as `progress.position` converts a reading position.
+ */
+export function coverPageInput(entry: LibraryEntry): string {
+  return String((entry.coverPage ?? 0) + 1);
+}
+
+/** What the cover editor's page field means. */
+export type CoverPageChoice = { ok: true; page: number | null } | { ok: false };
+
+/**
+ * The zero-based page to store for what the reader typed (R32).
+ *
+ * Empty is the plain default — the first page — and stores `null`, the value the one cover rule treats
+ * as the first page. A positive whole number is converted to zero-based at this boundary. Anything
+ * else is refused rather than guessed at: a page is a number, and inventing one from `"abc"` would
+ * write a choice the reader never made.
+ */
+export function coverPageFromInput(input: unknown): CoverPageChoice {
+  // The value comes from a DOM field, so it is normalised here rather than assumed: a
+  // `<input type="number">` can hand back a number, an emptied field can hand back an empty string,
+  // `null` or `undefined`, and all of those must mean the same thing to this rule.
+  const trimmed = input === null || input === undefined ? "" : String(input).trim();
+  if (trimmed === "") {
+    return { ok: true, page: null };
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return { ok: false };
+  }
+  const oneBased = Number(trimmed);
+  if (oneBased < 1) {
+    return { ok: false };
+  }
+  return { ok: true, page: oneBased - 1 };
+}
+
+// --- The editor's outcome (R31/R32) ---------------------------------------------------------
+
+/**
+ * What a successful commit in the document editor changed (R31/R32).
+ *
+ * `"title"` is the title's own Save or Restore, and `"cover"` is any of the cover's actions: choosing
+ * a page, choosing an image, or removing one.
+ */
+export type EditorCommit = "title" | "cover";
+
+/**
+ * Whether the document editor closes once a commit succeeds (R32, corrected).
+ *
+ * The editor edits TWO things — the title (R31) and the cover (R32) — but only the title is decided by
+ * the editor's own pair of controls: Save writes the draft the reader typed and Cancel throws it away,
+ * and either ends the edit. A cover commit is not that. It decides the cover and NOTHING ELSE, so it
+ * must leave the editor open: closing is exactly how an undecided title draft dies, and a cover action
+ * that quietly eats what somebody was writing is the defect this rule exists to prevent. The draft
+ * survives until the reader presses one of the two controls that mean "this is my title".
+ *
+ * It is a function rather than a branch inside an event handler for the same reason `titleEditor` is:
+ * a rule nothing checks drifts, and the component test environment cannot type into a field, so this
+ * is the one place the rule can be pinned.
+ */
+export function editorClosesAfterCommit(commit: EditorCommit): boolean {
+  return commit === "title";
+}
+
+/**
+ * Whether a successful commit asks the owner of the listing to re-read it (R32, corrected).
+ *
+ * A commit changes a fact the listing holds, and the interface does not re-read that listing by
+ * itself: the owner does, when it is told. The title path always told it, which is why a saved title
+ * appeared everywhere at once; the cover path did not, so the listing stayed as it was and reopening
+ * the editor seeded its page field from the stale entry — an empty page over a cover the store had
+ * already changed. Both halves of the one editor must refresh, so the answer does not depend on which
+ * half changed, and a rule that nothing checks does not drift.
+ *
+ * Like `editorClosesAfterCommit`, it is a function rather than a call inside an event handler because
+ * the component test environment cannot click, and this is the one place the rule can be pinned.
+ */
+export function editorRefreshesLibrary(commit: EditorCommit): boolean {
+  return commit === "title" || commit === "cover";
 }
 
 // --- Filtering and sorting ------------------------------------------------------------------

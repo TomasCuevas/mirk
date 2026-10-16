@@ -16,14 +16,15 @@
     t,
     status,
     onOpenFolder,
-    onEditTitle,
+    onEditDocument,
     cover,
   }: {
     entry: LibraryEntry;
     t: Translate;
     status: FolderActionStatus | null;
     onOpenFolder: (entry: LibraryEntry) => void;
-    onEditTitle: (entry: LibraryEntry) => void;
+    /** Opens the document editor for this entry: its title and its cover, in the one modal (R32). */
+    onEditDocument: (entry: LibraryEntry) => void;
     /**
      * The cover the caller already has, when it has one. The grid does not pass it — a card asks the
      * application for its own cover on mount (R32) — but a caller that already knows a cover avoids
@@ -85,16 +86,19 @@
       <div class="cover" style="aspect-ratio: 9 / 11" aria-hidden="true">{t("card.cover")}</div>
     {/if}
 
-    <!-- R31: the title-edit action sits on the cover's TOP-LEFT, mirroring the containing-folder
-         action at its top-right, because they are the same kind of thing: an action on the document's
-         own body, anchored to the space that stands for it. An icon is not a name, so the accessible
-         name comes from the catalogue and names the document; the drawing is hidden from assistive
-         technology because it repeats that name rather than adding to it. -->
+    <!-- R31, corrected in R32: the document-editor pencil sits on the cover's TOP-LEFT, mirroring the
+         containing-folder action at its top-right, because they are the same kind of thing: an action
+         on the document's own body, anchored to the space that stands for it. It is the ONE editing
+         surface: the title and the cover both live in the modal it opens, which is why a cover control
+         of its own was removed — a third control over a small cover was the user's complaint. An icon
+         is not a name, so the accessible name comes from the catalogue and names the document; the
+         drawing is hidden from assistive technology because it repeats that name rather than adding to
+         it. -->
     <button
       type="button"
-      class="edit-title"
-      aria-label={t("card.editTitle", { title: displayTitle(entry) })}
-      onclick={() => onEditTitle(entry)}
+      class="edit-document"
+      aria-label={t("card.editDocument", { title: displayTitle(entry) })}
+      onclick={() => onEditDocument(entry)}
     >
       <svg
         viewBox="0 0 24 24"
@@ -116,7 +120,7 @@
     <!-- R19: the page count sits on the cover's bottom-right, mirroring the folder action at its
          top-right, so the two corners read as one design instead of two. It says nothing when the
          count is unknown: a corner badge cannot hold "Número de páginas desconocido", and a card that
-         cannot state a number must not invent one. -->
+         cannot state a number must not invent one. It is the truth, not an action, and it stays. -->
     {#if entry.pages !== null}
       <p class="cover-pages">{t("library.pages", { count: entry.pages })}</p>
     {/if}
@@ -381,9 +385,9 @@
     background: #f0f2f5;
   }
 
-  /* R31: the same pill as the folder action, on the opposite corner. Same size, border radius and
-     white background, so the two corners read as one design rather than two. */
-  .edit-title {
+  /* R31, corrected in R32: the same pill as the folder action, on the opposite corner, and the ONE
+     editing surface — it opens the modal that holds both the title and the cover. */
+  .edit-document {
     position: absolute;
     top: 0.3rem;
     left: 0.3rem;
@@ -400,7 +404,7 @@
     cursor: pointer;
   }
 
-  .edit-title:hover {
+  .edit-document:hover {
     background: #f0f2f5;
   }
 
