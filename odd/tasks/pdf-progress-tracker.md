@@ -1288,6 +1288,39 @@ y anotado por si crece. **Una nota del proceso que vale**: el padre intentó bor
 medir desde cero y la política de seguridad lo bloqueó; el borrado no se hizo y la medición se hizo igual, que es
 la respuesta correcta para datos del usuario fuera del proyecto.
 
+
+**L51 — portadas, segunda mitad: la elección del lector, un solo editor, y los dos bugs que el usuario encontró usándolo (R32/U20b).**
+
+Lo que entró: el esquema V6 con dos hechos anulables por documento (qué página eligió el lector, y el nombre del
+archivo de una imagen suya dentro de la carpeta de portadas), con UNA sola regla de precedencia —su imagen, si no
+la página elegida, si no la primera—; el reescaneo no toca ninguno de los dos, como no toca el título; el nombre
+del archivo de la portada lleva la página adentro, así que cambiar de página no puede servir la vieja; la imagen
+se elige por el diálogo nativo y se COPIA, porque es dato del lector y tiene que sobrevivir a que el original se
+mueva o se borre; y un archivo que no es imagen se rechaza como argumento inválido, no como falla de
+almacenamiento.
+
+El usuario corrigió el diseño después de verlo: *"No me gusta que se haya añadido otro icono más sobre la portada.
+Lo mejor seria que todo lo relacionado a la edicion este sobre el icono del lapiz"*. Tenía razón por dos motivos:
+un tercer ícono sobre una portada chica es ruido, y el lápiz ya significa editar el documento. El control salió de
+la esquina y todo lo de edición quedó detrás del lápiz, en UN editor del documento. Ese cambio cerró además una
+deuda que este documento venía anotando dos veces: la ventanita del editor por fin tiene su propio test.
+
+Después, usándolo, encontró DOS bugs más, y los dos eran de la INTERFAZ y no de los datos — cosa que se comprobó
+MIDIENDO la base antes de tocar nada: su título y su página elegida seguían guardados y correctos. Uno: al elegir
+una imagen, lo que la pantalla mostraba volvía al título del archivo. Dos: la página elegida no volvía al campo
+del editor al reabrirlo. El arreglo cambió la REGLA en vez de parchear el camino: el editor ahora lee siempre el
+dato vigente de la lista, y las tres acciones de portada terminan en el mismo lugar. Los borradores —lo que la
+persona está escribiendo— se llenan en un solo punto, al abrir el editor, y ningún refresco los pisa. Los dos
+tests reproducen el síntoma TEXTUAL del usuario: uno esperaba su título y recibía el del archivo, el otro
+esperaba la página 5 y recibía la 1.
+
+**Una honestidad del arreglo, que queda escrita**: el trabajador no logró reproducir el camino exacto por el que
+el estado se perdía; lo que hizo fue imponer la regla que lo hace imposible y unificar los caminos. Se dice así
+en vez de afirmar una causa que no se probó, y el usuario confirmó que el comportamiento quedó bien.
+
+**Estado final**: 255 comprobaciones del proyecto y 152 de la interfaz, clippy y tipos limpios, la base del
+usuario verificada antes y después (42 documentos, su título, su página 5) y la aplicación corriendo con todo.
+
 ## Delivery slices (recorded on request)
 
 **Slice boundary, recorded here because the branch has grown past any PR-sized unit**: `feat/phase-1-core`
