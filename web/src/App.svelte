@@ -415,7 +415,7 @@
       <CategoryScreen
         category={view.category}
         {entries}
-        loading={libraryLoading}
+        inFlight={libraryInFlight}
         error={libraryError}
         {t}
         {folderStatus}

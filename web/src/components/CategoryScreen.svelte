@@ -4,6 +4,7 @@
   import {
     categoryEntries,
     currentUnixSeconds,
+    libraryView,
     startCategoryRefresh,
     type FolderActionStatus,
     type HomeCategory,
@@ -15,7 +16,7 @@
   let {
     category,
     entries,
-    loading,
+    inFlight,
     error,
     t,
     folderStatus,
@@ -24,7 +25,7 @@
   }: {
     category: HomeCategory;
     entries: LibraryEntry[];
-    loading: boolean;
+    inFlight: boolean;
     error: string | null;
     t: Translate;
     folderStatus: FolderActionStatus | null;
@@ -37,6 +38,12 @@
   // list can stay open while a record crosses the staleness threshold.
   let now = $state(currentUnixSeconds());
   const items = $derived(categoryEntries(entries, category, now));
+
+  // L47. The screen decides through the same pure function as Inicio and Biblioteca, over the
+  // category's OWN list: an empty category is only presented AS empty once nothing is in flight, and
+  // a category that already shows documents never loses them to a loader. The loader is the catalogue's
+  // existing loading sentence, which is as true of a scan as of the first read.
+  const view = $derived(libraryView(items, inFlight));
 
   onMount(() => startCategoryRefresh(() => (now = currentUnixSeconds())));
 </script>
@@ -56,11 +63,11 @@
   <h1>{categoryTitle(category, t)}</h1>
   <p class="definition">{categoryDefinition(category, t)}</p>
 
-  {#if loading}
+  {#if view === "loading"}
     <p class="state">{t("library.loading")}</p>
   {:else if error !== null}
     <p class="state error">{t("library.error", { message: error })}</p>
-  {:else if items.length === 0}
+  {:else if view === "empty"}
     <p class="state">{t("home.categoryEmpty")}</p>
   {:else}
     <BookGrid entries={items} {t} {folderStatus} {onOpenFolder} />

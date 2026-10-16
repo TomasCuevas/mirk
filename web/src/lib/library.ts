@@ -232,7 +232,7 @@ export type LibraryView = "loading" | "empty" | "content";
  * from the first load.
  *
  * The decision is a function rather than a condition in markup so it can be pinned by a test without
- * rendering anything, and so Inicio and Biblioteca cannot drift apart on it.
+ * rendering anything, and so Inicio, Biblioteca and a category's own list cannot drift apart on it.
  */
 export function libraryView(
   entries: readonly LibraryEntry[],

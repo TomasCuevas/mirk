@@ -7,11 +7,13 @@ import { categoryDefinition, categoryTitle } from "../lib/screens";
 
 const english = translate("en");
 
-function categoryProps(overrides: { category?: HomeCategory } = {}) {
+function categoryProps(
+  overrides: { category?: HomeCategory; entries?: LibraryEntry[]; inFlight?: boolean } = {},
+) {
   return {
     category: "inProgress" as HomeCategory,
     entries: [] as LibraryEntry[],
-    loading: false,
+    inFlight: false,
     error: null as string | null,
     t: english,
     folderStatus: null,
@@ -42,5 +44,59 @@ describe("a category's own screen", () => {
     expect(back).toContain(`>${english("category.back")}<`);
     // Above the heading, so it reads as a way back rather than another action on the list.
     expect(body.indexOf("<button")).toBeLessThan(body.indexOf("<h1"));
+  });
+});
+
+/**
+ * L47 on the category screen. It is the last screen that still decided on its own: it rendered its
+ * empty sentence while a scan was in flight, which is the same false "there is nothing" the user saw
+ * on Inicio after re-adding a watched folder. It now obeys the same pure decision as Inicio and
+ * Biblioteca.
+ *
+ * The empty sentence this screen renders is `home.categoryEmpty`, which is NOT the one Biblioteca
+ * uses — so these assertions name that sentence, not `library.empty`.
+ */
+describe("a category's empty state while work is in flight (L47)", () => {
+  it("shows the loader, not the category's empty sentence, while a scan is in flight", () => {
+    expect(english("home.categoryEmpty")).not.toBe(english("library.empty"));
+
+    const { body } = render(CategoryScreen, { props: categoryProps({ inFlight: true }) });
+
+    expect(body).toContain(english("library.loading"));
+    expect(body).not.toContain(english("home.categoryEmpty"));
+  });
+
+  it("says the category is empty once nothing is in flight", () => {
+    const { body } = render(CategoryScreen, { props: categoryProps({ inFlight: false }) });
+
+    expect(body).toContain(english("home.categoryEmpty"));
+    expect(body).not.toContain(english("library.loading"));
+  });
+
+  it("never covers a category that already has content with a loader", () => {
+    // Content wins: the silent fifteen-second re-read and a scan of another folder both run while
+    // documents are already on this screen, and covering them would be the flicker the rule forbids.
+    const reading: LibraryEntry = {
+      id: 1,
+      path: "/library/a.pdf",
+      title: "A",
+      author: null,
+      pages: 10,
+      progress: {
+        page: 0,
+        total: 10,
+        source: "native",
+        confidence: "exact",
+        recordedAt: null,
+        readAt: null,
+      },
+    };
+    const { body } = render(CategoryScreen, {
+      props: categoryProps({ entries: [reading], inFlight: true }),
+    });
+
+    expect(body).not.toContain(english("library.loading"));
+    expect(body).not.toContain(english("home.categoryEmpty"));
+    expect(body).toMatch(/<article/g);
   });
 });
