@@ -2605,6 +2605,132 @@ The verification of the rebuild also got sharper in this round, and that is wort
 keeps each file NAME uncompressed, so the new bundle's name is present inside the binary and the previous
 one is absent, which is direct evidence instead of an inference from timestamps.
 
+
+## Specs — round 9: the rest of the list (L47)
+
+The user's instruction for this round, verbatim: *"Procede con todas esas tareas"*, given after the six
+candidates were listed to them. Six units, ordered so the cheap and the decision-free go first and the two
+that need a measurement or a platform answer wait for it. The migration numbers moved: `U14` took **V4**, so
+the two units that need a schema change are **V5** (titles) and **V6** (covers) — an earlier note in this
+document said V3 for titles, written before the reading time existed.
+
+- **R31 — the reader can set a title, and the application says where each title came from.** From L18: *"a
+  title extracted from the PDF and a title a person typed are different facts, exactly like progress from
+  Evince versus progress typed by hand"*. So it is not a text field bolted onto a card: a typed title is a
+  fact with a source, stored as one, so the interface can say whether it is showing the document's own title
+  or the reader's — and the first time it guesses wrong, the reader stops trusting every other field. Schema **V5**
+  adds **`documents.user_title`**, nullable, and NOT a `title_source` enum: this sentence first demanded an
+  enum beside the title, and the implementation — which the worker built against the corrected contract and
+  flagged rather than hid — made the better choice. The reader's title is a **separate fact in its own
+  column**, so the document's own title is never destroyed, which is the only reason "restore the document's
+  own title" can exist at all; overwriting it would have made that action impossible. Provenance is then
+  DERIVED rather than stored, from two columns that cannot disagree: `user_title` set means the reader's,
+  otherwise the document's own, otherwise the file's own name — and that precedence lives in ONE place,
+  `Document::display_title`, never in a screen. The migration must leave every existing row readable, every
+  title it already had intact, and every existing document with no reader's title (NULL = "not set", not
+  "set to nothing").
+- **R32 — covers.** Default the first page; the reader can choose another page or supply an image of their
+  own. Storage was decided in L20: `~/.local/share/oct/covers/`, because an uploaded image is user data that
+  must survive a rescan. Three things, in this order: the **rendering measurement first** (pdfium's render
+  path has never been used here — R12 measured pdf.js in a browser, not this), then the default page, then
+  the reader's choice with schema **V6**. If the measurement says a whole library cannot be rendered at
+  launch, the covers are produced lazily and cached, and that becomes the design rather than a compromise.
+  **What is already known about the API, so the measurement's own failures are not repeated** (all of it read
+  from `pdfium-render` 0.8.37 and confirmed by getting the probe to compile): rendering needs **no new
+  binding, no second crate and no raw FFI** — `PdfPage::render_with_config` → `PdfBitmap::as_raw_bytes` is
+  the whole path, and the deliberately-disabled `image` feature only gates the PNG/JPEG conveniences, so
+  writing a cover to disk needs a small encoder (`png`) instead of re-enabling the stack the workspace kept
+  out. Two borrow traps cost three failed builds and are worth writing down: `PdfRenderConfig`'s setters
+  **consume** the config and return it (`let config = PdfRenderConfig::new().set_target_width(400);`), and
+  `pages.get(i)` returns a page that borrows from a temporary of its own, so the **page** must be bound to a
+  name before it is rendered. pdfium is also single-threaded behind this binding — `thread_safe` serialises
+  the calls — so generating covers in parallel will not scale across cores, and ~875 KiB per 400×560 BGRA
+  bitmap means the design must render one, encode it and drop it rather than hold a library of bitmaps.
+  **THE MEASUREMENT IS DONE, and it changes the design from "lazy, as a compromise" to "at scan time, because
+  it is cheap".** Measured with a probe built against this project's own pinned binding and its own pdfium
+  library, three runs per page, on a real 2,2 MB typeset paper (arXiv 1706.03762, figures included) and on the
+  repository's synthetic fixtures as a floor:
+  loading pdfium 0,6 ms and loading the document 1,1 ms; rendering page 1 into a 400-px-wide bitmap **7,3 ms
+  cold and 1,8–2,3 ms warm**; page 2 **7,6 ms cold and 1,9–2,5 ms warm**; **828.800 bytes** per bitmap; peak
+  resident memory **~10 MB**. The fixtures, which have almost nothing to rasterise, come in at 0,0–0,5 ms —
+  which is why they could never have answered this question and why a real document was needed.
+  The fact that decides the design is the third number: **page 2 costs what page 1 costs**, so the cost is
+  per page and not per book, and a 300-page book's cover costs exactly what a 15-page paper's cover costs. The
+  whole library of 42 documents is therefore **0,1–0,3 s**. And the scanner ALREADY opens every document with
+  pdfium to count its pages, so rendering the cover there is ~2 ms of marginal work per document in a pass
+  that already happens — no second pass, no queue, no placeholder state to design. The honest residual, not
+  measured: a SCANNED book, whose page is one large image, may cost far more than this paper's pages, and
+  nothing here bounds that case; the design must still not block the UI thread while it renders.
+- **R33 — launching the application must not steal focus.** Verbatim, the report that arrived with the
+  withdrawn self-exit defect: *"me molestaba que saltara la aplicacion sobre lo que estaba haciendo"*. A
+  tray-resident companion must be available without interrupting. **The platform answer comes before the
+  code**: an earlier spec in this document had to be corrected because tao's `set_maximizable` is an empty
+  function on Linux, and this may be the second such limitation — recorded rather than promised.
+- **R34 — the first run explains itself.** Found in the user's own words while closing R29: *"No se realmente
+  si se recalculan los carruseles, ya que no forma de agregar items al carrusel como tal"*. Nothing was
+  broken — a document with no reading record sits in no category, and `oct` never opens a document itself, it
+  observes reading done elsewhere — but a person who installs this sees three empty carousels with no
+  explanation of why they are empty and no route to filling them. Inicio says what the carousels wait for and
+  what the person can do about it, in both languages, without inventing data and without turning the screen
+  into a manual.
+- **R35 — an invalid argument is reported as an invalid argument.** `commands::set_language` refuses an
+  unknown locale with `OctError::Storage`, because `oct-core`'s error enum has no variant for invalid input:
+  a bad argument is reported as a storage failure, and anyone reading a log later looks in the wrong place.
+  It is not reachable from the interface today (the selector offers en/es), which is why it waited for its own
+  unit instead of riding along inside one that was mid-verification. `oct-core` stays dependency-free; this
+  is a variant, not a dependency.
+- **R36 — the four advisory findings get a disposition.** `R3-1` (tauri.ts:34-35), `R3-2` (main.rs:403-406),
+  `R3-3` (HomeScreen.svelte:47) and `R4-tray-hide-no-way-back` (main.rs:124) were left by the approved review
+  of an earlier revision, whose own words are that they are **not** blockers and not a reason to re-run it.
+  Each is judged against the code as it stands today — real, already handled, or no longer applicable — and
+  the answer is written down, because a finding nobody dispositions becomes permanent noise.
+
+### Tasks — round 9
+
+- **U15** R35 — one error variant for an invalid argument, `set_language` using it, and the tests that pin
+  `Storage` updated.
+- **U16** R34 — what Inicio says when it has nothing to show, in both languages, with the catalogue keys
+  pinned by a test.
+- **U17** R36 — the triage itself: a verdict per finding written into this document, and a bounded fix for
+  whichever turns out to be real.
+- **U18** R33 — the platform answer on focus, then either the change or a recorded limitation.
+- **U19** R31 — schema V5, the provenance, and the card action that sets a title.
+- **U20** R32 — the render measurement, then the default cover, then the reader's choice with schema V6.
+
+
+### Dispositions — the four advisory findings (U17/R36)
+
+Three of the four were already handled, and the fourth's named path was too; what remains is one residual the
+log had already parked. Verified against the code as it stands, NOT against the review's locations, which have
+moved since (R3-3's line went from 47 to 56).
+
+- **`R3-1` (the event wrapper) — ALREADY HANDLED.** The wrapper returns its promise and the ONE call site
+  handles rejection: `App.svelte` catches it and reports it ("the tray's screen requests will not be
+  received"), and the capability whose absence the silence originally hid now exists. The finding is the same
+  observation as the defect fixed in L34, seen one function earlier.
+- **`R3-2` (the tray's emit) — ALREADY HANDLED.** The window is SHOWN before the request (so navigation
+  cannot happen behind a hidden window), the webview can listen (`core:event:allow-listen`), and an emit
+  failure is logged rather than discarded.
+- **`R3-3` (the category tick) — ALREADY HANDLED.** `onMount`'s cleanup IS `startCategoryRefresh`'s
+  `clearInterval`, and a test pins that a stopped clock stops ticking. One real but tiny gap is noted for
+  later: while the window is hidden, the tick can leave "a long time" up to a minute out of date.
+- **`R4-tray-hide-no-way-back` — ALREADY HANDLED for the named path.** The action's own outcome is passed
+  into the tray rebuild on every hide and minimize path, which is what the defect was. Its residual — a
+  visibility change made from OUTSIDE the application (the window has no `skipTaskbar`) is not observed, so
+  the menu can be stale until the next in-app action — stays as the log records it. In practice that is a
+  wasted click and not a trap: the second click re-words the menu to the other state.
+
+**What the four have in common is worth more than the four verdicts**: three of them are one missing habit at
+three points of the same native↔webview boundary — *every action that crosses a boundary must name its failure
+path and its teardown, and the side that must react has to re-read or be told the real state instead of
+assuming the action took effect*. The two defects the user actually hit were the same question asked of the
+same boundary, so it is recorded as a review-time question rather than as four patches.
+
+**One hardening is real and is added**: nothing in the suite would notice the capability file losing the grant
+that makes the tray's settings entry work at all — the original defect was exactly "there was no capabilities
+file, and nothing anywhere said so", and `cargo build` validates the file's SHAPE rather than its contents. A
+test now reads it and asserts both grants are present.
+
 **L45 — the carousels' order: the most recently read document first (U13/R29).** The user asked that
 *"el ultimo elemento que se haya leido siempre aparezca primero … de mas reciente a más antiguo"*. The order
 lives in the same pure selector that decides which documents a category holds, so the carousel, a category's
