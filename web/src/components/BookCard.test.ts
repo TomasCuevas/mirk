@@ -6,14 +6,16 @@ import type { LibraryEntry } from "../lib/library";
 
 const english = translate("en");
 
-function entry(): LibraryEntry {
+function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
   return {
     id: 1,
     path: "/library/document.pdf",
     title: "Cosmos",
+    userTitle: null,
     author: null,
     pages: 300,
     progress: null,
+    ...overrides,
   };
 }
 
@@ -27,20 +29,33 @@ function entry(): LibraryEntry {
  * and this one has already moved once — the action used to be a text button at the bottom.
  */
 describe("the containing-folder action", () => {
-  it("is the card's only control, at the top, named rather than labelled", () => {
+  it("is one of the card's two controls, at the top, named rather than labelled", () => {
     const { body } = render(BookCard, {
-      props: { entry: entry(), t: english, status: null, onOpenFolder: () => {} },
+      props: {
+        entry: entry(),
+        t: english,
+        status: null,
+        onOpenFolder: () => {},
+        onEditTitle: () => {},
+      },
     });
 
     const card = body.slice(body.indexOf("<article"), body.indexOf("</article>"));
-    const button = card.slice(card.indexOf("<button"), card.indexOf("</button>"));
+    // R31 added the title-edit pill on the cover's other corner, so the folder action is one of two
+    // controls; its own shape and name are what this test pins.
+    expect(card.match(/<button/g)).toHaveLength(2);
 
-    // One control only, so the full-width text button that used to sit at the bottom is gone.
-    expect(card.match(/<button/g)).toHaveLength(1);
+    const start = card.indexOf("open-folder");
+    const buttonStart = card.lastIndexOf("<button", start);
+    const button = card.slice(
+      buttonStart,
+      card.indexOf("</button>", start) + "</button>".length,
+    );
+
     // Anchored to the cover, not in a row of its own: the first attempt gave the action its own row
     // above the cover and the user rejected it as looking loose there (L27).
-    expect(card.indexOf('class="cover-wrap"')).toBeLessThan(card.indexOf("<button"));
-    expect(card.indexOf("<button")).toBeLessThan(card.indexOf('class="title'));
+    expect(card.indexOf("cover-wrap")).toBeLessThan(start);
+    expect(start).toBeLessThan(card.indexOf('class="title'));
     // An icon is not a name, so the name is stated for assistive technology…
     expect(button).toContain('aria-label="Open containing folder"');
     // …and the drawing is hidden from it, so the name is not read out twice.
@@ -50,7 +65,7 @@ describe("the containing-folder action", () => {
   });
 
   it("says nothing at all about the folder action, in any status", () => {
-    const props = { entry: entry(), t: english, onOpenFolder: () => {} };
+    const props = { entry: entry(), t: english, onOpenFolder: () => {}, onEditTitle: () => {} };
     // Compared with Svelte's own SSR comment markers stripped: those are an implementation detail of how
     // a block renders, not what the reader is told — an earlier version of this test failed on them.
     const said = (html: string) => html.replace(/<!--[\s\S]*?-->/g, "");
@@ -73,5 +88,57 @@ describe("the containing-folder action", () => {
         }).body,
       ),
     ).toBe(quiet);
+  });
+});
+
+/**
+ * R31: the reader can set a title, and the card says whether the title it shows is theirs.
+ *
+ * The pill mirrors the folder action on the cover's other corner, and the note appears only when the
+ * reader's title is the one displayed — the distinction is the whole point of keeping the reader's
+ * title apart from the document's own.
+ */
+describe("the reader's title", () => {
+  it("puts the title-edit pill on the cover's top-left, named after the document", () => {
+    const { body } = render(BookCard, {
+      props: {
+        entry: entry({ title: "Cosmos" }),
+        t: english,
+        status: null,
+        onOpenFolder: () => {},
+        onEditTitle: () => {},
+      },
+    });
+
+    const card = body.slice(body.indexOf("<article"), body.indexOf("</article>"));
+    const start = card.indexOf("edit-title");
+    const buttonStart = card.lastIndexOf("<button", start);
+    const button = card.slice(
+      buttonStart,
+      card.indexOf("</button>", start) + "</button>".length,
+    );
+
+    // On the cover, before the folder action, so the two corners do not swap or overlap.
+    expect(card.indexOf("cover-wrap")).toBeLessThan(start);
+    expect(start).toBeLessThan(card.indexOf("open-folder"));
+    // The accessible name names the document rather than saying a bare "edit".
+    expect(button).toContain('aria-label="Edit the title of Cosmos"');
+    expect(button).toContain('aria-hidden="true"');
+    expect(button.replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<[^>]*>/g, "").trim()).toBe("");
+  });
+
+  it("shows the reader's title without printing a note about whose it is", () => {
+    // The user asked for the note to go: on a title they had just typed themselves it was noise. What
+    // replaces it is in the EDITOR — the field says whose title is being edited, and the restore control
+    // exists only when there is one to restore — which `titleEditor` keeps in one place and
+    // `library.test.ts` pins. This test is the inverse guard: the phrase must not come back onto a card.
+    const props = { t: english, status: null, onOpenFolder: () => {}, onEditTitle: () => {} };
+
+    const named = render(BookCard, {
+      props: { ...props, entry: entry({ title: "Mine", userTitle: "Mine" }) },
+    }).body;
+    expect(named).toContain(">Mine<");
+    expect(named).not.toContain("your title");
+    expect(named).not.toContain(english("card.titleLabelYours"));
   });
 });

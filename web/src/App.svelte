@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { translate, type Locale } from "./lib/i18n";
   import {
+    LIBRARY_CHANGED_EVENT,
     startLibraryRefresh,
     type FolderActionStatus,
     type HomeCategory,
@@ -290,6 +291,15 @@
     let stopLibraryRefresh: (() => void) | null = null;
     let cancelled = false;
 
+    // R31: a card can name a document on any screen, including the category screen, which is not
+    // given a screen-level callback. The change is announced instead, and the owner of the listing
+    // re-reads it here, so a saved title appears everywhere at once rather than waiting for the
+    // refresh interval. The listener is removed with the rest on unmount.
+    const onLibraryChanged = (): void => {
+      void refreshLibrary();
+    };
+    window.addEventListener(LIBRARY_CHANGED_EVENT, onLibraryChanged);
+
     if (inTauri) {
       void loadStoredLanguage();
       void loadLibrary();
@@ -329,6 +339,7 @@
     return () => {
       cancelled = true;
       window.removeEventListener("hashchange", sync);
+      window.removeEventListener(LIBRARY_CHANGED_EVENT, onLibraryChanged);
       stopListening?.();
       stopLibraryRefresh?.();
     };
@@ -352,6 +363,7 @@
         {folderStatus}
         onOpenFolder={openContainingFolder}
         onOpenCategory={selectCategory}
+        onNavigate={selectScreen}
       />
     {:else if view.kind === "screen" && view.screen === "library"}
       <LibraryScreen

@@ -42,6 +42,26 @@ pub enum OctError {
         message: String,
     },
 
+    /// A value a caller supplied is not something this build can act on.
+    ///
+    /// Deliberately **not** [`OctError::Storage`]. A storage failure means the database or the disk
+    /// refused an operation, so reporting a bad argument as one sends whoever reads a log looking at the
+    /// wrong thing entirely. It is not [`OctError::InvalidPath`] either: that variant is about a path
+    /// that could not be understood, while this one is any argument, named as the interface names it.
+    ///
+    /// The three fields are the point of the variant: an "invalid input" that does not say which value
+    /// arrived, in which field, and what the build accepts instead cannot be acted on by anybody —
+    /// neither by the person who triggered it nor by the person reading yesterday's log.
+    #[error("{field} `{value}` is not valid: expected {expected}")]
+    InvalidInput {
+        /// The value's name, as the interface names it, for example `"locale"`.
+        field: &'static str,
+        /// What actually arrived, kept verbatim so a misbehaving caller is identifiable.
+        value: String,
+        /// What this build accepts, in the words the interface offers it.
+        expected: String,
+    },
+
     /// A path could not be interpreted for the operation being attempted.
     #[error("invalid path: {0}")]
     InvalidPath(String),

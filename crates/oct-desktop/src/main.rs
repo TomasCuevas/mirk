@@ -154,6 +154,18 @@ fn list_library() -> Result<Vec<LibraryEntryView>, String> {
     commands::library_entries(&store).map_err(error_message)
 }
 
+/// Sets or clears the reader's title for the document with `id` (R31).
+///
+/// `title: None` restores the document's own title, and is a legitimate action rather than an error.
+/// A blank string is refused as an invalid argument by the decision in
+/// [`commands::set_document_title`], so the interface receives the same named refusal every other
+/// bad argument does.
+#[tauri::command]
+fn set_document_title(id: i64, title: Option<String>) -> Result<(), String> {
+    let store = open_store()?;
+    commands::set_document_title(&store, id, title.as_deref()).map_err(error_message)
+}
+
 /// Scans `folder` into the library and returns the report, including any per-file failure.
 #[tauri::command]
 fn scan_folder(folder: String) -> Result<ScanReportView, String> {
@@ -582,6 +594,7 @@ fn main() {
             close_app,
             start_drag,
             list_library,
+            set_document_title,
             scan_folder,
             progress_providers,
             watched_folders,
@@ -671,5 +684,29 @@ mod tests {
         // an `Err`, never as `Ok(None)`, which the interface would render as a cancel.
         let chosen = FilePath::from_str("content://com.example/document/1").expect("parse a URI");
         assert!(chosen_folder(Some(chosen)).is_err());
+    }
+}
+
+/// The window's capability file, and the one grant that makes the tray work at all.
+///
+/// The original defect (L34) was that the project had **no capabilities file**, so the core event API
+/// rejected the listener in silence and the tray's settings entry did nothing — and nothing anywhere said
+/// so. `cargo build` validates the file's SHAPE, not what it grants, and no test looked at its contents.
+#[cfg(test)]
+mod capability_grants {
+    /// `include_str!` is deliberate: if the file disappears, the BUILD fails, which is the loud version of
+    /// this defect. The assertions below cover the quiet version, where the file stays and loses a grant.
+    const CAPABILITIES: &str = include_str!("../capabilities/main.json");
+
+    #[test]
+    fn the_window_may_listen_for_the_screens_the_tray_asks_for() {
+        assert!(
+            CAPABILITIES.contains("core:event:allow-listen"),
+            "without this grant the tray's settings entry does nothing, silently: {CAPABILITIES}"
+        );
+        assert!(
+            CAPABILITIES.contains("core:event:allow-unlisten"),
+            "a listener the interface can never remove leaks for the life of the window: {CAPABILITIES}"
+        );
     }
 }

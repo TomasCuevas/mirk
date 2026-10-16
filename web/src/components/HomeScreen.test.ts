@@ -16,6 +16,39 @@ function homeProps(overrides: { entries?: LibraryEntry[] } = {}) {
     folderStatus: null,
     onOpenFolder: () => {},
     onOpenCategory: () => {},
+    onNavigate: () => {},
+    ...overrides,
+  };
+}
+
+/** A document with no reading record: the state that makes Inicio's carousels empty. */
+function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
+  return withProgress(overrides, null);
+}
+
+/** The same document WITH a recorded reading, which is what puts a card in a carousel. */
+function read(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
+  return withProgress(overrides, {
+    page: 0,
+    total: 10,
+    source: "native",
+    confidence: "exact",
+    recordedAt: null,
+    readAt: null,
+  });
+}
+
+function withProgress(
+  overrides: Partial<LibraryEntry>,
+  progress: LibraryEntry["progress"],
+): LibraryEntry {
+  return {
+    id: 1,
+    path: "/library/a.pdf",
+    title: "A",
+    author: null,
+    pages: 10,
+    progress,
     ...overrides,
   };
 }
@@ -28,9 +61,11 @@ function homeProps(overrides: { entries?: LibraryEntry[] } = {}) {
  */
 describe("Inicio", () => {
   it("keeps its header to what names the screen, and nothing else (R2)", () => {
-    const { body } = render(HomeScreen, { props: homeProps() });
 
-    // Everything before the first carousel is the header, and it holds the heading and no prose.
+    // A library that already shows something, because an EMPTY one now legitimately carries a first-run
+    // note under the heading (R34) — and R2's rule is about the header itself: the heading names the
+    // screen and no prose is added to it. Everything before the first carousel is that header.
+    const { body } = render(HomeScreen, { props: homeProps({ entries: [read()] }) });
     const header = body.slice(body.indexOf("<h1"), body.indexOf('class="carousel'));
     expect(header).toContain(">Home<");
     expect(header).not.toContain("<p");
@@ -43,6 +78,39 @@ describe("Inicio", () => {
       expect(body).toContain(categoryTitle(category, english));
       expect(body).toContain(categoryDefinition(category, english));
     }
+  });
+
+  it("explains an empty first run, and offers the one action that fills it (R34)", () => {
+    // Nothing has been found yet. The person has just installed this, lands on Inicio, and sees three
+    // empty carousels: the missing fact is a folder being watched, and that is what the note says.
+    const { body } = render(HomeScreen, { props: homeProps() });
+
+    expect(body).toContain(english("home.firstRun.emptyLibrary.title"));
+    expect(body).toContain(english("home.firstRun.emptyLibrary.body"));
+    expect(body).toContain(english("home.firstRun.emptyLibrary.action"));
+    // And NOT the other reason: two sentences for one state would be the screen guessing at a cause.
+    expect(body).not.toContain(english("home.firstRun.noRecords.title"));
+  });
+
+  it("names the OTHER reason an empty Inicio can have: documents and no reading recorded (R34)", () => {
+    // This is the state the user actually found themselves in, and the one that made them doubt the
+    // carousels worked at all: the documents are there, and nothing has ever recorded a reading, because
+    // this application never opens a document by itself — it observes reading done elsewhere.
+    const { body } = render(HomeScreen, { props: homeProps({ entries: [entry()] }) });
+
+    expect(body).toContain(english("home.firstRun.noRecords.title"));
+    expect(body).toContain(english("home.firstRun.noRecords.body"));
+    expect(body).toContain(english("home.firstRun.noRecords.action"));
+    expect(body).not.toContain(english("home.firstRun.emptyLibrary.title"));
+  });
+
+  it("says nothing about a first run once a carousel has something in it (R34)", () => {
+    // The note belongs to an empty screen only. Leaving it on a screen that already shows a document
+    // would be the application explaining itself to somebody who is using it.
+    const { body } = render(HomeScreen, { props: homeProps({ entries: [read()] }) });
+
+    expect(body).not.toContain(english("home.firstRun.emptyLibrary.title"));
+    expect(body).not.toContain(english("home.firstRun.noRecords.title"));
   });
 
   it("gives an empty carousel the card's cover shape without reserving its text block (B1)", () => {

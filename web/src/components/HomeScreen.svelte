@@ -21,6 +21,7 @@
     folderStatus,
     onOpenFolder,
     onOpenCategory,
+    onNavigate,
   }: {
     entries: LibraryEntry[];
     loading: boolean;
@@ -29,6 +30,7 @@
     folderStatus: FolderActionStatus | null;
     onOpenFolder: (entry: LibraryEntry) => void;
     onOpenCategory: (category: HomeCategory) => void;
+    onNavigate: (target: "library" | "settings") => void;
   } = $props();
 
   // One instant for every carousel in a render, so "a long time" cannot differ between them (B3) —
@@ -41,6 +43,13 @@
       items: categoryEntries(entries, category, now),
     })),
   );
+
+  // R34: an Inicio with nothing to show has exactly TWO possible reasons, and the screen has to tell them
+  // apart because they call for different actions — nothing has been found yet (the answer is a watched
+  // folder), or documents exist and no source has recorded a reading (the answer is to open one, because
+  // oct never opens a document itself: it observes reading done elsewhere). One vague sentence over three
+  // empty carousels was exactly what left the user asking whether the screen worked at all.
+  const nothingToShow = $derived(sections.every((section) => section.items.length === 0));
 
   // The tick is the shared helper, and it is stopped when the screen unmounts, so a screen that is
   // not open runs no timer.
@@ -61,6 +70,22 @@
   {:else if error !== null}
     <p class="state error">{t("library.error", { message: error })}</p>
   {:else}
+    {#if nothingToShow}
+      <!-- R34. Only when there is nothing to show, so R2 still holds: the header names the screen, and a
+           reader who has something in their library never sees this. It states the missing fact and offers
+           the one action that can supply it — and it invents nothing, because an empty screen that fills
+           itself with plausible-looking content is the lie this whole product exists to avoid. -->
+      {@const emptyLibrary = entries.length === 0}
+      <div class="first-run">
+        <h2>{t(emptyLibrary ? "home.firstRun.emptyLibrary.title" : "home.firstRun.noRecords.title")}</h2>
+        <p>
+          {t(emptyLibrary ? "home.firstRun.emptyLibrary.body" : "home.firstRun.noRecords.body")}
+        </p>
+        <button type="button" onclick={() => onNavigate(emptyLibrary ? "settings" : "library")}>
+          {t(emptyLibrary ? "home.firstRun.emptyLibrary.action" : "home.firstRun.noRecords.action")}
+        </button>
+      </div>
+    {/if}
     {#each sections as section (section.category)}
       <section class="carousel" style="--tile: 13rem">
         <div class="head">
@@ -109,6 +134,43 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+  }
+
+  /* The first-run note uses the same border and muted text as the rest of the application, so it reads as
+     one more block of the screen rather than as an alert. */
+  .first-run {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.85rem 1rem;
+    background: #f7f9fb;
+    border: 1px solid #e2e6eb;
+    border-radius: 0.6rem;
+  }
+
+  .first-run h2 {
+    margin: 0;
+    font-size: 1rem;
+    color: #17364a;
+  }
+
+  .first-run p {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.45;
+    color: #5a6472;
+  }
+
+  .first-run button {
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 0.4rem 0.8rem;
+    color: #24506b;
+    background: #ffffff;
+    border: 1px solid #ccd2da;
+    border-radius: 0.5rem;
+    cursor: pointer;
   }
 
   h1 {

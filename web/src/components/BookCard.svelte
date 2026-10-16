@@ -12,11 +12,13 @@
     t,
     status,
     onOpenFolder,
+    onEditTitle,
   }: {
     entry: LibraryEntry;
     t: Translate;
     status: FolderActionStatus | null;
     onOpenFolder: (entry: LibraryEntry) => void;
+    onEditTitle: (entry: LibraryEntry) => void;
   } = $props();
 
   // The card's progress, as a fraction to draw and a number to place on it (R7).
@@ -39,6 +41,34 @@
        it will still read that way once real covers replace the placeholder. -->
   <div class="cover-wrap">
     <div class="cover" style="aspect-ratio: 9 / 11" aria-hidden="true">{t("card.cover")}</div>
+
+    <!-- R31: the title-edit action sits on the cover's TOP-LEFT, mirroring the containing-folder
+         action at its top-right, because they are the same kind of thing: an action on the document's
+         own body, anchored to the space that stands for it. An icon is not a name, so the accessible
+         name comes from the catalogue and names the document; the drawing is hidden from assistive
+         technology because it repeats that name rather than adding to it. -->
+    <button
+      type="button"
+      class="edit-title"
+      aria-label={t("card.editTitle", { title: displayTitle(entry) })}
+      onclick={() => onEditTitle(entry)}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path d="M4 20h4.2L19 9.2a2 2 0 0 0 0-2.8l-1.4-1.4a2 2 0 0 0-2.8 0L4 15.8z" />
+        <path d="M13.6 6.8l3.6 3.6" />
+      </svg>
+    </button>
 
     <!-- R19: the page count sits on the cover's bottom-right, mirroring the folder action at its
          top-right, so the two corners read as one design instead of two. It says nothing when the
@@ -90,6 +120,12 @@
        vertically (R17). A fixed height its own content overflows is not fixed. -->
   <div class="body">
     <h2 class="title" title={displayTitle(entry)}>{displayTitle(entry)}</h2>
+
+    <!-- The card used to print "your title" here when the reader had named the document, and the user
+         asked for it to go: on a title they had just typed themselves it was noise, not information.
+         Provenance is still stated, in the one place where it is worth stating — the editor says which
+         title is being edited and offers to restore the document's own only when there is one to restore
+         — and `titleEditor` in `library.ts` is where that rule now lives and is tested. -->
 
     {#if entry.author !== null}
       <p class="author">{t("library.author", { author: entry.author })}</p>
@@ -289,6 +325,31 @@
     background: #f0f2f5;
   }
 
+  /* R31: the same pill as the folder action, on the opposite corner. Same size, border radius and
+     white background, so the two corners read as one design rather than two. */
+  .edit-title {
+    position: absolute;
+    top: 0.3rem;
+    left: 0.3rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.7rem;
+    height: 1.7rem;
+    padding: 0;
+    border: 1px solid #ccd2da;
+    border-radius: 0.4rem;
+    background: #ffffff;
+    color: #24506b;
+    cursor: pointer;
+  }
+
+  .edit-title:hover {
+    background: #f0f2f5;
+  }
+
+  /* R31: the reader's-title note. Muted and small, because it marks whose title this is rather than
+     restating it. */
   /* R19: the page count as a badge on the cover's bottom-right. Same inset, border radius and white
      pill as the folder action one line up, because they are the same kind of thing: a small fact
      about the document, stated on the space that stands for its body. */

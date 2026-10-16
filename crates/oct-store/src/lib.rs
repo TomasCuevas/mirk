@@ -222,6 +222,23 @@ const SCHEMA_V4: &str = "
 ALTER TABLE progress ADD COLUMN read_at INTEGER;
 ";
 
+/// Version 5: the reader's own title, kept apart from the document's (R31).
+///
+/// A title extracted from a PDF and a title a person typed are **different facts**, exactly like
+/// progress from a viewer versus progress typed by hand. So the reader's title does not overwrite
+/// `documents.title`: that column keeps the document's own title, exactly as the scanner wrote it,
+/// and this new nullable column holds the reader's. `NULL` means only "the reader has not set a
+/// title", and the two together make it possible to say whose title is on screen — and to restore
+/// the document's own title without having destroyed it.
+///
+/// Added as a migration rather than by editing an earlier schema, because all of them are
+/// **frozen**: a database an earlier build already created reports their versions, and editing the
+/// text would leave that database without the column forever while claiming otherwise. Every
+/// existing row keeps its title untouched and reads back with no reader's title.
+const SCHEMA_V5: &str = "
+ALTER TABLE documents ADD COLUMN user_title TEXT;
+";
+
 /// A stored document, together with its database id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentRecord {
@@ -348,7 +365,7 @@ pub fn covering_folder<'a>(folders: &'a [WatchedFolder], path: &Path) -> Option<
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -466,8 +483,9 @@ impl Store {
     /// retrying is deliberately deferred — `oct` currently opens one store per process, so the race
     /// requires a second process writing the same database, which no code does yet.
     ///
-    /// Only the columns [`Document`] can supply are written; the scanner fills metadata such as
-    /// `size`, `mtime` and `discovered_via` when it exists.
+    /// Only the columns the scanner can supply are written; the reader's title is deliberately not
+    /// one of them, because it is a separate fact with its own write path ([`Store::set_user_title`]).
+    /// The scanner fills metadata such as `size`, `mtime` and `discovered_via` when it exists.
     pub fn upsert_document(&self, document: &Document) -> Result<i64, OctError> {
         let path = path_to_string(&document.path)?;
         let uri = document.uri();
@@ -551,6 +569,49 @@ impl Store {
         }
     }
 
+    /// Sets or clears the reader's title for the document with `id` (R31).
+    ///
+    /// `None` means "restore the document's own title" and is a legitimate action, not an error: it
+    /// clears the reader's title so [`Document::display_title`] falls back to the document's own. A
+    /// blank `Some` is refused as the invalid argument it is — a title that holds only whitespace is
+    /// not a title, and storing it would make `NULL` mean two different things.
+    ///
+    /// This is deliberately separate from [`Store::upsert_document`], which never touches
+    /// `user_title`: a rescan that refreshes the document's metadata must not be able to rename a
+    /// document a person named. The reader's title is a separate fact with its own write path.
+    pub fn set_user_title(&self, id: i64, title: Option<&str>) -> Result<(), OctError> {
+        let normalized: Option<&str> = match title {
+            Some(value) => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err(OctError::InvalidInput {
+                        field: "title",
+                        value: value.to_string(),
+                        expected: "a non-empty title, or no value to restore the document's own"
+                            .to_string(),
+                    });
+                }
+                Some(trimmed)
+            }
+            None => None,
+        };
+
+        let affected = self
+            .connection
+            .execute(
+                "UPDATE documents SET user_title = ?1 WHERE id = ?2",
+                params![normalized, id],
+            )
+            .map_err(storage_error)?;
+
+        if affected == 0 {
+            return Err(OctError::Storage(format!(
+                "no document with id {id} to set a title on"
+            )));
+        }
+        Ok(())
+    }
+
     /// Finds a document by its portable identity alone, without a path.
     ///
     /// Returns `Ok(None)` when no document carries that identity — an absent document is a normal
@@ -564,7 +625,7 @@ impl Store {
         let row = self
             .connection
             .query_row(
-                "SELECT id, path, file_id_kind, volume_id, file_index, content_hash, pages, title, author \
+                "SELECT id, path, file_id_kind, volume_id, file_index, content_hash, pages, title, author, user_title \
                  FROM documents \
                  WHERE file_id_kind = ?1 AND volume_id IS ?2 AND file_index IS ?3 AND content_hash IS ?4 \
                  LIMIT 1",
@@ -580,13 +641,14 @@ impl Store {
                         row.get::<_, Option<i64>>(6)?,
                         row.get::<_, Option<String>>(7)?,
                         row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
                     ))
                 },
             )
             .optional()
             .map_err(storage_error)?;
 
-        let Some((id, path, kind, volume, index, hash, pages, title, author)) = row else {
+        let Some((id, path, kind, volume, index, hash, pages, title, author, user_title)) = row else {
             return Ok(None);
         };
 
@@ -609,6 +671,7 @@ impl Store {
                 pages,
                 title,
                 author,
+                user_title,
             },
         }))
     }
@@ -854,7 +917,7 @@ impl Store {
             .connection
             .prepare(
                 "SELECT d.id, d.path, d.file_id_kind, d.volume_id, d.file_index, d.content_hash, \
-                        d.pages, d.title, d.author, \
+                        d.pages, d.title, d.author, d.user_title, \
                         p.page, p.total, p.source, p.confidence, p.read_at, p.updated_at \
                  FROM documents d \
                  LEFT JOIN progress p ON p.id = (\
@@ -874,17 +937,18 @@ impl Store {
                 let pages: Option<i64> = row.get(6)?;
                 let title: Option<String> = row.get(7)?;
                 let author: Option<String> = row.get(8)?;
+                let user_title: Option<String> = row.get(9)?;
                 // The LEFT JOIN leaves every `progress` column NULL for a document with none, so
                 // `p.page` is the presence check: it is NOT NULL whenever the row exists.
                 let progress: Option<LatestProgressColumns> =
-                    match row.get::<_, Option<i64>>(9)? {
+                    match row.get::<_, Option<i64>>(10)? {
                         Some(page) => Some((
                             page,
-                            row.get(10)?,
                             row.get(11)?,
                             row.get(12)?,
                             row.get(13)?,
                             row.get(14)?,
+                            row.get(15)?,
                         )),
                         None => None,
                     };
@@ -898,6 +962,7 @@ impl Store {
                     pages,
                     title,
                     author,
+                    user_title,
                     progress,
                 ))
             })
@@ -915,6 +980,7 @@ impl Store {
                 pages,
                 title,
                 author,
+                user_title,
                 progress,
             ) = row.map_err(storage_error)?;
 
@@ -961,6 +1027,7 @@ impl Store {
                         pages,
                         title,
                         author,
+                        user_title,
                     },
                 },
                 progress,
@@ -1161,6 +1228,16 @@ fn migrate(connection: &mut Connection) -> Result<(), OctError> {
         transaction.execute_batch(SCHEMA_V4).map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 4i64)
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+        version = 4;
+    }
+
+    if version < 5 {
+        let transaction = connection.transaction().map_err(storage_error)?;
+        transaction.execute_batch(SCHEMA_V5).map_err(storage_error)?;
+        transaction
+            .pragma_update(None, "user_version", 5i64)
             .map_err(storage_error)?;
         transaction.commit().map_err(storage_error)?;
     }
@@ -1404,12 +1481,99 @@ mod tests {
         (dir, path)
     }
 
+    /// Builds a database exactly as version 4 left it: V1..V4 applied, a watched folder, a document
+    /// that carries its own title, and a position with a reading time. The V5 migration must add the
+    /// reader's-title column without touching the document's own title.
+    fn a_version_4_database() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("oct.sqlite3");
+        let connection = Connection::open(&path).expect("open raw");
+        connection
+            .execute_batch(SCHEMA_V1)
+            .expect("create the version 1 schema");
+        connection
+            .execute_batch(SCHEMA_V2)
+            .expect("apply the version 2 migration");
+        connection
+            .execute_batch(SCHEMA_V3)
+            .expect("apply the version 3 migration");
+        connection
+            .execute_batch(SCHEMA_V4)
+            .expect("apply the version 4 migration");
+        connection
+            .execute(
+                "INSERT INTO folders (path, recursive, enabled, added_at) VALUES (?1, 1, 1, 7)",
+                params!["/library/watched"],
+            )
+            .expect("record a folder the way version 4 did");
+        // The document's own title, written before the reader's-title column existed.
+        connection
+            .execute(
+                "INSERT INTO documents (path, path_normalized, uri, title, first_seen_at) \
+                 VALUES (?1, ?1, ?2, ?3, 9)",
+                params![
+                    "/library/read.pdf",
+                    "file:///library/read.pdf",
+                    "The document's own title"
+                ],
+            )
+            .expect("record a document the way version 4 did");
+        connection
+            .execute(
+                "INSERT INTO progress (doc_id, page, total, source, confidence, read_at, updated_at) \
+                 VALUES (1, 5, 80, ?1, ?2, 1234, 99)",
+                params!["native", "exact"],
+            )
+            .expect("record a position the way version 4 did");
+        connection
+            .pragma_update(None, "user_version", 4i64)
+            .expect("stamp version 4");
+        drop(connection);
+        (dir, path)
+    }
+
+    #[test]
+    fn a_version_4_database_gains_the_readers_title_without_touching_the_documents() {
+        let (_dir, path) = a_version_4_database();
+
+        let store = Store::open(&path).expect("opening migrates the database");
+        assert_eq!(store.schema_version().expect("schema version"), 5);
+
+        // The document's own title survives the V4 -> V5 step untouched, and it reads back with no
+        // reader's title: the migration adds a fact, it does not invent one.
+        let library = store.library().expect("list the library");
+        assert_eq!(library.len(), 1);
+        assert_eq!(
+            library[0].document.document.title.as_deref(),
+            Some("The document's own title")
+        );
+        assert_eq!(library[0].document.document.user_title, None);
+
+        // The column the migration exists for is live afterwards, and the reader's title wins for
+        // display while the document's own title stays stored exactly as it was.
+        let doc_id = library[0].document.id;
+        store
+            .set_user_title(doc_id, Some("The reader's title"))
+            .expect("set the reader's title");
+        let library = store.library().expect("list the library again");
+        assert_eq!(
+            library[0].document.document.user_title.as_deref(),
+            Some("The reader's title")
+        );
+        assert_eq!(
+            library[0].document.document.title.as_deref(),
+            Some("The document's own title"),
+            "the reader's title must not overwrite the document's own"
+        );
+        assert_eq!(library[0].document.document.display_title(), "The reader's title");
+    }
+
     #[test]
     fn a_version_3_database_gains_read_at_and_keeps_its_rows() {
         let (_dir, path) = a_version_3_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 4);
+        assert_eq!(store.schema_version().expect("schema version"), 5);
 
         // The watch, the document and its position all survive the V3 -> V4 step.
         let folders = store.folders().expect("list folders");
@@ -1451,7 +1615,7 @@ mod tests {
         let (_dir, path) = a_version_2_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 4);
+        assert_eq!(store.schema_version().expect("schema version"), 5);
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -1479,7 +1643,7 @@ mod tests {
         let (_dir, path) = a_version_1_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 4);
+        assert_eq!(store.schema_version().expect("schema version"), 5);
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -1516,7 +1680,7 @@ mod tests {
         let before = std::fs::read(&path).expect("read the database bytes");
 
         let store = Store::open(&path).expect("reopen");
-        assert_eq!(store.schema_version().expect("schema version"), 4);
+        assert_eq!(store.schema_version().expect("schema version"), 5);
         drop(store);
 
         let after = std::fs::read(&path).expect("read the database bytes");

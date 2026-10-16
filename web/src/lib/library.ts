@@ -52,7 +52,22 @@ export interface Progress {
 export interface LibraryEntry {
   id: number;
   path: string;
-  title: string | null;
+  /**
+   * The title to display, **already resolved by the core** (R31).
+   *
+   * It is the reader's title when they have set one, otherwise the document's own — the embedded
+   * one, or the file's own name. Because the core resolves it, the interface never decides whose
+   * title it is rendering and no card can fall back to a path. A blank value never arrives here.
+   */
+  title: string;
+  /**
+   * The reader's own title, or `null` when they have not set one (`userTitle` from the Rust view).
+   *
+   * This is what lets a card say "this title is yours": the reader's title is a separate fact, so
+   * the interface can tell it apart from the document's own rather than having to guess. Optional on
+   * the type so a listing shaped before R31 still compiles; in practice the Rust view always sends it.
+   */
+  userTitle?: string | null;
   author: string | null;
   /** Page count from the scanner; null when it was never established. */
   pages: number | null;
@@ -216,24 +231,6 @@ export function describeProvider(provider: Provider, t: Translate): string {
 }
 
 /** The message shown when the platform exposes no providers at all, or `null` when it does. */
-/**
- * The name to show when a document carries no embedded title.
- *
- * Everything after the last separator, minus the extension — the file's own name, which is what the
- * reader sees in their file manager and what they will recognise. A path is not a title: rendering
- * `/home/u/libros/report.pdf` where a title belongs tells the reader nothing they cannot already see
- * and reads like a mistake.
- *
- * It is deliberately **not** marked on the card. The card shows the file's name as its title, which is
- * the ordinary convention, and the distinction that matters — "this document has no title of its own"
- * — belongs where the reader can act on it, in the title editor, not as a badge on every cover.
- */
-export function titleFromPath(path: string): string {
-  const name = path.slice(path.lastIndexOf("/") + 1);
-  const extension = name.lastIndexOf(".");
-  // `> 0` rather than `>= 0`, so a leading-dot name like `.hidden` keeps its dot.
-  return extension > 0 ? name.slice(0, extension) : name;
-}
 
 /**
  * What to say about the provider registry.
@@ -265,18 +262,35 @@ export function describeScanSummary(report: ScanReport, t: Translate): string {
 }
 
 /**
- * The title a card shows.
+ * The title a card shows (R31).
  *
- * The embedded title when the document has one, and the file's own name otherwise — never the
- * path. This is the rule L18 shipped as a fix for real documents whose PDFs carry no title, and it
- * is the one place the fallback lives so no screen can render a path where a title belongs.
- *
- * A blank or whitespace-only embedded title counts as no title: PDF metadata can hold an empty
- * string, and a blank card is no more helpful than a path.
+ * The core already resolved it: `entry.title` is the reader's title when they set one, otherwise the
+ * document's own — the embedded one, or the file's own name. This helper exists so the card, the
+ * filter and the sort all read that one value, and none of them can reach for `path` to decide.
+ * `entry.userTitle` is the separate fact that says whether this title is the reader's.
  */
+/**
+ * What the title editor shows for one document (R31).
+ *
+ * The editor is where provenance is stated, and it says it twice without a word of explanation: the
+ * field's label names WHOSE title is being edited, and the restore control exists exactly when there is
+ * a reader's title to go back from — restoring something that was never set is an action without a
+ * meaning. The user asked for the note on the card to go (on a title they had just typed themselves it
+ * was noise), so that information lives here, at the moment it is actually needed.
+ *
+ * It is a function rather than a condition inside the markup because it is a RULE: it has to be pinned
+ * by a test, and a test cannot click a modal.
+ */
+export function titleEditor(entry: LibraryEntry): { value: string; yours: boolean } {
+  // Blank is not a title here for the same reason it is not one in `Document::display_title`, which
+  // ignores a blank reader's title: the store refuses to write one, so this only matters if a value
+  // arrives from somewhere less careful — and then the interface must not offer to "restore" it.
+  const yours = entry.userTitle != null && entry.userTitle.trim() !== "";
+  return { value: displayTitle(entry), yours };
+}
+
 export function displayTitle(entry: LibraryEntry): string {
-  const title = entry.title?.trim() ?? "";
-  return title === "" ? titleFromPath(entry.path) : title;
+  return entry.title;
 }
 
 // --- Filtering and sorting ------------------------------------------------------------------
@@ -560,6 +574,25 @@ export const LIBRARY_REFRESH_MS = 15_000;
 export function startLibraryRefresh(reload: () => void): () => void {
   const timer = setInterval(reload, LIBRARY_REFRESH_MS);
   return () => clearInterval(timer);
+}
+
+/**
+ * The event that asks whoever owns the listing to re-read it (R31).
+ *
+ * A card action that changes a document — naming it, or restoring its own title — happens inside a
+ * card, on whatever screen happens to be showing it, including the category screen whose card grid
+ * this unit may not change. Threading a callback through every screen would make that screen the odd
+ * one out; announcing the change lets the owner of the listing (`App`) listen once and re-read. It is
+ * a plain DOM event rather than a Tauri event, because it is the interface's own change and must
+ * behave the same in the plain-browser development build, where there is no application to emit one.
+ */
+export const LIBRARY_CHANGED_EVENT = "oct:library-changed";
+
+/** Announces that the library changed, so its owner can re-read it. */
+export function announceLibraryChanged(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(LIBRARY_CHANGED_EVENT));
+  }
 }
 
 /**

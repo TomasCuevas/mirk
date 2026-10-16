@@ -19,10 +19,10 @@ import {
   sortEntries,
   startCategoryRefresh,
   startLibraryRefresh,
-  titleFromPath,
   type LibraryEntry,
   type Progress,
   type SortKey,
+  titleEditor,
 } from "./library";
 
 const english = translate("en");
@@ -44,7 +44,8 @@ function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
   return {
     id: 1,
     path: "/library/document.pdf",
-    title: null,
+    title: "document",
+    userTitle: null,
     author: null,
     pages: null,
     progress: null,
@@ -212,30 +213,60 @@ describe("i18n", () => {
   });
 });
 
+describe("the title editor's rule (R31)", () => {
+  it("prefills with the title on screen, whoever it belongs to", () => {
+    expect(titleEditor({ ...entry(), title: "The document's own", userTitle: null })).toEqual({
+      value: "The document's own",
+      yours: false,
+    });
+    expect(titleEditor({ ...entry(), title: "Mine", userTitle: "Mine" })).toEqual({
+      value: "Mine",
+      yours: true,
+    });
+  });
+
+  it("offers to restore the document's own title exactly when the reader set a real one", () => {
+    // The rule the unit hangs on: offering to restore something that was never set is an action without
+    // a meaning. After the note left the card, this control and the field's label are the two places the
+    // provenance is stated at all — so the rule is pinned here, where a test can reach it, instead of
+    // living inside a modal nobody can render without clicking.
+    expect(titleEditor({ ...entry(), title: "A", userTitle: null }).yours).toBe(false);
+    expect(titleEditor({ ...entry(), title: "A", userTitle: "A" }).yours).toBe(true);
+    // Blank is not a title, for the same reason it is not one in `Document::display_title`.
+    expect(titleEditor({ ...entry(), title: "A", userTitle: "   " }).yours).toBe(false);
+  });
+});
+
 describe("card titles", () => {
-  it("prefers the document's own title when it has one", () => {
+  // R31. The core resolves the displayed title before the interface sees it, so `displayTitle` reads
+  // the value it was given rather than deciding anything itself — the fallback to the file's own name
+  // is `oct-core`'s `Document::display_title`, where it has its own tests.
+  it("shows the title the core already resolved", () => {
     expect(displayTitle(entry({ title: "Cosmos" }))).toBe("Cosmos");
   });
 
-  it("falls back to the file's own name, never the path", () => {
-    const card = displayTitle(
-      entry({ path: "/home/u/libros/Cosmos - Carl Sagan.pdf", title: null }),
-    );
-    expect(card).toBe("Cosmos - Carl Sagan");
+  it("never falls back to the path", () => {
+    const card = displayTitle(entry({ path: "/home/u/libros/Cosmos - Carl Sagan.pdf", title: "Cosmos" }));
+    expect(card).toBe("Cosmos");
     expect(card).not.toContain("/");
   });
 
-  it("treats a blank embedded title as no title at all", () => {
-    // PDF metadata can hold an empty title. Rendering a blank card would be as unhelpful as
-    // rendering a path, so the file's own name is used instead.
-    expect(displayTitle(entry({ path: "/u/report.pdf", title: "   " }))).toBe("report");
+  it("carries the reader's title as a separate fact from the displayed one", () => {
+    // The point of R31: the interface can tell the reader's title apart from the document's own.
+    const named = entry({ title: "What the reader called it", userTitle: "What the reader called it" });
+    expect(displayTitle(named)).toBe("What the reader called it");
+    expect(named.userTitle).toBe("What the reader called it");
+
+    const unnamed = entry({ title: "The document's own title", userTitle: null });
+    expect(displayTitle(unnamed)).toBe("The document's own title");
+    expect(unnamed.userTitle).toBeNull();
   });
 });
 
 describe("filtering the listing", () => {
   const entries = [
     entry({ id: 1, path: "/library/Cosmos.pdf", title: "Cosmos" }),
-    entry({ id: 2, path: "/library/Deep Work.pdf", title: null }),
+    entry({ id: 2, path: "/library/Deep Work.pdf", title: "Deep Work" }),
     entry({ id: 3, path: "/library/Programación/SICP.pdf", title: "Structures" }),
   ];
 
@@ -344,26 +375,16 @@ describe("progress fraction", () => {
 });
 
 describe("title fallback", () => {
-  it("shows the file's own name, never the path", () => {
-    expect(titleFromPath("/home/u/libros/Cosmos - Carl Sagan.pdf")).toBe("Cosmos - Carl Sagan");
-    expect(titleFromPath("/home/u/Comparación de Métodos.pdf")).toBe("Comparación de Métodos");
-    // A path with a directory that also contains dots must not be truncated at the wrong dot.
-    expect(titleFromPath("/home/u/libros.v2/report.pdf")).toBe("report");
-    expect(titleFromPath("/home/u/libros.v2/report.v2.pdf")).toBe("report.v2");
-  });
-
-  it("keeps a name that has no extension, and a leading dot", () => {
-    expect(titleFromPath("/home/u/no-extension")).toBe("no-extension");
-    expect(titleFromPath("/home/u/.hidden")).toBe(".hidden");
-    expect(titleFromPath("report.pdf")).toBe("report");
-  });
-
-  it("is what the card shows when the document has no title of its own", () => {
+  it("is the core's job, so the interface keeps a document's own title when it is the displayed one", () => {
     // The defect this replaced: the card rendered the absolute path where a title belongs, for the
-    // 12 of the maintainer's 42 documents whose PDFs carry no embedded title.
-    const path = "/home/u/libros/Programación/gentleman-programming-book-es.pdf";
-    expect(titleFromPath(path)).toBe("gentleman-programming-book-es");
-    expect(titleFromPath(path)).not.toContain("/");
+    // 12 of the maintainer's 42 documents whose PDFs carry no embedded title. The core now returns
+    // the file's own name as the displayed title (see `Document::display_title`); here we only pin
+    // that the interface shows exactly what it was handed, path or not.
+    const resolved = "gentleman-programming-book-es";
+    expect(displayTitle(entry({ title: resolved, path: "/home/u/Programación/x.pdf" }))).toBe(
+      resolved,
+    );
+    expect(displayTitle(entry({ title: resolved }))).not.toContain("/");
   });
 });
 
@@ -629,7 +650,7 @@ describe("the order of the carousels", () => {
    * than in the screen, so the carousel, a category's own list and the ten-tile cap read one order.
    */
   const now = 1_700_000_000;
-  const read = (id: number, readAt: number | null, title: string | null = null): LibraryEntry =>
+  const read = (id: number, readAt: number | null, title: string = "document"): LibraryEntry =>
     entry({
       id,
       title,

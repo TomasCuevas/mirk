@@ -53,12 +53,21 @@ impl ProgressView {
 }
 
 /// One library row as the list library command returns it.
+///
+/// `title` is already the **displayed** title (R31): the core resolves the reader's title over the
+/// document's own, so no screen has to decide whose title it is rendering. `user_title` carries the
+/// reader's title on its own — `null` when they have not set one — so the interface can say "this
+/// one is yours" without guessing. It is deliberately not a `title_source` column: with the two facts
+/// kept separate, no source is needed to tell them apart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryEntryView {
     pub id: i64,
     pub path: String,
-    pub title: Option<String>,
+    /// The title to show, resolved by the core: the reader's when set, otherwise the document's own.
+    pub title: String,
+    /// The reader's own title, or `null` when they have not set one (`userTitle` over IPC).
+    pub user_title: Option<String>,
     pub author: Option<String>,
     pub pages: Option<u32>,
     pub progress: Option<ProgressView>,
@@ -75,7 +84,8 @@ impl From<LibraryEntry> for LibraryEntryView {
         Self {
             id: document.id,
             path: display_path(&document.document.path),
-            title: document.document.title,
+            title: document.document.display_title(),
+            user_title: document.document.user_title.clone(),
             author: document.document.author,
             pages: document.document.pages,
             progress: progress
@@ -218,6 +228,20 @@ pub fn library_entries(store: &Store) -> Result<Vec<LibraryEntryView>, OctError>
         .collect())
 }
 
+/// Sets or clears the reader's title for one document (R31).
+///
+/// `title` is a `String` on the IPC boundary, so the interface sends either the reader's text or
+/// nothing at all: an absent value means "restore the document's own title" and is a legitimate
+/// action, while a blank value is refused as the invalid argument it is. The refusal — the variant,
+/// the field and the words — is decided in [`Store::set_user_title`], so this command and any future
+/// caller cannot disagree about what a blank title means.
+///
+/// Nothing here touches the document's own title: the reader's title is a separate fact, and a
+/// document named in this application can always be restored to the title the file itself carries.
+pub fn set_document_title(store: &Store, id: i64, title: Option<&str>) -> Result<(), OctError> {
+    store.set_user_title(id, title)
+}
+
 /// Scans `folder` into `store` and returns what happened.
 ///
 /// `identity` is injected so the scan can be driven with a real or fake provider, exactly as
@@ -312,9 +336,15 @@ pub fn get_language(store: &Store) -> Result<Option<String>, OctError> {
 /// this decision stays testable without a display or a Tauri application.
 pub fn set_language(store: &Store, locale: &str) -> Result<(), OctError> {
     if !shell::is_known_language(locale) {
-        return Err(OctError::Storage(format!(
-            "`{locale}` is not an interface language this build knows"
-        )));
+        // `R35`: a bad argument answers as a bad argument. This used to be `Storage`, which was a small
+        // lie in a log — the database was never involved, and anyone reading a failure later would look
+        // in the wrong place. Not reachable from the interface today: the selector offers what
+        // `shell::LANGUAGES` holds.
+        return Err(OctError::InvalidInput {
+            field: "locale",
+            value: locale.to_string(),
+            expected: shell::LANGUAGES.join(" or "),
+        });
     }
     store.set_setting(LANGUAGE_SETTING, locale)
 }
@@ -518,6 +548,92 @@ mod tests {
             Some(old),
             "the write time must not be mistaken for the reading time"
         );
+    }
+
+    // --- R31: the reader's title travels beside the document's own -------------------------------
+
+    #[test]
+    fn the_library_view_displays_the_readers_title_and_marks_it_as_theirs() {
+        let store = in_memory_store();
+        let mut doc = document("/library/name.pdf", 5, 5);
+        doc.title = Some("The document's own title".to_string());
+        let id = store.upsert_document(&doc).expect("insert");
+
+        // Before anyone names it, the view shows the document's own title and no reader's title.
+        let entries = library_entries(&store).expect("list");
+        assert_eq!(entries[0].title, "The document's own title");
+        assert_eq!(entries[0].user_title, None);
+
+        set_document_title(&store, id, Some("What the reader called it")).expect("name it");
+
+        let entries = library_entries(&store).expect("list again");
+        // `title` is the displayed value, and `userTitle` marks it as the reader's.
+        assert_eq!(entries[0].title, "What the reader called it");
+        assert_eq!(
+            entries[0].user_title.as_deref(),
+            Some("What the reader called it")
+        );
+    }
+
+    #[test]
+    fn a_document_with_no_title_at_all_reaches_the_view_as_the_files_own_name() {
+        // The rule L18 shipped, now resolved in the core instead of the interface: a card shows the
+        // file's name rather than its path, and the interface never has to decide that.
+        let store = in_memory_store();
+        store
+            .upsert_document(&document("/library/Deep Work.pdf", 5, 6))
+            .expect("insert");
+
+        let entries = library_entries(&store).expect("list");
+        assert_eq!(entries[0].title, "Deep Work");
+        assert!(!entries[0].title.contains('/'), "a path is not a title");
+        assert_eq!(entries[0].user_title, None);
+    }
+
+    #[test]
+    fn restoring_the_documents_own_title_clears_the_readers() {
+        let store = in_memory_store();
+        let mut doc = document("/library/name.pdf", 5, 7);
+        doc.title = Some("The document's own title".to_string());
+        let id = store.upsert_document(&doc).expect("insert");
+
+        set_document_title(&store, id, Some("The reader's title")).expect("name it");
+        assert_eq!(
+            library_entries(&store).expect("list")[0].title,
+            "The reader's title"
+        );
+
+        // `None` is the legitimate "restore" action, not an error.
+        set_document_title(&store, id, None).expect("restore the document's own title");
+        let entries = library_entries(&store).expect("list again");
+        assert_eq!(entries[0].title, "The document's own title");
+        assert_eq!(entries[0].user_title, None);
+    }
+
+    #[test]
+    fn a_blank_title_is_refused_by_the_command_as_an_invalid_argument() {
+        let store = in_memory_store();
+        let mut doc = document("/library/name.pdf", 5, 8);
+        doc.title = Some("The document's own title".to_string());
+        let id = store.upsert_document(&doc).expect("insert");
+
+        match set_document_title(&store, id, Some("   ")) {
+            Err(OctError::InvalidInput {
+                field,
+                value,
+                expected,
+            }) => {
+                assert_eq!(field, "title");
+                assert_eq!(value, "   ");
+                assert!(expected.contains("non-empty"), "expected: {expected}");
+            }
+            other => panic!("a blank title must be an invalid argument, got {other:?}"),
+        }
+
+        // Nothing was written, so the document still displays its own title.
+        let entries = library_entries(&store).expect("list");
+        assert_eq!(entries[0].title, "The document's own title");
+        assert_eq!(entries[0].user_title, None);
     }
 
     #[test]
@@ -939,10 +1055,21 @@ mod tests {
     fn an_unknown_locale_is_rejected_and_not_stored() {
         let store = in_memory_store();
         let result = set_language(&store, "fr");
-        assert!(
-            matches!(result, Err(OctError::Storage(_))),
-            "an unknown locale must be refused, got {result:?}"
-        );
+        // `R35`. The variant matters, and so do its three fields: the whole reason this is not `Storage`
+        // is that whoever reads the failure must be able to see WHICH value arrived, in which field, and
+        // what the build accepts — so the test asserts all three rather than only the variant's name.
+        match result.expect_err("an unknown locale must be refused") {
+            OctError::InvalidInput {
+                field,
+                value,
+                expected,
+            } => {
+                assert_eq!(field, "locale");
+                assert_eq!(value, "fr");
+                assert_eq!(expected, "en or es");
+            }
+            other => panic!("a bad locale must be an invalid argument, not {other:?}"),
+        }
         assert_eq!(
             store.get_setting("language").expect("read the raw setting"),
             None,

@@ -43,6 +43,13 @@ pub const MENU_QUIT: &str = "quit";
 pub const LANGUAGE_EN: &str = "en";
 pub const LANGUAGE_ES: &str = "es";
 
+/// Every interface language this build knows, in the order the interface offers them.
+///
+/// The gate below and the refusal in `commands::set_language` both read THIS list, so the sentence a
+/// person (or a log) receives can name exactly what the build accepts instead of saying "invalid". A
+/// third list somewhere else is how a language gets added in the interface and forgotten in the tray.
+pub const LANGUAGES: [&str; 2] = [LANGUAGE_EN, LANGUAGE_ES];
+
 /// The tray menu's words in one language.
 ///
 /// The tray is native and cannot read the webview's i18n catalogue, so its few words live here,
@@ -63,7 +70,7 @@ pub struct TrayLabels {
 /// value written by a newer build — from being treated as a language. Callers that read the setting
 /// report an unknown value as no language; [`tray_labels`] falls back to English.
 pub fn is_known_language(language: &str) -> bool {
-    matches!(language, LANGUAGE_EN | LANGUAGE_ES)
+    LANGUAGES.contains(&language)
 }
 
 /// The tray's words in `language`; English when nothing is stored or the value is not known.
