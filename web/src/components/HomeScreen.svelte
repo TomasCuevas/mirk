@@ -5,6 +5,7 @@
     categoryEntries,
     currentUnixSeconds,
     homeCategories,
+    libraryView,
     startCategoryRefresh,
     type FolderActionStatus,
     type HomeCategory,
@@ -15,7 +16,7 @@
 
   let {
     entries,
-    loading,
+    inFlight,
     error,
     t,
     folderStatus,
@@ -24,7 +25,7 @@
     onNavigate,
   }: {
     entries: LibraryEntry[];
-    loading: boolean;
+    inFlight: boolean;
     error: string | null;
     t: Translate;
     folderStatus: FolderActionStatus | null;
@@ -51,6 +52,13 @@
   // empty carousels was exactly what left the user asking whether the screen worked at all.
   const nothingToShow = $derived(sections.every((section) => section.items.length === 0));
 
+  // L47. What the screen shows is one decision, and it lives in `libraryView` so Inicio and
+  // Biblioteca obey the same rule and a test can pin it without rendering anything. The loader is the
+  // sentence the catalogue already had for the first load: "Loading the library…" is exactly as true
+  // of a rescan or a folder removal as it is of the first read, so no second string was added. That
+  // sentence IS the loader — a spinner would add motion without adding information.
+  const view = $derived(libraryView(entries, inFlight));
+
   // The tick is the shared helper, and it is stopped when the screen unmounts, so a screen that is
   // not open runs no timer.
   onMount(() => startCategoryRefresh(() => (now = currentUnixSeconds())));
@@ -65,12 +73,12 @@
 <section class="screen">
   <h1>{t("home.heading")}</h1>
 
-  {#if loading}
+  {#if view === "loading"}
     <p class="state">{t("library.loading")}</p>
   {:else if error !== null}
     <p class="state error">{t("library.error", { message: error })}</p>
   {:else}
-    {#if nothingToShow}
+    {#if !inFlight && nothingToShow}
       <!-- R34. Only when there is nothing to show, so R2 still holds: the header names the screen, and a
            reader who has something in their library never sees this. It states the missing fact and offers
            the one action that can supply it — and it invents nothing, because an empty screen that fills

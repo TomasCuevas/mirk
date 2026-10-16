@@ -74,6 +74,17 @@
   let scanReport = $state<ScanReport | null>(null);
   let scanError = $state<string | null>(null);
 
+  // R27. A folder removal takes that folder's documents with it, so the listing is momentarily empty
+  // while the store is written. It is one of the explicit changes that is "in flight" for the screens.
+  let removing = $state(false);
+
+  // L47. True while a read the reader caused is running: the first load, a scan, or a folder removal.
+  // The screens turn this into a loader through `libraryView` instead of their empty state, so an empty
+  // listing never says "there is nothing" while the work is still in progress. The fifteen-second
+  // re-read is deliberately NOT here: `refreshLibrary` raises no flag, so it stays silent over a listing
+  // that already has content — which is why it is a separate path from the first load.
+  const libraryInFlight = $derived(libraryLoading || scanning || removing);
+
   // R1 (L22). The language is not the interface's private state: the desktop process builds the
   // tray's words from the same stored value, so it is read when the interface starts and written
   // when the user chooses one. A read that fails leaves the default standing and is reported to the
@@ -216,11 +227,14 @@
       return;
     }
     removal = null;
+    removing = true;
     try {
       await invoke("remove_folder", { id: pending.folder.id });
       await Promise.all([loadFolders(), loadLibrary()]);
     } catch (error) {
       foldersError = String(error);
+    } finally {
+      removing = false;
     }
   }
 
@@ -357,7 +371,7 @@
     {#if view.kind === "screen" && view.screen === "home"}
       <HomeScreen
         {entries}
-        loading={libraryLoading}
+        inFlight={libraryInFlight}
         error={libraryError}
         {t}
         {folderStatus}
@@ -368,7 +382,7 @@
     {:else if view.kind === "screen" && view.screen === "library"}
       <LibraryScreen
         {entries}
-        loading={libraryLoading}
+        inFlight={libraryInFlight}
         error={libraryError}
         locale={locale}
         {t}

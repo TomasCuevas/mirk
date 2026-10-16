@@ -3,6 +3,7 @@
   import {
     describeLibraryMessage,
     filterEntries,
+    libraryView,
     paginate,
     sortEntries,
     sortKeys,
@@ -14,7 +15,7 @@
 
   let {
     entries,
-    loading,
+    inFlight,
     error,
     locale,
     t,
@@ -22,7 +23,7 @@
     onOpenFolder,
   }: {
     entries: LibraryEntry[];
-    loading: boolean;
+    inFlight: boolean;
     error: string | null;
     locale: string;
     t: Translate;
@@ -40,6 +41,10 @@
   // `null` means there is something to list, so the empty-library sentence and the grid are
   // mutually exclusive rather than layered.
   const emptyMessage = $derived(describeLibraryMessage(entries, t));
+  // L47. One decision for what the screen shows, shared with Inicio and pinned without rendering: an
+  // empty listing is only presented AS empty once nothing is in flight. The loader is the catalogue's
+  // existing loading sentence, which is as true of a rescan as of the first read.
+  const view = $derived(libraryView(entries, inFlight));
   const visible = $derived(sortEntries(filterEntries(entries, query), sort, locale));
   // R10: the page is cut from the whole filtered, sorted listing, and the helper clamps the page into
   // range when a filter shrinks the listing under the reader.
@@ -49,11 +54,11 @@
 <section class="screen">
   <h1>{t("library.heading")}</h1>
 
-  {#if loading}
+  {#if view === "loading"}
     <p class="state">{t("library.loading")}</p>
   {:else if error !== null}
     <p class="state error">{t("library.error", { message: error })}</p>
-  {:else if emptyMessage !== null}
+  {:else if view === "empty"}
     <p class="state">{emptyMessage}</p>
   {:else}
     <div class="controls">

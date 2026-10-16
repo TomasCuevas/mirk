@@ -7,10 +7,10 @@ import { categoryDefinition, categoryTitle } from "../lib/screens";
 
 const english = translate("en");
 
-function homeProps(overrides: { entries?: LibraryEntry[] } = {}) {
+function homeProps(overrides: { entries?: LibraryEntry[]; inFlight?: boolean } = {}) {
   return {
     entries: [] as LibraryEntry[],
-    loading: false,
+    inFlight: false,
     error: null as string | null,
     t: english,
     folderStatus: null,
@@ -90,6 +90,29 @@ describe("Inicio", () => {
     expect(body).toContain(english("home.firstRun.emptyLibrary.action"));
     // And NOT the other reason: two sentences for one state would be the screen guessing at a cause.
     expect(body).not.toContain(english("home.firstRun.noRecords.title"));
+  });
+
+  it("shows the loader, not the empty note, while a reload is in flight (L47)", () => {
+    // The defect the user found: after removing and re-adding a watched folder the listing is
+    // momentarily empty while the scan runs, and the screen rendered its empty state — the note that
+    // says there is no watched folder at all. Nothing is missing; the work is in progress. An empty
+    // listing may only be presented AS empty while nothing is in flight.
+    const { body } = render(HomeScreen, { props: homeProps({ entries: [], inFlight: true }) });
+
+    expect(body).toContain(english("library.loading"));
+    expect(body).not.toContain(english("home.firstRun.emptyLibrary.title"));
+    expect(body).not.toContain(english("home.firstRun.emptyLibrary.body"));
+    // The three carousels would each say they are empty, which is the same false sentence.
+    expect(body).not.toContain(english("home.categoryEmpty"));
+  });
+
+  it("never covers a listing that already has content with a loader (L47)", () => {
+    // The fifteen-second re-read and a scan of a second folder both run while documents are already
+    // on screen. Content wins over the loader: no spinner, no flash, no empty grid.
+    const { body } = render(HomeScreen, { props: homeProps({ entries: [read()], inFlight: true }) });
+
+    expect(body).not.toContain(english("library.loading"));
+    expect(body).toMatch(/<article/g);
   });
 
   it("names the OTHER reason an empty Inicio can have: documents and no reading recorded (R34)", () => {

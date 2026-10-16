@@ -14,6 +14,7 @@ import {
   describeScanSummary,
   displayTitle,
   filterEntries,
+  libraryView,
   paginate,
   progressFraction,
   sortEntries,
@@ -136,6 +137,27 @@ describe("library states", () => {
 
   it("has no message once the library holds something", () => {
     expect(describeLibraryMessage([entry()], english)).toBeNull();
+  });
+});
+
+describe("what a listing screen shows", () => {
+  // L47. The user removed a watched folder and watched it again; for the seconds the rescan took, the
+  // listing was empty and the screen rendered its EMPTY state — the first-run note that says no folder
+  // is watched. Nothing was missing; the work was in progress. The rule: an empty listing may only be
+  // presented AS empty once nothing is in flight.
+  it("shows the loader, not the empty state, while a reload is in flight", () => {
+    expect(libraryView([], true)).toBe("loading");
+  });
+
+  it("shows the empty state only once nothing is in flight", () => {
+    expect(libraryView([], false)).toBe("empty");
+  });
+
+  it("never covers content with a loader, even while something is in flight", () => {
+    // The fifteen-second re-read and a scan of a second folder both run while documents are already on
+    // screen. Content wins over the loader, so the listing does not flicker or flash empty.
+    expect(libraryView([entry()], true)).toBe("content");
+    expect(libraryView([entry()], false)).toBe("content");
   });
 });
 

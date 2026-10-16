@@ -205,6 +205,46 @@ export function describeLibraryMessage(
 }
 
 /**
+ * What a listing screen shows, once the listing and the work behind it are both taken into account.
+ *
+ * The three values are deliberately distinct, because "still loading", "loaded and genuinely empty"
+ * and "loaded with documents" are three different facts and conflating two of them is the defect this
+ * function exists to prevent.
+ */
+export type LibraryView = "loading" | "empty" | "content";
+
+/**
+ * Decides what a listing screen shows (L47).
+ *
+ * - **content** — the listing holds something, and that WINS over a loader: a re-read of a listing
+ *   that is already on screen (the fifteen-second tick, or a title saved on another screen) must not
+ *   cover documents with a spinner or flash an empty grid.
+ * - **loading** — the listing is empty and a read the reader caused is in flight (the first load, a
+ *   scan, or the reload a scan or a folder removal triggers). An empty listing may only be shown AS
+ *   empty once nothing is in flight; before that, the screen would be claiming there is nothing to
+ *   find while it is still looking — the false "no watched folder" note the user saw after
+ *   re-adding a folder.
+ * - **empty** — the listing is empty and nothing is in flight. Only now is "there is nothing" an
+ *   honest thing to say.
+ *
+ * `inFlight` deliberately excludes the silent fifteen-second re-read: that path raises no flag, which
+ * is what keeps it invisible on a screen that already has content and is why it is a separate path
+ * from the first load.
+ *
+ * The decision is a function rather than a condition in markup so it can be pinned by a test without
+ * rendering anything, and so Inicio and Biblioteca cannot drift apart on it.
+ */
+export function libraryView(
+  entries: readonly LibraryEntry[],
+  inFlight: boolean,
+): LibraryView {
+  if (entries.length > 0) {
+    return "content";
+  }
+  return inFlight ? "loading" : "empty";
+}
+
+/**
  * A provider's capability and availability, in words.
  *
  * A provider that is missing names **why**, rather than showing a disabled control with no
