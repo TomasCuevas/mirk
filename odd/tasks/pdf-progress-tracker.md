@@ -1258,6 +1258,46 @@ volviendo al rojo exacto. 127 tests de interfaz y tipos limpios.
 Con esto la frase que este proyecto necesitó cinco veces queda sin ningún lugar donde incumplirse: **una pantalla
 vacía significa "cargado, y genuinamente vacío", nunca "todavía no cargó"**.
 
+
+**L50 — las portadas, primera mitad: la primera página de verdad en cada tarjeta (R32/U20a).**
+
+La medición anterior ya había decidido el diseño (≈2 ms por página en caliente, y el costo es POR PÁGINA y no por
+libro), así que esta mitad no necesitó ninguna migración: la portada se genera la primera vez que una tarjeta la
+pide, se guarda como PNG en la carpeta de datos de la aplicación, y después se sirve del archivo. La interfaz la
+recibe como una imagen embebida, porque la alternativa necesitaba configuración nueva y un permiso extra del
+sistema, y una portada de 400 px es chica. El codificador fue la ÚNICA dependencia agregada, con su motivo
+escrito: la biblioteca de PDF puede dibujar pero no escribir PNG con las funciones que este proyecto dejó apagadas
+a propósito, así que entró el codificador más chico que hace el único formato que hace falta. Y como pdfium
+atiende de a uno, las portadas se producen de a una y fuera del hilo de la interfaz.
+
+**Lo que el usuario ve, y lo que no**: ve la portada real donde antes había un recuadro, y mientras no exista
+sigue viendo el recuadro — nunca una imagen rota. Un PDF que no se puede leer (roto, con contraseña, borrado) deja
+el recuadro y su motivo va al registro, no a la pantalla.
+
+**Verificado sobre sus documentos reales y sin tocar su carpeta de datos**: 16 portadas generadas al abrir la
+aplicación, todas PNG válidos de 400 px de ancho con la proporción de cada página (518 o 566 de alto, sin
+recorte), entre 97 y 333 KB. 238 comprobaciones del proyecto, 134 de la interfaz, clippy y tipos limpios.
+Falsificaciones reales: que la portada guardada se reutilice, que un PDF ausente sea "sin portada" y no un error,
+y que una respuesta vacía jamás se muestre como imagen. El usuario aprobó el resultado en su pantalla.
+
+**Residuales asentados**: todavía no hay invalidación de la caché (una portada se guarda por documento, así que un
+archivo que cambie de contenido sin cambiar de identidad podría mostrar una portada vieja, y eso lo resuelve la
+segunda mitad, que es la que sabe que la portada la eligió el lector); un libro ESCANEADO puede costar mucho más
+que el paper medido y nada lo acota; y cada pedido recorre la lista de la biblioteca, aceptable con 42 documentos
+y anotado por si crece. **Una nota del proceso que vale**: el padre intentó borrar la carpeta de portadas para
+medir desde cero y la política de seguridad lo bloqueó; el borrado no se hizo y la medición se hizo igual, que es
+la respuesta correcta para datos del usuario fuera del proyecto.
+
+## Delivery slices (recorded on request)
+
+**Slice boundary, recorded here because the branch has grown past any PR-sized unit**: `feat/phase-1-core`
+carries **74 commits and ~24.500 authored changed lines since `main`**. That is a long-lived feature branch by
+design — every unit landed as its own work-unit commit, with its tests and its record, and the user approved
+each one before it was committed. The DELIVERY strategy (whether this becomes one pull request, a chain of
+reviewable slices, or is merged as-is) is the user's decision and is not inferred here; what this note fixes is
+the fact itself, so nobody discovers it from a diff at review time. Everything from L45 onward belongs to the
+later rounds and would be its own slice if slices are chosen.
+
 ## Open decisions
 
 **Nothing blocking.** Both blocking decisions were made by the user:
