@@ -97,6 +97,22 @@ pub enum OctError {
         message: String,
     },
 
+    /// A suggestion had already been decided, so a second decision was refused.
+    ///
+    /// A suggestion is the application offering a document it observed; the decision is the
+    /// reader's, and it is recorded once. Asking twice is a contradiction rather than a no-op: the
+    /// first answer is the one on record, and silently overwriting it would erase a decision the
+    /// reader already made — the exact provenance discipline this project applies to titles,
+    /// authors and covers. The two fields say *which* suggestion and *what* was already decided, so
+    /// a caller can tell the reader what is on record instead of only that the write did not land.
+    #[error("the suggestion `{path}` was already {decision}")]
+    SuggestionAlreadyDecided {
+        /// The suggested document's path, where the suggestion lives.
+        path: String,
+        /// The decision already on record: `"accepted"` or `"discarded"`.
+        decision: &'static str,
+    },
+
     /// A persistence operation failed.
     ///
     /// Carries a description rather than a typed source, because `oct-core` deliberately has no

@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 
 use oct_core::{Confidence, Document, FileId, OctError, Platform, ProgressSource, StoredProgress};
 use oct_store::{
-    covering_folder, database_path, user_data_dir_for, AuthorEdit, Store, WatchedFolder,
+    covering_folder, database_path, user_data_dir_for, AuthorEdit, Store, SuggestionDecision,
+    WatchedFolder,
 };
 
 fn temp_db() -> (tempfile::TempDir, PathBuf) {
@@ -2728,5 +2729,257 @@ fn the_library_is_ordered_deterministically_by_path() {
             PathBuf::from("/library/b.pdf"),
             PathBuf::from("/library/c.pdf"),
         ]
+    );
+}
+
+// --- R4: the suggestion queue -----------------------------------------------------------------
+
+#[test]
+fn recording_the_same_suggestion_twice_counts_the_sightings_without_duplicating_it() {
+    // The detector can see the same document open on every tick, so the queue must remember it once
+    // and count the sightings rather than grow a row per sighting.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+
+    let first = store
+        .record_suggestion("/library/suggested.pdf")
+        .expect("record the first sighting");
+    let second = store
+        .record_suggestion("/library/suggested.pdf")
+        .expect("record the second sighting");
+    assert_eq!(first, second, "one path is one suggestion, not two");
+
+    let suggestions = store.suggestions().expect("list the queue");
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].path, PathBuf::from("/library/suggested.pdf"));
+    assert_eq!(suggestions[0].seen_count, 2);
+    assert!(suggestions[0].decision.is_none(), "nothing decided it");
+    assert!(suggestions[0].decided_at.is_none());
+}
+
+#[test]
+fn a_suggestion_is_decided_once_and_a_second_decision_is_refused() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let id = store
+        .record_suggestion("/library/decided.pdf")
+        .expect("record");
+
+    let decided = store
+        .decide_suggestion(id, SuggestionDecision::Accepted)
+        .expect("accept");
+    assert_eq!(decided.decision, Some(SuggestionDecision::Accepted));
+    assert!(decided.decided_at.is_some(), "the decision records when it happened");
+
+    // The queue offers only what still needs an answer, so the decided row is absent now.
+    assert!(store.suggestions().expect("list").is_empty());
+
+    // And the first answer is the one on record: a second write must be refused, never overwrite it.
+    let error = store
+        .decide_suggestion(id, SuggestionDecision::Discarded)
+        .expect_err("a second decision must be refused");
+    let OctError::SuggestionAlreadyDecided { path, decision } = error else {
+        panic!("expected a decided-suggestion error, got {error:?}");
+    };
+    assert_eq!(path, "/library/decided.pdf");
+    assert_eq!(decision, "accepted");
+
+    let existing = store.suggestion(id).expect("read").expect("present");
+    assert_eq!(existing.decision, Some(SuggestionDecision::Accepted));
+}
+
+#[test]
+fn re_detecting_a_decided_suggestion_cannot_erase_what_the_reader_decided() {
+    // The load-bearing rule the queue shares with the reader's title, author and cover: observing
+    // the same file again is not a reason to revisit a decision the reader already made. The row is
+    // returned untouched — no new sighting, no cleared decision, no new decision time.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let id = store
+        .record_suggestion("/library/dismissed.pdf")
+        .expect("record");
+    let decided_at = store
+        .decide_suggestion(id, SuggestionDecision::Discarded)
+        .expect("dismiss")
+        .decided_at;
+
+    let again = store
+        .record_suggestion("/library/dismissed.pdf")
+        .expect("re-detect");
+    assert_eq!(again, id);
+
+    let existing = store.suggestion(id).expect("read").expect("present");
+    assert_eq!(existing.decision, Some(SuggestionDecision::Discarded));
+    assert_eq!(existing.decided_at, decided_at);
+    assert_eq!(
+        existing.seen_count, 1,
+        "a decided suggestion is not observed again"
+    );
+    assert!(
+        store.suggestions().expect("list").is_empty(),
+        "a decided suggestion is never offered again"
+    );
+}
+
+#[test]
+fn the_queue_is_ordered_by_when_each_document_was_first_seen() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    for name in ["/library/b.pdf", "/library/a.pdf", "/library/c.pdf"] {
+        store.record_suggestion(name).expect("record");
+    }
+
+    let paths: Vec<PathBuf> = store
+        .suggestions()
+        .expect("list")
+        .into_iter()
+        .map(|suggestion| suggestion.path)
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/library/b.pdf"),
+            PathBuf::from("/library/a.pdf"),
+            PathBuf::from("/library/c.pdf"),
+        ],
+        "insertion order, never the machine's locale"
+    );
+}
+
+#[test]
+fn deciding_a_suggestion_that_does_not_exist_is_a_storage_error() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+
+    let error = store
+        .decide_suggestion(404, SuggestionDecision::Accepted)
+        .expect_err("an unknown id cannot be decided");
+    assert!(matches!(error, OctError::Storage(_)), "got {error:?}");
+}
+
+#[test]
+fn a_stored_decision_this_build_does_not_know_is_an_error_not_an_undecided_row() {
+    // A value a newer build wrote must not be presented as "still awaiting a decision": the reader
+    // could then decide again and overwrite the answer already on record. The row is unreadable
+    // rather than readable and wrong, exactly as an unknown confidence is.
+    let (_dir, path) = temp_db();
+    {
+        let store = Store::open(&path).expect("open");
+        store.record_suggestion("/library/future.pdf").expect("record");
+    }
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.execute(
+            "UPDATE suggestions SET decision = 'maybe' WHERE path = '/library/future.pdf'",
+            [],
+        )
+        .expect("write a decision this build does not know");
+    }
+
+    let store = Store::open(&path).expect("reopen");
+    let error = store
+        .suggestion(1)
+        .expect_err("an unknown decision must not read as undecided");
+    assert!(matches!(error, OctError::Storage(_)), "got {error:?}");
+}
+
+#[test]
+fn a_step_that_fails_on_the_way_to_v8_leaves_the_database_at_v7_untouched() {
+    // The same shape as the V4–V7 atomicity tests, one version later. A database is built with the
+    // store's own current schema — so `suggestions` already has `decision` — and then only its version
+    // stamp is rewound to 7. Reopening it runs the V8 step, `ALTER TABLE suggestions ADD COLUMN
+    // decision TEXT`, against a table that already has that column, which SQLite refuses with
+    // "duplicate column name". A step stamped before its work would leave the database claiming version
+    // 8 with work that did not happen; the transaction must leave the version at 7 and every row
+    // untouched, including the reader's decision.
+    let (_dir, path) = temp_db();
+
+    let suggestion_id;
+    {
+        let store = Store::open(&path).expect("build a current database");
+        let document_id = store
+            .upsert_document(&document(
+                "/library/at-risk.pdf",
+                FileId::Posix { dev: 7, ino: 70 },
+            ))
+            .expect("insert the document");
+        store
+            .record_progress(
+                document_id,
+                &StoredProgress::new(
+                    12,
+                    Some(120),
+                    ProgressSource::External("evince-gvfs"),
+                    Confidence::Exact,
+                ),
+            )
+            .expect("record the position");
+        suggestion_id = store
+            .record_suggestion("/library/open-outside.pdf")
+            .expect("record a suggestion");
+        store
+            .decide_suggestion(suggestion_id, SuggestionDecision::Discarded)
+            .expect("dismiss it");
+    }
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.pragma_update(None, "user_version", 7i64)
+            .expect("rewind the version stamp to the pre-V8 database shape");
+    }
+
+    // 1. The failing step reaches the caller rather than being swallowed or papered over.
+    let error = Store::open(&path).expect_err("the V8 step must fail when `decision` already exists");
+    assert!(
+        matches!(error, OctError::Storage(_)),
+        "a failed migration must surface as a storage error, got {error:?}"
+    );
+
+    // 2. The version was not stamped ahead of work that did not happen.
+    let raw = rusqlite::Connection::open(&path).expect("open raw");
+    let version: i64 = raw
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("read the version");
+    assert_eq!(
+        version, 7,
+        "a failed V8 step must leave the database at version 7, not claim version 8"
+    );
+
+    // 3. Every pre-existing value is still readable — the document, its position and, above all,
+    //    the reader's decision, which is the fact this step exists to keep.
+    let document_count: i64 = raw
+        .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+        .expect("count the documents");
+    let progress_count: i64 = raw
+        .query_row("SELECT COUNT(*) FROM progress", [], |row| row.get(0))
+        .expect("count the positions");
+    assert_eq!((document_count, progress_count), (1, 1));
+
+    let (decision, decided_at): (Option<String>, Option<i64>) = raw
+        .query_row(
+            "SELECT decision, decided_at FROM suggestions WHERE id = ?1",
+            rusqlite::params![suggestion_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("the suggestion must survive the failed migration");
+    assert_eq!(decision.as_deref(), Some("discarded"));
+    assert!(decided_at.is_some(), "the decision time must survive too");
+
+    // 4. No half-applied state: the column the failing step wanted to add is still there exactly
+    //    once, and no table was created or dropped.
+    let mut statement = raw
+        .prepare("SELECT name FROM pragma_table_info('suggestions')")
+        .expect("prepare");
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        columns
+            .iter()
+            .filter(|name| name.as_str() == "decision")
+            .count(),
+        1,
+        "the failed ADD COLUMN must not have left a second `decision`; columns: {columns:?}"
     );
 }

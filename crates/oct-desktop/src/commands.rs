@@ -15,9 +15,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use oct_core::domain::CoverChoice;
-use oct_core::{Document, FileIdentity, LaunchOutcome, Launcher, OctError, StoredProgress};
+use oct_core::{
+    Document, FileIdentity, LaunchOutcome, Launcher, OctError, OpenDocumentDetector, StoredProgress,
+};
 use oct_scan::{cover_for, CoverOutcome, ScanReport, Scanner};
-use oct_store::{covering_folder, AuthorEdit, FolderRemoval, LibraryEntry, Store, WatchedFolder};
+use oct_store::{
+    covering_folder, AuthorEdit, FolderRemoval, LibraryEntry, Store, Suggestion,
+    SuggestionDecision, WatchedFolder,
+};
 use serde::Serialize;
 
 use crate::shell;
@@ -229,6 +234,34 @@ impl From<FolderRemoval> for FolderRemovalView {
 pub struct OpenedFolderView {
     pub folder: String,
     pub viewer: String,
+}
+
+/// One document awaiting the reader's accept-or-discard decision (R4).
+///
+/// Only the **undecided** queue travels here: a decision is history, read back by id when it needs
+/// to be stated. The path is shown as a path rather than a title, and that is correct here — a
+/// suggestion is not a library document, so it has no title to show and inventing one from the file
+/// name would be the screen guessing at data the application never read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionView {
+    pub id: i64,
+    pub path: String,
+    /// How many times the application has observed it open since the reader last acted.
+    pub seen_count: u32,
+    /// Unix seconds when it was first observed, which is what orders the queue.
+    pub first_seen_at: i64,
+}
+
+impl From<Suggestion> for SuggestionView {
+    fn from(suggestion: Suggestion) -> Self {
+        Self {
+            id: suggestion.id,
+            path: display_path(&suggestion.path),
+            seen_count: suggestion.seen_count,
+            first_seen_at: suggestion.first_seen_at,
+        }
+    }
 }
 
 /// The library listing: every document with its latest progress and provenance.
@@ -615,6 +648,128 @@ pub fn provider_registry() -> Vec<ProviderView> {
         .collect()
 }
 
+// --- The suggestion queue (R4) ---------------------------------------------------------------
+//
+// The queue is the one place the application observes documents the reader did not nominate. It is
+// deliberately inert: `observe_open_documents` records what the detector saw, `list_suggestions`
+// reads the undecided rows, and only the reader's own `accept_suggestion` / `discard_suggestion`
+// turn a suggestion into library data or dismiss it. Nothing here may decide on the reader's behalf.
+
+/// Records a suggestion for every PDF the detector reports open that is neither in the library nor
+/// inside a watched folder (R4).
+///
+/// This is the producer half of the queue, and it decides nothing: it only records what the
+/// application observed. Accepting or dismissing is the reader's ([`accept_suggestion`],
+/// [`discard_suggestion`]). A watched folder is the source of truth, so a document under one is
+/// skipped: if it is not in the library, the scan failed to count it, which is a scan failure to
+/// report and never a suggestion to review. A document already in the library is likewise nothing to
+/// suggest.
+///
+/// [`OctError::NotSupported`] from the detector is propagated rather than swallowed: on a platform
+/// with no detector the caller must be able to say the capability is missing instead of showing an
+/// empty queue that merely looks like good news.
+///
+/// Returns how many distinct paths were recorded. The detector may report one path under more than
+/// one process, and this counts a document, not its readers.
+pub fn observe_open_documents(
+    store: &Store,
+    detector: &dyn OpenDocumentDetector,
+) -> Result<usize, OctError> {
+    let open = detector.open_documents()?;
+    let entries = store.library()?;
+    let folders = store.folders()?;
+
+    let mut recorded = std::collections::HashSet::new();
+    for document in &open {
+        if recorded.contains(&document.path) {
+            continue;
+        }
+        if entries
+            .iter()
+            .any(|entry| entry.document.document.path == document.path)
+        {
+            continue;
+        }
+        if covering_folder(&folders, &document.path).is_some() {
+            continue;
+        }
+        store.record_suggestion(&document.path)?;
+        recorded.insert(document.path.clone());
+    }
+    Ok(recorded.len())
+}
+
+/// The suggestions still awaiting the reader's decision, oldest first.
+pub fn list_suggestions(store: &Store) -> Result<Vec<SuggestionView>, OctError> {
+    Ok(store
+        .suggestions()?
+        .into_iter()
+        .map(SuggestionView::from)
+        .collect())
+}
+
+/// Accepts the suggestion with `id`: the document joins the library, and the decision is recorded.
+///
+/// The order is deliberate. The file is counted and persisted **first**; only then is the suggestion
+/// marked accepted. A file that has since disappeared, or a pdfium that cannot be loaded, therefore
+/// leaves the suggestion exactly where it was — still awaiting a decision — instead of marking it
+/// accepted while adding nothing. Once the document is in the library the producer can no longer
+/// offer it, because its path is known; the decision write is the record that closes the queue item.
+///
+/// A suggestion whose file is gone is refused before anything is written. The scanner deliberately
+/// persists a path it could not read so a watched folder keeps knowing about a broken file, and that
+/// is right for a folder the reader nominated; it is wrong for a one-off suggestion, whose whole
+/// point is that the reader chose a real document.
+pub fn accept_suggestion(
+    store: &Store,
+    identity: &dyn FileIdentity,
+    id: i64,
+) -> Result<(), OctError> {
+    let suggestion = store
+        .suggestion(id)?
+        .ok_or_else(|| OctError::Storage(format!("no suggestion with id {id} to accept")))?;
+    if let Some(decision) = suggestion.decision {
+        return Err(OctError::SuggestionAlreadyDecided {
+            path: display_path(&suggestion.path),
+            decision: decision.id(),
+        });
+    }
+
+    if !suggestion.path.is_file() {
+        return Err(OctError::InvalidPath(format!(
+            "the suggested document no longer exists: {}",
+            display_path(&suggestion.path)
+        )));
+    }
+
+    let scanner = Scanner::new(store, identity);
+    scanner.count_and_persist(std::slice::from_ref(&suggestion.path))?;
+
+    let added = store
+        .library()?
+        .iter()
+        .any(|entry| entry.document.document.path == suggestion.path);
+    if !added {
+        return Err(OctError::Storage(format!(
+            "the suggested document could not be added: {}",
+            display_path(&suggestion.path)
+        )));
+    }
+
+    store.decide_suggestion(id, SuggestionDecision::Accepted)?;
+    Ok(())
+}
+
+/// Dismisses the suggestion with `id`, recording that the reader declined it.
+///
+/// The row stays, with its decision and its time: a suggestion the reader dismissed is a fact about
+/// their library, and removing the row would let the next detection pass offer it again. The
+/// producer stops at a decided row, so this is the one write that closes the item for good.
+pub fn discard_suggestion(store: &Store, id: i64) -> Result<(), OctError> {
+    store.decide_suggestion(id, SuggestionDecision::Discarded)?;
+    Ok(())
+}
+
 /// Every folder the store has recorded, oldest first.
 pub fn watched_folders(store: &Store) -> Result<Vec<WatchedFolderView>, OctError> {
     Ok(store
@@ -771,7 +926,10 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oct_core::{Confidence, Document, FileId, LaunchOutcome, Launcher, Platform, ProgressSource, StoredProgress};
+    use oct_core::{
+        Confidence, Document, FileId, LaunchOutcome, Launcher, OpenDocument, Platform,
+        ProgressSource, StoredProgress,
+    };
     use std::path::PathBuf;
     use std::sync::Mutex;
 
@@ -783,6 +941,41 @@ mod tests {
         let mut doc = Document::new(path);
         doc.identity = Some(FileId::Posix { dev, ino });
         doc
+    }
+
+    /// A detector that reports exactly the paths a test hands it, so the producer's own rules can
+    /// be exercised without walking the real `/proc` or depending on what this machine has open.
+    struct FixedDetector {
+        documents: Vec<OpenDocument>,
+    }
+
+    impl FixedDetector {
+        fn seeing(paths: &[&str]) -> Self {
+            Self {
+                documents: paths
+                    .iter()
+                    .map(|path| OpenDocument {
+                        path: PathBuf::from(*path),
+                        pid: Some(4242),
+                        viewer: Some("evince".to_string()),
+                    })
+                    .collect(),
+            }
+        }
+    }
+
+    impl OpenDocumentDetector for FixedDetector {
+        fn id(&self) -> &'static str {
+            "test-detector"
+        }
+
+        fn platform(&self) -> Platform {
+            Platform::current()
+        }
+
+        fn open_documents(&self) -> Result<Vec<OpenDocument>, OctError> {
+            Ok(self.documents.clone())
+        }
     }
 
     #[test]
@@ -1692,6 +1885,154 @@ mod tests {
         assert_eq!(
             document_cover(&store, 999, Path::new("/data/oct")).expect("no document, no cover"),
             None
+        );
+    }
+
+    // --- R4: the suggestion queue's producer and its decisions -----------------------------
+
+    #[test]
+    fn a_document_inside_a_watched_folder_is_never_suggested() {
+        // The watched folder is the source of truth. A PDF under one that is not in the library is a
+        // scan that has not counted it yet, not a document the reader should be asked to review.
+        let store = in_memory_store();
+        store
+            .record_folder("/library/pdfs", true)
+            .expect("watch the folder");
+
+        let detector =
+            FixedDetector::seeing(&["/library/pdfs/inside.pdf", "/elsewhere/open.pdf"]);
+        let recorded = observe_open_documents(&store, &detector).expect("observe");
+
+        assert_eq!(recorded, 1, "only the document outside the watch is a suggestion");
+        let suggestions = list_suggestions(&store).expect("list");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].path, "/elsewhere/open.pdf");
+    }
+
+    #[test]
+    fn a_document_already_in_the_library_is_not_suggested() {
+        let store = in_memory_store();
+        store
+            .upsert_document(&document("/library/known.pdf", 1, 1))
+            .expect("insert");
+
+        let detector = FixedDetector::seeing(&["/library/known.pdf"]);
+        assert_eq!(observe_open_documents(&store, &detector).expect("observe"), 0);
+        assert!(list_suggestions(&store).expect("list").is_empty());
+    }
+
+    #[test]
+    fn the_same_document_open_on_two_processes_is_one_suggestion_per_observation() {
+        // The detector reports one entry per `(path, pid)`; the queue counts documents, not readers.
+        // One observation bumps the sighting once — a file held by two processes is still one file —
+        // and the next observation is what makes it a second sighting.
+        let store = in_memory_store();
+        let detector = FixedDetector {
+            documents: vec![
+                OpenDocument {
+                    path: PathBuf::from("/elsewhere/open.pdf"),
+                    pid: Some(1),
+                    viewer: None,
+                },
+                OpenDocument {
+                    path: PathBuf::from("/elsewhere/open.pdf"),
+                    pid: Some(2),
+                    viewer: None,
+                },
+            ],
+        };
+
+        assert_eq!(observe_open_documents(&store, &detector).expect("observe"), 1);
+        let suggestions = list_suggestions(&store).expect("list");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].seen_count, 1, "one observation, one sighting");
+
+        observe_open_documents(&store, &detector).expect("observe again");
+        let suggestions = list_suggestions(&store).expect("list");
+        assert_eq!(suggestions.len(), 1, "still one row");
+        assert_eq!(suggestions[0].seen_count, 2, "the next observation is the second");
+    }
+
+    #[test]
+    fn accepting_a_suggestion_adds_the_document_then_records_the_decision() {
+        // The whole feature: the reader's accept is the only thing that turns a suggestion into
+        // library data, and it does so by persisting the document and only then recording the
+        // decision. The repository's committed fixture is scanned read-only.
+        let store = in_memory_store();
+        let identity = oct_platform::backends().file_identity;
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/oct-scan/tests/fixtures/with-info-metadata.pdf");
+        let id = store
+            .record_suggestion(&fixture)
+            .expect("record the suggestion");
+
+        accept_suggestion(&store, identity.as_ref(), id).expect("accept");
+
+        let entries = library_entries(&store).expect("list");
+        assert_eq!(entries.len(), 1, "the document joined the library");
+        assert_eq!(entries[0].path, fixture.to_string_lossy());
+        assert!(entries[0].pages.is_some(), "the fixture is countable");
+
+        let suggestion = store.suggestion(id).expect("read").expect("present");
+        assert_eq!(suggestion.decision, Some(SuggestionDecision::Accepted));
+        assert!(suggestion.decided_at.is_some());
+        assert!(
+            list_suggestions(&store).expect("list").is_empty(),
+            "a decided suggestion leaves the queue"
+        );
+    }
+
+    #[test]
+    fn a_failed_accept_leaves_the_suggestion_undecided() {
+        // The load-bearing ordering rule: the decision is written only after the document is
+        // persisted. A file that has since disappeared fails the scan, so a decision written first
+        // would leave the queue claiming an accepted document that does not exist.
+        let store = in_memory_store();
+        let identity = oct_platform::backends().file_identity;
+        let missing = PathBuf::from("/library/gone-before-accept-7f31.pdf");
+        let id = store.record_suggestion(&missing).expect("record");
+
+        let error =
+            accept_suggestion(&store, identity.as_ref(), id).expect_err("the file is gone");
+        assert!(matches!(error, OctError::InvalidPath(_)), "got {error:?}");
+
+        let suggestion = store.suggestion(id).expect("read").expect("present");
+        assert!(
+            suggestion.decision.is_none(),
+            "no decision may exist without its document"
+        );
+        assert!(
+            list_suggestions(&store).expect("list").iter().any(|s| s.id == id),
+            "the undecided suggestion is still offered"
+        );
+    }
+
+    #[test]
+    fn discarding_a_suggestion_records_the_decision() {
+        let store = in_memory_store();
+        let id = store
+            .record_suggestion("/elsewhere/open.pdf")
+            .expect("record");
+
+        discard_suggestion(&store, id).expect("discard");
+
+        let suggestion = store.suggestion(id).expect("read").expect("present");
+        assert_eq!(suggestion.decision, Some(SuggestionDecision::Discarded));
+        assert!(list_suggestions(&store).expect("list").is_empty());
+    }
+
+    #[test]
+    fn a_suggestion_cannot_be_decided_twice_through_the_commands() {
+        let store = in_memory_store();
+        let id = store
+            .record_suggestion("/elsewhere/open.pdf")
+            .expect("record");
+        discard_suggestion(&store, id).expect("the first decision");
+
+        let error = discard_suggestion(&store, id).expect_err("a second decision must be refused");
+        assert!(
+            matches!(error, OctError::SuggestionAlreadyDecided { .. }),
+            "got {error:?}"
         );
     }
 }

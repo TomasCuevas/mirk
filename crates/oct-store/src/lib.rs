@@ -58,10 +58,14 @@
 //! - filtering and sorting over `documents`: [`Store::library`] returns every document with its
 //!   latest progress, ordered by path, and nothing narrower — the first screen needed exactly that
 //!   and no more;
-//! - writes and reads for `open_events`, `viewers` and `suggestions`; the `folders` table has only
-//!   what its callers need: [`Store::record_folder`], [`Store::folders`], [`Store::forget_folder`],
+//! - writes and reads for `open_events` and `viewers`; the `folders` table has only what its callers
+//!   need: [`Store::record_folder`], [`Store::folders`], [`Store::forget_folder`],
 //!   [`Store::folder_removal`], [`WatchedFolder`] and the pure [`covering_folder`] rule that
 //!   decides whether a folder is already covered by a watch (R20, R22, R27);
+//! - the `suggestions` table is written and read only through the queue's own four methods —
+//!   [`Store::record_suggestion`], [`Store::suggestions`], [`Store::suggestion`] and
+//!   [`Store::decide_suggestion`] — because the suggestion queue is the only caller, and a decision
+//!   is the reader's (R4);
 //! - metadata writes (`size`, `mtime`, `discovered_via`, `platform`, `status`) — the
 //!   [`oct_core::Document`] value type does not carry them yet, so [`Store::upsert_document`]
 //!   leaves those columns unset for the scanner (T6) to fill;
@@ -279,6 +283,82 @@ const SCHEMA_V7: &str = "
 ALTER TABLE documents ADD COLUMN user_author TEXT;
 ";
 
+/// Version 8: the reader's decision about a suggestion, as its own fact (R4).
+///
+/// The table already had `decided_at`, which says **when** a decision happened but not **what** was
+/// decided: a timestamp alone cannot distinguish an accepted suggestion from a dismissed one. This
+/// step adds `decision`, holding `'accepted'` or `'discarded'`, and `NULL` means only "the reader
+/// has not decided yet". It is deliberately a separate column rather than a value written into
+/// `decided_at`, exactly as the reader's title is a column beside the document's own: a re-detection
+/// bumps `seen_count` and stops at a decided row, so the reader's decision is never overwritten by
+/// the application observing the same file again.
+///
+/// The unique index is what makes "one suggestion per path" a database invariant rather than a
+/// promise the read-then-write in [`Store::record_suggestion`] makes and might break. It is safe to
+/// add here because no shipped build ever wrote a suggestion row, so the table is empty of
+/// duplicates; a hand-edited database with two rows for one path will fail the step honestly rather
+/// than silently pick one.
+///
+/// Added as a migration rather than by editing [`SCHEMA_V1`], because V1 is **frozen**: a database an
+/// earlier build already created reports version 1, and editing the text would leave it without the
+/// column and the index forever while claiming otherwise. Both statements run in one transaction with
+/// the version stamp, so a step that fails halfway leaves the version behind (the V8 atomicity test
+/// pins exactly that).
+const SCHEMA_V8: &str = "
+ALTER TABLE suggestions ADD COLUMN decision TEXT;
+CREATE UNIQUE INDEX idx_suggestions_path_unique ON suggestions (path);
+";
+
+/// A document `oct` observed open outside the watched folders, awaiting the reader's decision (R4).
+///
+/// A suggestion is **not** library data: it carries a path and no document foreign key, so a
+/// suggestion whose file is gone is a row that names nothing, not a document with a missing file.
+/// What turns it into data is [`Store::decide_suggestion`], and only the reader can ask for that.
+///
+/// `seen_count` is how many times the application has observed the document open since the reader
+/// last acted on it, and it is `first_seen_at` — not the latest sighting — that orders the queue, so
+/// a document that keeps being opened does not jump around. `decision` is `None` until the reader
+/// decides, and is never cleared afterwards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suggestion {
+    /// The `suggestions.id` primary key.
+    pub id: i64,
+    /// Absolute path of the document, exactly as the detector reported it.
+    pub path: PathBuf,
+    /// How many times the application has observed it open while it was undecided.
+    pub seen_count: u32,
+    /// Unix seconds when the application first observed it.
+    pub first_seen_at: i64,
+    /// The reader's decision, or [`None`] while it is still awaiting one.
+    pub decision: Option<SuggestionDecision>,
+    /// Unix seconds when the reader decided, or [`None`] while no decision exists.
+    pub decided_at: Option<i64>,
+}
+
+/// Which decision the reader took on a suggestion (R4).
+///
+/// The two variants are persisted by their stable ids (`"accepted"` / `"discarded"`), so a row
+/// written by this build means the same thing to the next one. The decision is the reader's and
+/// nobody else's: nothing in this workspace may accept or discard a suggestion on its own, which is
+/// why this type has no `Default` and no automatic source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SuggestionDecision {
+    /// The reader accepted it: the document joined the library.
+    Accepted,
+    /// The reader dismissed it: it must not be offered again.
+    Discarded,
+}
+
+impl SuggestionDecision {
+    /// A stable machine-readable identifier, suitable for persisting and for the interface.
+    pub const fn id(self) -> &'static str {
+        match self {
+            SuggestionDecision::Accepted => "accepted",
+            SuggestionDecision::Discarded => "discarded",
+        }
+    }
+}
+
 /// A stored document, together with its database id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentRecord {
@@ -455,7 +535,7 @@ pub fn covering_folder<'a>(folders: &'a [WatchedFolder], path: &Path) -> Option<
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 7;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 8;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -1306,6 +1386,144 @@ impl Store {
             .map_err(|_| OctError::Storage(format!("document count {count} is not a usize")))
     }
 
+    // --- The suggestion queue (R4) --------------------------------------------------------------
+
+    /// Records one observation of `path` outside the watched folders and returns the row id.
+    ///
+    /// The first observation inserts a row with `seen_count = 1` and `first_seen_at` at [`unix_now`];
+    /// every later one while the row is **undecided** bumps `seen_count`. A row the reader has
+    /// already decided is left exactly as it is: not bumped, not re-opened, and above all not
+    /// cleared. That is what "a re-detection cannot erase what the reader decided" means here — the
+    /// application observing the same file again must never put a dismissed document back in front
+    /// of the reader, and accepting one twice is not a decision that exists.
+    ///
+    /// The lookup and the write are not one transaction, the same accepted residual as
+    /// [`Store::record_folder`] and [`Store::upsert_document`]: `oct` opens one store per process
+    /// today. A racing second writer cannot duplicate the path, because `suggestions.path` is
+    /// UNIQUE — it fails with a constraint error instead of forking the queue.
+    pub fn record_suggestion(&self, path: impl AsRef<Path>) -> Result<i64, OctError> {
+        let path = path_to_string(path.as_ref())?;
+
+        let existing: Option<(i64, Option<String>)> = self
+            .connection
+            .query_row(
+                "SELECT id, decision FROM suggestions WHERE path = ?1 ORDER BY id LIMIT 1",
+                params![path],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+
+        match existing {
+            // A decided suggestion is history: it is returned as it stands, never touched.
+            Some((id, Some(_))) => Ok(id),
+            Some((id, None)) => {
+                self.connection
+                    .execute(
+                        "UPDATE suggestions SET seen_count = seen_count + 1 WHERE id = ?1",
+                        params![id],
+                    )
+                    .map_err(storage_error)?;
+                Ok(id)
+            }
+            None => {
+                self.connection
+                    .execute(
+                        "INSERT INTO suggestions (path, seen_count, first_seen_at, decided_at, decision) \
+                         VALUES (?1, 1, ?2, NULL, NULL)",
+                        params![path, unix_now()],
+                    )
+                    .map_err(storage_error)?;
+                Ok(self.connection.last_insert_rowid())
+            }
+        }
+    }
+
+    /// Every suggestion still awaiting the reader's decision, oldest first.
+    ///
+    /// Ordered by `first_seen_at` and then by id, so the queue is a function of the data and not of
+    /// the machine's clock granularity or of when the caller asked. Decided rows are deliberately
+    /// absent: the screen shows what still needs an answer, and the record of a decision is read
+    /// back by id through [`Store::suggestion`].
+    pub fn suggestions(&self) -> Result<Vec<Suggestion>, OctError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, path, seen_count, first_seen_at, decision, decided_at \
+                 FROM suggestions WHERE decision IS NULL ORDER BY first_seen_at ASC, id ASC",
+            )
+            .map_err(storage_error)?;
+
+        let rows = statement
+            .query_map([], suggestion_columns)
+            .map_err(storage_error)?;
+
+        let mut suggestions = Vec::new();
+        for row in rows {
+            suggestions.push(suggestion_from_columns(row.map_err(storage_error)?)?);
+        }
+        Ok(suggestions)
+    }
+
+    /// One suggestion by id, decided or not.
+    pub fn suggestion(&self, id: i64) -> Result<Option<Suggestion>, OctError> {
+        let columns: Option<SuggestionColumns> = self
+            .connection
+            .query_row(
+                "SELECT id, path, seen_count, first_seen_at, decision, decided_at \
+                 FROM suggestions WHERE id = ?1",
+                params![id],
+                suggestion_columns,
+            )
+            .optional()
+            .map_err(storage_error)?;
+
+        columns.map(suggestion_from_columns).transpose()
+    }
+
+    /// Records the reader's decision on a suggestion, once.
+    ///
+    /// A row that already carries a decision is refused with
+    /// [`OctError::SuggestionAlreadyDecided`], naming which suggestion and what is on record, rather
+    /// than being overwritten: the first answer is the reader's, and a second write would erase it.
+    /// The `WHERE decision IS NULL` on the statement is what makes the guard atomic, so a second
+    /// caller between the read and the write cannot slip a decision past it.
+    pub fn decide_suggestion(
+        &self,
+        id: i64,
+        decision: SuggestionDecision,
+    ) -> Result<Suggestion, OctError> {
+        let affected = self
+            .connection
+            .execute(
+                "UPDATE suggestions SET decision = ?1, decided_at = ?2 \
+                 WHERE id = ?3 AND decision IS NULL",
+                params![decision.id(), unix_now(), id],
+            )
+            .map_err(storage_error)?;
+
+        if affected == 0 {
+            return match self.suggestion(id)? {
+                Some(existing) => Err(OctError::SuggestionAlreadyDecided {
+                    path: existing.path.to_string_lossy().into_owned(),
+                    decision: existing
+                        .decision
+                        .map(SuggestionDecision::id)
+                        .unwrap_or("decided"),
+                }),
+                None => Err(OctError::Storage(format!(
+                    "no suggestion with id {id} to decide"
+                ))),
+            };
+        }
+
+        self.suggestion(id)?.ok_or_else(|| {
+            OctError::Storage(format!(
+                "suggestion {id} disappeared after its decision was recorded"
+            ))
+        })
+    }
+
     fn find_id_by_identity(&self, identity: &FileId) -> Result<Option<i64>, OctError> {
         let (kind, volume, index, hash) = encode_identity(identity);
         self.connection
@@ -1492,6 +1710,15 @@ fn migrate(connection: &mut Connection) -> Result<(), OctError> {
         transaction.commit().map_err(storage_error)?;
     }
 
+    if version < 8 {
+        let transaction = connection.transaction().map_err(storage_error)?;
+        transaction.execute_batch(SCHEMA_V8).map_err(storage_error)?;
+        transaction
+            .pragma_update(None, "user_version", 8i64)
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+    }
+
     Ok(())
 }
 
@@ -1613,6 +1840,53 @@ fn intern(value: &str) -> &'static str {
     let leaked: &'static str = Box::leak(value.to_owned().into_boxed_str());
     interned.insert(leaked);
     leaked
+}
+
+/// The `suggestions` columns every read shares, before they are interpreted.
+type SuggestionColumns = (i64, String, i64, i64, Option<String>, Option<i64>);
+
+/// Reads one `suggestions` row into its raw columns.
+fn suggestion_columns(row: &rusqlite::Row<'_>) -> rusqlite::Result<SuggestionColumns> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+    ))
+}
+
+/// Interprets a raw row, refusing a decision id this build does not know.
+///
+/// An unrecognised id is an error rather than an undecided row, exactly as [`parse_confidence`]
+/// treats an unknown confidence: a value a newer build wrote must not be silently presented as
+/// "still awaiting a decision", because the reader could then decide it again and overwrite the
+/// answer already on record.
+fn suggestion_from_columns(columns: SuggestionColumns) -> Result<Suggestion, OctError> {
+    let (id, path, seen_count, first_seen_at, decision, decided_at) = columns;
+    let seen_count = u32::try_from(seen_count).map_err(|_| {
+        OctError::Storage(format!("suggestion {id} has an invalid seen count {seen_count}"))
+    })?;
+    let decision = match decision.as_deref() {
+        None => None,
+        Some("accepted") => Some(SuggestionDecision::Accepted),
+        Some("discarded") => Some(SuggestionDecision::Discarded),
+        Some(other) => {
+            return Err(OctError::Storage(format!(
+                "suggestion {id} carries an unknown decision `{other}`"
+            )))
+        }
+    };
+
+    Ok(Suggestion {
+        id,
+        path: PathBuf::from(path),
+        seen_count,
+        first_seen_at,
+        decision,
+        decided_at,
+    })
 }
 
 fn path_to_string(path: &Path) -> Result<String, OctError> {

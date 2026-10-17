@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use commands::{
     FolderRemovalView, LibraryEntryView, OpenedFolderView, ProviderView, ScanReportView,
-    WatchedFolderView,
+    SuggestionView, WatchedFolderView,
 };
 use oct_core::OctError;
 use oct_store::{database_path, AuthorEdit, Store};
@@ -270,6 +270,41 @@ fn scan_folder(folder: String) -> Result<ScanReportView, String> {
 #[tauri::command]
 fn progress_providers() -> Vec<ProviderView> {
     commands::provider_registry()
+}
+
+/// Lists the documents the application observed open outside the watched folders (R4).
+///
+/// Only the undecided queue: a decision already taken is history, and it is not offered again.
+#[tauri::command]
+fn list_suggestions() -> Result<Vec<SuggestionView>, String> {
+    let store = open_store()?;
+    commands::list_suggestions(&store).map_err(error_message)
+}
+
+/// Accepts a suggestion, adding its document to the library (R4).
+///
+/// This is a reader action and only a reader action: nothing in the application calls it on its
+/// own. The document is counted and persisted before the decision is recorded, so a file that has
+/// since disappeared leaves the suggestion waiting rather than silently accepted.
+///
+/// The scan is CPU-bound and pdfium is single-threaded behind the binding, so it runs off the
+/// interface thread for the same reason a cover render does.
+#[tauri::command]
+async fn accept_suggestion(id: i64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = open_store()?;
+        let identity = oct_platform::backends().file_identity;
+        commands::accept_suggestion(&store, identity.as_ref(), id).map_err(error_message)
+    })
+    .await
+    .map_err(|error| format!("the suggestion task could not run: {error}"))?
+}
+
+/// Dismisses a suggestion, recording that the reader declined it (R4).
+#[tauri::command]
+fn discard_suggestion(id: i64) -> Result<(), String> {
+    let store = open_store()?;
+    commands::discard_suggestion(&store, id).map_err(error_message)
 }
 
 /// Lists the folders the store has recorded as sources of truth.
@@ -691,6 +726,17 @@ fn start_tracking() {
                         detector.as_ref(),
                         &providers,
                     ));
+                    // R4: the same detector feeds the reviewable suggestion queue. This is a second
+                    // walk of `/proc` on this tick — `track_open_documents` made the first — and it
+                    // is deliberate: the queue is populated only from what the application actually
+                    // observed open, and the two callers want different things from the same
+                    // snapshot. The cost is one best-effort directory walk, and the alternative of
+                    // threading the snapshot through `track` would put queue policy inside the
+                    // ingestion loop that deliberately keeps it out (a document the store does not
+                    // know is ignored there rather than added, so the queue stays the only producer).
+                    if let Err(error) = commands::observe_open_documents(&store, detector.as_ref()) {
+                        eprintln!("suggestion detection: {error}");
+                    }
                 }
                 Err(error) => eprintln!("the ingestion tick could not open the store: {error}"),
             }
@@ -753,6 +799,9 @@ fn main() {
             document_cover,
             scan_folder,
             progress_providers,
+            list_suggestions,
+            accept_suggestion,
+            discard_suggestion,
             watched_folders,
             folder_removal,
             remove_folder,
