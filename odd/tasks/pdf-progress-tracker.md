@@ -1345,6 +1345,32 @@ sus dos ramas fijadas, y la prueba de pantalla que faltaba ahora existe.
 agujero donde viven los bugs de interfaz, y quedó escrito en su propia sección más abajo. Cuatro de los defectos
 de esta sesión fueron de cableado entre componentes.
 
+
+**L53 — el autor editable, y la primera unidad que pasa por la revisión nativa antes de que el usuario la vea (R37).**
+
+El pedido del usuario: *"tambien me gustaria que se pueda editar el autor del PDF o seleccionar uno de los autores
+que ya estan cargados"*. Es el gemelo del título y sigue su forma a propósito: el esquema V7 agrega UN hecho
+anulable (el autor del lector), el autor propio del documento nunca se sobrescribe, un reescaneo nunca lo borra, y
+la regla que decide qué se muestra vive en un solo lugar al lado de la del título. El autor del lector se escribe
+en el MISMO editor que abre el lápiz —título, autor y portada— con los autores que ya existen en la biblioteca
+ofrecidos como sugerencias, para que nadie vuelva a tipear un nombre y termine con dos formas del mismo autor. Un
+autor vacío es legítimo (muchos documentos no tienen) y vuelve al del documento, a diferencia del título, que
+rechaza el vacío; eso está comentado donde vive la regla.
+
+**La revisión nativa corrió sobre esta unidad ANTES de que el usuario la viera**, con tres lentes (riesgo,
+legibilidad, confiabilidad), nivel alto por el lanzador de procesos, y **aprobó** el candidato; su autoridad quedó
+quemada con el acuse exacto. Dejó dos avisos INFORMATIVOS, explícitamente no bloqueantes, cuya prosa el proveedor
+no entregó (sólo identificador, lente y ubicación): quedan anotados para leerlos con calma y disponerlos, porque un
+hallazgo que nadie disposiciona se convierte en ruido permanente.
+
+**Tres líneas de test quedaron fuera de la lista de superficies del brief** —exactamente el mismo error que ese
+brief había cometido dos veces antes—; el trabajador se detuvo, el padre ratificó los tres archivos, y hacer el
+campo opcional habría debilitado el tipo justo como se lo había arreglado unas horas antes.
+
+**Estado**: 266 comprobaciones del proyecto y 165 de la interfaz, clippy y tipos limpios, la base real en V7 con
+los 42 documentos intactos, y el usuario confirmó en su pantalla: *"funciona todo correctamente. El cambio y
+actualizacion del autor no rompe nada."*
+
 ## A hole in this project's own checks (found while removing dead code, recorded the same day)
 
 **The type check does not look at the components.** The script runs over the logic files only, the declaration
