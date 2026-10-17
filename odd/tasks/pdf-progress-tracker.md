@@ -1390,6 +1390,36 @@ because it could not rely on the checks to catch the damage.
 what is checked, and PROVE it by breaking a component on purpose — a required property left unsupplied — and
 watching the check fail. A new check that has never been seen to fail is not a check.
 
+
+**L54 — el agujero del chequeo, cerrado: los componentes ahora se revisan (y el primer defecto que apareció).**
+
+Lo que estaba mal, en una frase: el chequeo del proyecto recorría sólo los archivos de lógica, los componentes se
+declaraban como un valor desconocido, y ni el chequeo ni la compilación los miraban. Una pantalla podía pedir algo
+que nadie le pasaba, o pasar algo que ya no existía, y todas las comprobaciones seguían en verde — porque los tests
+sólo ejercitan los caminos que alguien eligió, y el marco ignora en silencio las propiedades que no conoce. Los
+cuatro defectos de interfaz de esa sesión vivieron justo ahí, y la red en la que todos nos apoyábamos al decir "los
+tests lo van a agarrar" tenía el agujero exactamente en ese lugar.
+
+Ahora el comando de chequeo incluye un revisor que entiende componentes, y el build reusa ese comando, así que se
+revisa sin que nadie tenga que acordarse de nada. La prueba no fue "anda": el trabajador rompió una pantalla a
+propósito de TRES formas distintas —una propiedad obligatoria sin pasar, una propiedad de más, un nombre reenviado
+que ya no existe— y mostró el error exacto en cada caso, restaurando el archivo byte a byte con su hash.
+
+**Y en su primera corrida real encontró un defecto de verdad**: un import muerto en una pantalla, que el proyecto
+arrastraba y que DOS trabajadores anteriores ya habían marcado y dejado sin tocar para no meter cambios fuera de su
+encargo. Se borró con autorización explícita del padre, y es una buena primera presa: exactamente la clase de cosa
+que el agujero escondía.
+
+**Lo que este chequeo NO hace, medido y no supuesto**: los avisos de accesibilidad se imprimen pero no bloquean
+—sólo los errores de estructura—, y no puede ver un componente que estructuralmente está bien y se comporta mal
+(una condición al revés, un dato equivocado), ni el diseño visual, ni el contenido de los textos. De los cuatro
+defectos históricos, los de cableado quedaron cubiertos y los de comportamiento no.
+
+**Un costo honesto**: para sumar el revisor hubo que bajar TypeScript un escalón (de la 7 a la 6), porque el
+revisor todavía no admite la 7. Mismas reglas, misma configuración, y el chequeo pasó de ~0,3 s a ~3,7 s. La
+alternativa —una segunda dependencia para no moverse— se evaluó y se descartó, y el porqué quedó escrito donde
+viven las dependencias.
+
 ## Delivery slices (recorded on request)
 
 **Slice boundary, recorded here because the branch has grown past any PR-sized unit**: `feat/phase-1-core`
