@@ -353,14 +353,6 @@ export function describeScanSummary(report: ScanReport, t: Translate): string {
 }
 
 /**
- * The title a card shows (R31).
- *
- * The core already resolved it: `entry.title` is the reader's title when they set one, otherwise the
- * document's own — the embedded one, or the file's own name. This helper exists so the card, the
- * filter and the sort all read that one value, and none of them can reach for `path` to decide.
- * `entry.userTitle` is the separate fact that says whether this title is the reader's.
- */
-/**
  * What the title editor shows for one document (R31).
  *
  * The editor is where provenance is stated, and it says it twice without a word of explanation: the
@@ -424,6 +416,14 @@ export function libraryAuthors(entries: readonly LibraryEntry[]): string[] {
   return authors;
 }
 
+/**
+ * The title a card shows (R31).
+ *
+ * The core already resolved it: `entry.title` is the reader's title when they set one, otherwise the
+ * document's own — the embedded one, or the file's own name. This helper exists so the card, the
+ * filter and the sort all read that one value, and none of them can reach for `path` to decide.
+ * `entry.userTitle` is the separate fact that says whether this title is the reader's.
+ */
 export function displayTitle(entry: LibraryEntry): string {
   return entry.title;
 }

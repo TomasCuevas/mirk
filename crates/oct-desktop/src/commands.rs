@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use oct_core::domain::CoverChoice;
 use oct_core::{Document, FileIdentity, LaunchOutcome, Launcher, OctError, StoredProgress};
 use oct_scan::{cover_for, CoverOutcome, ScanReport, Scanner};
-use oct_store::{covering_folder, FolderRemoval, LibraryEntry, Store, WatchedFolder};
+use oct_store::{covering_folder, AuthorEdit, FolderRemoval, LibraryEntry, Store, WatchedFolder};
 use serde::Serialize;
 
 use crate::shell;
@@ -240,33 +240,34 @@ pub fn library_entries(store: &Store) -> Result<Vec<LibraryEntryView>, OctError>
         .collect())
 }
 
-/// Sets or clears the reader's title for one document (R31).
+/// Saves the reader's naming of one document in ONE write (R31, R37).
+///
+/// This is the command the editor's Save and its Restore control both call, and it is one command for
+/// one reason: Save decides the reader's title *and* the reader's author, and an action that decides
+/// two facts must apply both or neither. Two commands, each opening the store and each writing one
+/// fact, is how a failed author write used to leave the title saved while the screen said nothing was.
 ///
 /// `title` is a `String` on the IPC boundary, so the interface sends either the reader's text or
 /// nothing at all: an absent value means "restore the document's own title" and is a legitimate
 /// action, while a blank value is refused as the invalid argument it is. The refusal — the variant,
-/// the field and the words — is decided in [`Store::set_user_title`], so this command and any future
+/// the field and the words — is decided in [`Store::set_user_naming`], so this command and any future
 /// caller cannot disagree about what a blank title means.
 ///
-/// Nothing here touches the document's own title: the reader's title is a separate fact, and a
-/// document named in this application can always be restored to the title the file itself carries.
-pub fn set_document_title(store: &Store, id: i64, title: Option<&str>) -> Result<(), OctError> {
-    store.set_user_title(id, title)
-}
-
-/// Sets or clears the reader's author for one document.
+/// `author` is an [`AuthorEdit`], not a plain value, because the editor's two controls decide different
+/// things. Save decides the author — a value, or `Decided(None)` for *no author of my own*, which falls
+/// back to the document's own author and is a legitimate action rather than an error. Restore decides
+/// the title and nothing else, and says so with `Untouched`; that is how "leave the reader's author
+/// exactly as it was" survives into the one write instead of being a missing second call.
 ///
-/// `author` is a `String` on the IPC boundary, so the interface sends either the reader's text or
-/// nothing at all. An empty value — `None`, or a blank string — means *no author of my own* and is a
-/// legitimate action: clearing what the reader typed falls back to the document's own author. That is
-/// the deliberate difference from [`set_document_title`], which refuses a blank because a document must
-/// have a title. The normalisation lives in [`Store::set_user_author`], so this command and any future
-/// caller cannot disagree about what an empty author means.
-///
-/// Nothing here touches the document's own author: the reader's author is a separate fact, and a
-/// document can always be restored to the author the file itself carries.
-pub fn set_document_author(store: &Store, id: i64, author: Option<&str>) -> Result<(), OctError> {
-    store.set_user_author(id, author)
+/// Nothing here touches the document's own title or author: both reader's facts are separate, and a
+/// document can always be restored to what the file itself carries.
+pub fn set_document_naming(
+    store: &Store,
+    id: i64,
+    title: Option<&str>,
+    author: AuthorEdit<'_>,
+) -> Result<(), OctError> {
+    store.set_user_naming(id, title, author)
 }
 
 /// Sets or clears the page the reader chose for one document's cover (R32).
@@ -892,7 +893,13 @@ mod tests {
         assert_eq!(entries[0].title, "The document's own title");
         assert_eq!(entries[0].user_title, None);
 
-        set_document_title(&store, id, Some("What the reader called it")).expect("name it");
+        set_document_naming(
+            &store,
+            id,
+            Some("What the reader called it"),
+            AuthorEdit::Untouched,
+        )
+        .expect("name it");
 
         let entries = library_entries(&store).expect("list again");
         // `title` is the displayed value, and `userTitle` marks it as the reader's.
@@ -917,7 +924,13 @@ mod tests {
         assert_eq!(entries[0].author.as_deref(), Some("The document's own author"));
         assert_eq!(entries[0].user_author, None);
 
-        set_document_author(&store, id, Some("What the reader called them")).expect("name it");
+        set_document_naming(
+            &store,
+            id,
+            None,
+            AuthorEdit::Decided(Some("What the reader called them")),
+        )
+        .expect("name it");
 
         let entries = library_entries(&store).expect("list again");
         // `author` is the displayed value, and `userAuthor` marks it as the reader's.
@@ -932,10 +945,17 @@ mod tests {
         doc.author = Some("The document's own author".to_string());
         let id = store.upsert_document(&doc).expect("insert");
 
-        set_document_author(&store, id, Some("The reader's author")).expect("name it");
+        set_document_naming(
+            &store,
+            id,
+            None,
+            AuthorEdit::Decided(Some("The reader's author")),
+        )
+        .expect("name it");
         // An empty author — `None` here, a blank field in the interface — is the legitimate "no author
         // of my own" action, not an error, and restores the document's own author.
-        set_document_author(&store, id, None).expect("clear the reader's author");
+        set_document_naming(&store, id, None, AuthorEdit::Decided(None))
+            .expect("clear the reader's author");
         let entries = library_entries(&store).expect("list again");
         assert_eq!(entries[0].author.as_deref(), Some("The document's own author"));
         assert_eq!(entries[0].user_author, None);
@@ -963,17 +983,62 @@ mod tests {
         doc.title = Some("The document's own title".to_string());
         let id = store.upsert_document(&doc).expect("insert");
 
-        set_document_title(&store, id, Some("The reader's title")).expect("name it");
+        set_document_naming(
+            &store,
+            id,
+            Some("The reader's title"),
+            AuthorEdit::Untouched,
+        )
+        .expect("name it");
         assert_eq!(
             library_entries(&store).expect("list")[0].title,
             "The reader's title"
         );
 
-        // `None` is the legitimate "restore" action, not an error.
-        set_document_title(&store, id, None).expect("restore the document's own title");
+        // `None` is the legitimate "restore" action, not an error, and it says nothing about the
+        // reader's author.
+        set_document_naming(&store, id, None, AuthorEdit::Untouched)
+            .expect("restore the document's own title");
         let entries = library_entries(&store).expect("list again");
         assert_eq!(entries[0].title, "The document's own title");
         assert_eq!(entries[0].user_title, None);
+    }
+
+    #[test]
+    fn one_save_carries_both_facts_and_one_restore_touches_only_the_title() {
+        // The shape of the fix at the command layer: Save is ONE call that decides the title and the
+        // author, and Restore is one call that decides the title and says nothing about the author. The
+        // store's own test pins that the two facts apply together or not at all; this pins what each
+        // control asks for.
+        let store = in_memory_store();
+        let mut doc = document("/library/named.pdf", 5, 11);
+        doc.title = Some("The document's own title".to_string());
+        doc.author = Some("The document's own author".to_string());
+        let id = store.upsert_document(&doc).expect("insert");
+
+        set_document_naming(
+            &store,
+            id,
+            Some("What the reader called it"),
+            AuthorEdit::Decided(Some("What the reader called them")),
+        )
+        .expect("save the title and the author in one command");
+
+        let saved = library_entries(&store).expect("list");
+        assert_eq!(saved[0].title, "What the reader called it");
+        assert_eq!(saved[0].author.as_deref(), Some("What the reader called them"));
+
+        set_document_naming(&store, id, None, AuthorEdit::Untouched)
+            .expect("restore the document's own title");
+
+        let restored = library_entries(&store).expect("list again");
+        assert_eq!(restored[0].title, "The document's own title");
+        assert_eq!(restored[0].user_title, None);
+        assert_eq!(
+            restored[0].user_author.as_deref(),
+            Some("What the reader called them"),
+            "restoring the title must leave the reader's author exactly as it was"
+        );
     }
 
     #[test]
@@ -983,7 +1048,14 @@ mod tests {
         doc.title = Some("The document's own title".to_string());
         let id = store.upsert_document(&doc).expect("insert");
 
-        match set_document_title(&store, id, Some("   ")) {
+        match set_document_naming(
+            &store,
+            id,
+            Some("   "),
+            // The author is decided by the same call, and must not land while the title is refused:
+            // the refusal happens before the write opens, so there is nothing to roll back.
+            AuthorEdit::Decided(Some("An author that must not be written")),
+        ) {
             Err(OctError::InvalidInput {
                 field,
                 value,
@@ -996,10 +1068,11 @@ mod tests {
             other => panic!("a blank title must be an invalid argument, got {other:?}"),
         }
 
-        // Nothing was written, so the document still displays its own title.
+        // Nothing was written, so the document still displays its own title and its own author.
         let entries = library_entries(&store).expect("list");
         assert_eq!(entries[0].title, "The document's own title");
         assert_eq!(entries[0].user_title, None);
+        assert_eq!(entries[0].user_author, None);
     }
 
     #[test]

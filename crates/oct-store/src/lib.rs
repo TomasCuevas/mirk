@@ -370,6 +370,56 @@ impl FolderRemovalPlan {
     }
 }
 
+/// What one action decided about the reader's author, in the write that saves the document editor.
+///
+/// The editor has two controls and they do not decide the same facts. **Save** decides the title *and*
+/// the author. **Restore** decides the title and nothing else: restoring the document's own title is
+/// not a statement about who wrote the document. A two-valued parameter cannot say which, so "nothing"
+/// and "no author of my own" — which are different actions — would arrive looking the same.
+///
+/// This type exists so the difference is spelled out at the one write that has to make it, instead of
+/// being inferred from which statements a caller happens to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorEdit<'a> {
+    /// The action decided the author: the reader's value, or none for *no author of my own*, which is
+    /// a legitimate action that falls back to the document's own author.
+    Decided(Option<&'a str>),
+    /// The action said nothing about the author, so the reader's author stays exactly as it is.
+    Untouched,
+}
+
+/// The reader's title as the column stores it, or the refusal a blank deserves.
+///
+/// `None` stays `None` — restore the document's own title — while a blank `Some` is the invalid
+/// argument it is: a title that holds only whitespace is not a title, and storing it would make `NULL`
+/// mean two different things. One normalisation for every write that carries a title, so no caller can
+/// disagree with another about what a blank title means.
+fn normalize_user_title(title: Option<&str>) -> Result<Option<&str>, OctError> {
+    match title {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(OctError::InvalidInput {
+                    field: "title",
+                    value: value.to_string(),
+                    expected: "a non-empty title, or no value to restore the document's own".to_string(),
+                });
+            }
+            Ok(Some(trimmed))
+        }
+        None => Ok(None),
+    }
+}
+
+/// The reader's author as the column stores it: a blank value is no value at all.
+///
+/// **This is the deliberate difference from [`normalize_user_title`], which refuses a blank because a
+/// document must have a title.** Many documents have no author, so an empty field is exactly the
+/// reader's way of clearing their own author, and `NULL` stays the only stored spelling of "not set".
+fn normalize_user_author(author: Option<&str>) -> Option<&str> {
+    author.map(str::trim).filter(|trimmed| !trimmed.is_empty())
+}
+
 /// A SQLite connection to `oct`'s database.
 ///
 /// `Store` is intentionally the only handle: callers never see a `rusqlite::Connection`, so the
@@ -524,8 +574,8 @@ impl Store {
     /// requires a second process writing the same database, which no code does yet.
     ///
     /// Only the columns the scanner can supply are written; the reader's title and the reader's author
-    /// are deliberately not among them, because they are separate facts with their own write paths
-    /// ([`Store::set_user_title`], [`Store::set_user_author`]).
+    /// are deliberately not among them, because they are separate facts with their own write path
+    /// ([`Store::set_user_naming`]).
     /// The scanner fills metadata such as `size`, `mtime` and `discovered_via` when it exists.
     pub fn upsert_document(&self, document: &Document) -> Result<i64, OctError> {
         let path = path_to_string(&document.path)?;
@@ -610,78 +660,73 @@ impl Store {
         }
     }
 
-    /// Sets or clears the reader's title for the document with `id` (R31).
+    /// Saves the reader's naming of the document with `id`: its title, and its author when this action
+    /// decided one (R31, R37).
     ///
-    /// `None` means "restore the document's own title" and is a legitimate action, not an error: it
-    /// clears the reader's title so [`Document::display_title`] falls back to the document's own. A
-    /// blank `Some` is refused as the invalid argument it is — a title that holds only whitespace is
-    /// not a title, and storing it would make `NULL` mean two different things.
+    /// **It is one write, because the action that decides both facts is one action.** The editor's Save
+    /// stores the title and the author together, and an action that decides two facts must apply both
+    /// or neither: writing them as two independent updates left a window where the title had landed,
+    /// the author had not, and the interface reported an error that implied nothing was saved. A
+    /// half-applied save is not a save, so both statements run inside one transaction and a failure
+    /// anywhere rolls the whole thing back.
     ///
-    /// This is deliberately separate from [`Store::upsert_document`], which never touches
-    /// `user_title`: a rescan that refreshes the document's metadata must not be able to rename a
-    /// document a person named. The reader's title is a separate fact with its own write path.
-    pub fn set_user_title(&self, id: i64, title: Option<&str>) -> Result<(), OctError> {
-        let normalized: Option<&str> = match title {
-            Some(value) => {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    return Err(OctError::InvalidInput {
-                        field: "title",
-                        value: value.to_string(),
-                        expected: "a non-empty title, or no value to restore the document's own"
-                            .to_string(),
-                    });
-                }
-                Some(trimmed)
-            }
-            None => None,
+    /// `title` follows [`normalize_user_title`]'s rule — `None` restores the document's own title, a
+    /// blank `Some` is refused — and it is validated **before** the transaction opens, so a refused
+    /// title never reaches the database. `author` is an [`AuthorEdit`], not a plain value: Save decides
+    /// the author, while Restore decides the title and nothing else, and `AuthorEdit::Untouched` is how
+    /// this write is told to leave the reader's author alone instead of that decision being inferred
+    /// from a missing statement.
+    ///
+    /// Nothing here touches the document's own title or author. Both reader's facts are separate from
+    /// the file's, and [`Store::upsert_document`] never writes them, so a rescan cannot rename a
+    /// document a person named.
+    ///
+    /// **What this cannot express**: an action that changed the author and said nothing about the
+    /// title. Nothing in the application has one — Save decides both and Restore decides the title —
+    /// and a title the caller wants to keep is simply passed as it is, which is also what makes the
+    /// pair atomic.
+    pub fn set_user_naming(
+        &self,
+        id: i64,
+        title: Option<&str>,
+        author: AuthorEdit<'_>,
+    ) -> Result<(), OctError> {
+        let title = normalize_user_title(title)?;
+        let author = match author {
+            AuthorEdit::Decided(author) => Some(normalize_user_author(author)),
+            AuthorEdit::Untouched => None,
         };
 
-        let affected = self
+        // One transaction around both statements, which is the whole point: the second write failing
+        // drops the transaction uncommitted, and the first write goes with it. Everything below is
+        // on the transaction handle rather than on the connection, so no statement can escape it.
+        let transaction = self
             .connection
+            .unchecked_transaction()
+            .map_err(storage_error)?;
+
+        let affected = transaction
             .execute(
                 "UPDATE documents SET user_title = ?1 WHERE id = ?2",
-                params![normalized, id],
+                params![title, id],
             )
             .map_err(storage_error)?;
-
         if affected == 0 {
             return Err(OctError::Storage(format!(
-                "no document with id {id} to set a title on"
+                "no document with id {id} to name"
             )));
         }
-        Ok(())
-    }
 
-    /// Sets or clears the reader's author for the document with `id`.
-    ///
-    /// `None` is the reader saying *no author of my own*, and it is a legitimate, first-class action
-    /// rather than an error: many documents have no author at all, so clearing what the reader typed
-    /// must restore the document's own author instead of refusing the edit. **This is the deliberate
-    /// difference from [`Store::set_user_title`], which refuses a blank because a document must have a
-    /// title.** For the same reason a blank `Some` is normalised to `None` rather than refused: the
-    /// empty field is exactly the reader's way of clearing their author, and `NULL` stays the only
-    /// stored spelling of "not set".
-    ///
-    /// This is deliberately separate from [`Store::upsert_document`], which never touches
-    /// `user_author`: a rescan that refreshes the document's own metadata must not be able to rename an
-    /// author a person chose. The reader's author is a separate fact with its own write path.
-    pub fn set_user_author(&self, id: i64, author: Option<&str>) -> Result<(), OctError> {
-        let normalized: Option<&str> = author.map(str::trim).filter(|trimmed| !trimmed.is_empty());
-
-        let affected = self
-            .connection
-            .execute(
-                "UPDATE documents SET user_author = ?1 WHERE id = ?2",
-                params![normalized, id],
-            )
-            .map_err(storage_error)?;
-
-        if affected == 0 {
-            return Err(OctError::Storage(format!(
-                "no document with id {id} to set an author on"
-            )));
+        if let Some(author) = author {
+            transaction
+                .execute(
+                    "UPDATE documents SET user_author = ?1 WHERE id = ?2",
+                    params![author, id],
+                )
+                .map_err(storage_error)?;
         }
+
+        transaction.commit().map_err(storage_error)?;
         Ok(())
     }
 
@@ -1763,7 +1808,7 @@ mod tests {
         // display while the document's own title stays stored exactly as it was.
         let doc_id = library[0].document.id;
         store
-            .set_user_title(doc_id, Some("The reader's title"))
+            .set_user_naming(doc_id, Some("The reader's title"), AuthorEdit::Untouched)
             .expect("set the reader's title");
         let library = store.library().expect("list the library again");
         assert_eq!(

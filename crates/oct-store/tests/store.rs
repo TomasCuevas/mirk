@@ -7,7 +7,9 @@
 use std::path::{Path, PathBuf};
 
 use oct_core::{Confidence, Document, FileId, OctError, Platform, ProgressSource, StoredProgress};
-use oct_store::{covering_folder, database_path, user_data_dir_for, Store, WatchedFolder};
+use oct_store::{
+    covering_folder, database_path, user_data_dir_for, AuthorEdit, Store, WatchedFolder,
+};
 
 fn temp_db() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("create temp dir");
@@ -700,7 +702,11 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
         doc.title = Some("The document's own title".to_string());
         document_id = store.upsert_document(&doc).expect("insert the document");
         store
-            .set_user_title(document_id, Some("The reader's title"))
+            .set_user_naming(
+                document_id,
+                Some("The reader's title"),
+                AuthorEdit::Untouched,
+            )
             .expect("name the document");
         store
             .record_progress(
@@ -884,7 +890,11 @@ fn a_step_that_fails_on_the_way_to_v6_leaves_the_database_at_v5_untouched() {
         doc.title = Some("The document's own title".to_string());
         document_id = store.upsert_document(&doc).expect("insert the document");
         store
-            .set_user_title(document_id, Some("The reader's title"))
+            .set_user_naming(
+                document_id,
+                Some("The reader's title"),
+                AuthorEdit::Untouched,
+            )
             .expect("name the document");
         store
             .set_cover_page(document_id, Some(7))
@@ -1060,11 +1070,12 @@ fn a_step_that_fails_on_the_way_to_v7_leaves_the_database_at_v6_untouched() {
         doc.author = Some("The document's own author".to_string());
         document_id = store.upsert_document(&doc).expect("insert the document");
         store
-            .set_user_title(document_id, Some("The reader's title"))
+            .set_user_naming(
+                document_id,
+                Some("The reader's title"),
+                AuthorEdit::Decided(Some("The reader's author")),
+            )
             .expect("name the document");
-        store
-            .set_user_author(document_id, Some("The reader's author"))
-            .expect("name the author");
         store
             .set_cover_page(document_id, Some(7))
             .expect("choose a cover page");
@@ -1633,7 +1644,11 @@ fn the_readers_title_is_a_separate_fact_and_is_the_one_displayed() {
     assert_eq!(found.document.display_title(), "The document's own title");
 
     store
-        .set_user_title(id, Some("What the reader called it"))
+        .set_user_naming(
+            id,
+            Some("What the reader called it"),
+            AuthorEdit::Untouched,
+        )
         .expect("name the document");
 
     let found = store
@@ -1654,7 +1669,7 @@ fn the_readers_title_is_a_separate_fact_and_is_the_one_displayed() {
 
     // Clearing it restores the document's own title, which never left.
     store
-        .set_user_title(id, None)
+        .set_user_naming(id, None, AuthorEdit::Untouched)
         .expect("restore the document's own title");
     let found = store
         .find_document_by_identity(&identity)
@@ -1674,7 +1689,7 @@ fn a_blank_title_is_refused_as_an_invalid_argument_and_nothing_is_written() {
         .expect("insert the document");
 
     for blank in ["", "   ", "\t\n"] {
-        let result = store.set_user_title(id, Some(blank));
+        let result = store.set_user_naming(id, Some(blank), AuthorEdit::Untouched);
         match result {
             Err(OctError::InvalidInput {
                 field,
@@ -1711,7 +1726,11 @@ fn an_upsert_never_erases_the_readers_title() {
         .upsert_document(&document("/library/named.pdf", identity.clone()))
         .expect("insert the document");
     store
-        .set_user_title(id, Some("What the reader called it"))
+        .set_user_naming(
+            id,
+            Some("What the reader called it"),
+            AuthorEdit::Untouched,
+        )
         .expect("name the document");
 
     // The rescan knows the same identity and fresher metadata, and nothing about the reader's title.
@@ -1757,7 +1776,11 @@ fn the_readers_author_is_a_separate_fact_and_is_the_one_displayed() {
     assert_eq!(found.document.display_author().as_deref(), Some("The document's own author"));
 
     store
-        .set_user_author(id, Some("What the reader called them"))
+        .set_user_naming(
+            id,
+            None,
+            AuthorEdit::Decided(Some("What the reader called them")),
+        )
         .expect("name the author");
 
     let found = store
@@ -1778,6 +1801,105 @@ fn the_readers_author_is_a_separate_fact_and_is_the_one_displayed() {
 }
 
 #[test]
+fn the_readers_naming_is_one_write_so_a_refused_author_leaves_the_title_unchanged_too() {
+    // R37's fix round. Save decides two facts in ONE action — the reader's title and the reader's
+    // author — so it must apply both or neither. The defect this pins is precise: written as two
+    // independent updates, the title landed even when the author's write failed, and the editor then
+    // showed an error implying nothing had been saved. The error message was a lie about a
+    // half-applied save.
+    //
+    // The failure is made real from OUTSIDE the store: a trigger that refuses the author column is
+    // the same shape as a disk error or a constraint arriving between the two statements, and it
+    // fails nothing that the store's own write does not already do.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let identity = FileId::Posix { dev: 7, ino: 31 };
+    let mut doc = document("/library/named.pdf", identity.clone());
+    doc.title = Some("The document's own title".to_string());
+    doc.author = Some("The document's own author".to_string());
+    let id = store.upsert_document(&doc).expect("insert the document");
+
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.execute_batch(
+            "CREATE TRIGGER refuse_the_readers_author\n             BEFORE UPDATE OF user_author ON documents\n             BEGIN\n                 SELECT RAISE(ABORT, 'the second write of one save is refused');\n             END;",
+        )
+        .expect("install the trigger that refuses the author column");
+    }
+
+    let result = store.set_user_naming(
+        id,
+        Some("What the reader called it"),
+        AuthorEdit::Decided(Some("What the reader called them")),
+    );
+    assert!(
+        matches!(result, Err(OctError::Storage(_))),
+        "a refused author write must be reported as a storage error, got {result:?}"
+    );
+
+    // NEITHER fact changed. The title surviving here is the defect itself.
+    let found = store
+        .find_document_by_identity(&identity)
+        .expect("lookup")
+        .expect("present");
+    assert_eq!(
+        found.document.user_title, None,
+        "a save whose author write was refused must not leave the title behind"
+    );
+    assert_eq!(
+        found.document.user_author, None,
+        "the refused author must not have been written"
+    );
+    assert_eq!(
+        found.document.display_title(),
+        "The document's own title",
+        "the screen must keep showing what the store still holds"
+    );
+}
+
+#[test]
+fn restoring_the_readers_title_leaves_the_readers_author_exactly_as_it_was() {
+    // Restore decides the TITLE and nothing else: restoring the document's own title is not a
+    // statement about who wrote the document. The combined write says so with
+    // `AuthorEdit::Untouched`, and this is the evidence that "untouched" is not a quiet "clear it".
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let identity = FileId::Posix { dev: 7, ino: 32 };
+    let mut doc = document("/library/named.pdf", identity.clone());
+    doc.title = Some("The document's own title".to_string());
+    doc.author = Some("The document's own author".to_string());
+    let id = store.upsert_document(&doc).expect("insert the document");
+
+    store
+        .set_user_naming(
+            id,
+            Some("What the reader called it"),
+            AuthorEdit::Decided(Some("What the reader called them")),
+        )
+        .expect("save the title and the author together");
+
+    store
+        .set_user_naming(id, None, AuthorEdit::Untouched)
+        .expect("restore the document's own title");
+
+    let found = store
+        .find_document_by_identity(&identity)
+        .expect("lookup")
+        .expect("present");
+    assert_eq!(found.document.user_title, None, "the title is restored");
+    assert_eq!(
+        found.document.user_author.as_deref(),
+        Some("What the reader called them"),
+        "restoring the title must not touch the reader's author"
+    );
+    assert_eq!(
+        found.document.display_author().as_deref(),
+        Some("What the reader called them"),
+        "and the author on screen stays the reader's"
+    );
+}
+
+#[test]
 fn an_empty_author_falls_back_to_the_documents_own() {
     // The deliberate difference from the title: the title refuses a blank because a document must have
     // one, while an author has a legitimate empty state — "no author of my own". Clearing what the
@@ -1792,10 +1914,10 @@ fn an_empty_author_falls_back_to_the_documents_own() {
 
     for cleared in [None, Some(""), Some("   ")] {
         store
-            .set_user_author(id, Some("A reader's author"))
+            .set_user_naming(id, None, AuthorEdit::Decided(Some("A reader's author")))
             .expect("set the reader's author");
         store
-            .set_user_author(id, cleared)
+            .set_user_naming(id, None, AuthorEdit::Decided(cleared))
             .expect("clearing the reader's author is a legitimate action, not an error");
 
         let found = store
@@ -1825,7 +1947,11 @@ fn an_upsert_never_erases_the_readers_author() {
         .upsert_document(&document("/library/authored.pdf", identity.clone()))
         .expect("insert the document");
     store
-        .set_user_author(id, Some("What the reader called them"))
+        .set_user_naming(
+            id,
+            None,
+            AuthorEdit::Decided(Some("What the reader called them")),
+        )
         .expect("name the author");
 
     // The rescan knows the same identity and fresher metadata, and nothing about the reader's author.

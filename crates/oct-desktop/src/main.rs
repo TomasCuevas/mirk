@@ -26,7 +26,7 @@ use commands::{
     WatchedFolderView,
 };
 use oct_core::OctError;
-use oct_store::{database_path, Store};
+use oct_store::{database_path, AuthorEdit, Store};
 use shell::{action_for_menu_id, dispatch, ShellAction, ShellActions};
 use tauri::menu::{Menu, MenuBuilder};
 use tauri::tray::TrayIconBuilder;
@@ -154,29 +154,40 @@ fn list_library() -> Result<Vec<LibraryEntryView>, String> {
     commands::library_entries(&store).map_err(error_message)
 }
 
-/// Sets or clears the reader's title for the document with `id` (R31).
+/// Saves the reader's naming of the document with `id` in ONE write (R31, R37).
 ///
-/// `title: None` restores the document's own title, and is a legitimate action rather than an error.
-/// A blank string is refused as an invalid argument by the decision in
-/// [`commands::set_document_title`], so the interface receives the same named refusal every other
-/// bad argument does.
-#[tauri::command]
-fn set_document_title(id: i64, title: Option<String>) -> Result<(), String> {
-    let store = open_store()?;
-    commands::set_document_title(&store, id, title.as_deref()).map_err(error_message)
-}
-
-/// Sets or clears the reader's author for the document with `id`.
+/// The editor's Save decides the reader's title and the reader's author in one action, so this is one
+/// command: two commands each opening the store and each writing one fact is how a failed author write
+/// used to leave the title saved while the screen said nothing was.
 ///
-/// `author: None` — or a blank value — means *no author of my own*, and restores the document's own
-/// author. It is a legitimate action rather than an error, and the deliberate difference from
-/// [`set_document_title`], which refuses a blank. The decision lives in
-/// [`commands::set_document_author`], so the interface receives the same named outcome every other
-/// write does.
+/// The three shapes the interface can send are deliberately distinct, because the editor's two controls
+/// decide different things:
+///
+/// - `title: None` restores the document's own title, a legitimate action rather than an error. A blank
+///   string is refused as an invalid argument by [`commands::set_document_naming`].
+/// - `author: Some(Some(name))` is the reader's author, and `author: Some(null)` — a missing second
+///   value — is *no author of my own*, the deliberate difference from the title: an author may be empty
+///   and then falls back to the document's own.
+/// - `author: None`, the key **absent from the call**, means this action said nothing about the author,
+///   so the reader's author is left exactly as it is. That is how Restore decides the title and nothing
+///   else. An absent argument is `None` here because the outer `Option` makes it optional to send, and
+///   the inner one distinguishes an argument that was sent as `null` from one that was not sent at all.
+///   The interface says it by omitting the key: `JSON.stringify` drops an `undefined` property, and the
+///   web side's `author?: string | null` is exactly this shape.
 #[tauri::command]
-fn set_document_author(id: i64, author: Option<String>) -> Result<(), String> {
+fn set_document_naming(
+    id: i64,
+    title: Option<String>,
+    author: Option<Option<String>>,
+) -> Result<(), String> {
     let store = open_store()?;
-    commands::set_document_author(&store, id, author.as_deref()).map_err(error_message)
+    // Borrowed rather than moved: the inner `Option<String>` is what distinguishes "the author was
+    // cleared" from "this action said nothing about the author", and it has to outlive the borrow.
+    let author = match &author {
+        Some(chosen) => AuthorEdit::Decided(chosen.as_deref()),
+        None => AuthorEdit::Untouched,
+    };
+    commands::set_document_naming(&store, id, title.as_deref(), author).map_err(error_message)
 }
 
 /// Sets or clears the page the reader chose for the document's cover (R32).
@@ -735,8 +746,7 @@ fn main() {
             close_app,
             start_drag,
             list_library,
-            set_document_title,
-            set_document_author,
+            set_document_naming,
             set_cover_page,
             choose_cover_image,
             remove_cover_image,

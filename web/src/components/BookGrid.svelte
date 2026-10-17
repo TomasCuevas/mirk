@@ -148,9 +148,11 @@
       titleError = t("card.titleBlank");
       return;
     }
-    // The author's empty value is legitimate — no author of my own — so it is sent as no value rather
-    // than refused, and it falls back to the document's own author. This is the deliberate difference
-    // from the title above, which refuses a blank because a document must have a title.
+    // The author's empty value is legitimate — no author of my own — so it is sent as an EMPTY value
+    // (`null`, which the command reads as "clear the reader's author") rather than refused, and it falls
+    // back to the document's own author. Absent is a different thing and this control never sends it: it
+    // means "say nothing about the author", which is Restore's decision alone. This is the deliberate
+    // difference from the title above, which refuses a blank because a document must have a title.
     const author = authorDraft.trim();
     await sendTitle(value, author === "" ? null : author);
   }
@@ -161,6 +163,16 @@
     await sendTitle(null);
   }
 
+  // ONE command and ONE store write, because Save decides two facts in one action: the title and the
+  // author. Written as two commands it was two writes, and a failure between them left the title saved
+  // while the screen reported an error implying nothing had been — a half-applied save.
+  //
+  // `author` absent (`undefined`, which is what `JSON.stringify` drops from the arguments) means this
+  // action said NOTHING about the author, and the reader's author is left exactly as it was. That is
+  // Restore's decision, which restores the title and nothing else. `null` is different on purpose: it is
+  // Save saying "no author of my own", which clears the reader's author and falls back to the
+  // document's own. The `?` and the `| null` are that distinction, and the Rust command reads it the
+  // same way.
   async function sendTitle(title: string | null, author?: string | null): Promise<void> {
     if (editing === null) {
       return;
@@ -174,15 +186,11 @@
     saving = true;
     titleError = null;
     try {
-      await invoke("set_document_title", { id: editing.id, title });
-      if (author !== undefined) {
-        // Cancel and Save are the only controls that decide the author draft, and the author is written
-        // beside the title by the same Save. `undefined` means Restore, which decides the TITLE and
-        // nothing else, so the reader's author is left exactly as it was.
-        await invoke("set_document_author", { id: editing.id, author });
-      }
+      await invoke("set_document_naming", { id: editing.id, title, author });
       settleEditorAfter("title");
     } catch (error) {
+      // The message can be taken at its word: the write is one operation, so a failure means neither
+      // fact was applied and there is nothing half-saved for this sentence to lie about.
       titleError = String(error);
     } finally {
       saving = false;
