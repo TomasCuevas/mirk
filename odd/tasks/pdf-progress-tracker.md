@@ -1420,6 +1420,37 @@ revisor todavía no admite la 7. Mismas reglas, misma configuración, y el chequ
 alternativa —una segunda dependencia para no moverse— se evaluó y se descartó, y el porqué quedó escrito donde
 viven las dependencias.
 
+
+**L55 — los dos avisos del review, dispuestos y arreglados: el comentario huérfano, y guardar que podía quedar a medias.**
+
+Los dos avisos venían de la revisión de la unidad del autor, marcados como informativos y no bloqueantes. El
+proveedor NO guardó su prosa —en el repositorio sólo quedó el recibo de consumo del linaje—, así que un verificador
+independiente los dispuso razonando desde el código y lo etiquetó así, en vez de presentarlo como palabras del
+revisor. Los dos resultaron REALES, y el padre los confirmó leyendo el código.
+
+**El importante**: guardar el título y el autor eran DOS escrituras independientes, en dos comandos que abrían el
+almacén por separado y ejecutaban dos actualizaciones sin transacción. Si la segunda fallaba después de la primera,
+el título quedaba guardado, el mensaje de error daba a entender que no se había guardado nada, y el refresco de la
+lista no ocurría. Es de la misma familia que este proyecto viene cazando toda la sesión: un hecho a medias con un
+mensaje que miente sobre él. La corrección no parchea el camino: **guardar es UNA operación**, con una sola
+transacción que escribe los dos hechos o ninguno, y una sola invocación desde la interfaz — así el mensaje dice la
+verdad por construcción, porque ya no hay nada a medias que mentir. Las dos escrituras sueltas se eliminaron del
+almacén y del contrato, y con ellas los dos comandos que las exponían. La semántica de "restaurar el del documento"
+se conservó intacta: decide el TÍTULO y no toca el autor del lector, y eso quedó fijado por test.
+
+**El otro**: la explicación de "el título que muestra una tarjeta" estaba pegada arriba de la función EQUIVOCADA,
+mientras la función que describe quedaba sin ninguna. Se movió tal cual, verificando por el diff que las líneas
+agregadas son idénticas a las borradas. Es documentación: no hay falsificación posible y no se inventó ninguna.
+
+**Un riesgo que el trabajador dejó escrito y que vale más que el arreglo**: el lado de la INTERFAZ de ese contrato
+es el único eslabón sin test —el suite dibuja del lado del servidor y no puede clickear, y sumar una dependencia de
+DOM estaba prohibido en su encargo—, así que una edición futura del editor podría reintroducir una segunda llamada
+y las cuatro comprobaciones seguirían verdes. El lado del almacén sí está cubierto, con un test que falla si la
+transacción desaparece: *"un guardado cuyo autor fue rechazado no debe dejar el título atrás"*.
+
+**Estado**: 269 comprobaciones del proyecto y 165 de la interfaz, clippy limpio, y el chequeo de tipos —que ahora
+también mira los componentes— con 0 errores y 0 avisos.
+
 ## Delivery slices (recorded on request)
 
 **Slice boundary, recorded here because the branch has grown past any PR-sized unit**: `feat/phase-1-core`
