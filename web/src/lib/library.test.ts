@@ -4,6 +4,7 @@ import {
   CATEGORY_REFRESH_MS,
   LIBRARY_REFRESH_MS,
   STALE_AFTER_SECONDS,
+  authorEditor,
   categoryEntries,
   coverEditor,
   coverPageFromInput,
@@ -24,6 +25,7 @@ import {
   filterEntries,
   folderActionOutcome,
   libraryView,
+  libraryAuthors,
   paginate,
   progressFraction,
   sortEntries,
@@ -58,6 +60,7 @@ function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
     title: "document",
     userTitle: null,
     author: null,
+    userAuthor: null,
     pages: null,
     progress: null,
     ...overrides,
@@ -266,6 +269,76 @@ describe("the title editor's rule (R31)", () => {
     expect(titleEditor({ ...entry(), title: "A", userTitle: "A" }).yours).toBe(true);
     // Blank is not a title, for the same reason it is not one in `Document::display_title`.
     expect(titleEditor({ ...entry(), title: "A", userTitle: "   " }).yours).toBe(false);
+  });
+});
+
+/**
+ * The author editor's rule.
+ *
+ * Its twin is the title editor, with one deliberate difference: an EMPTY author field is legitimate
+ * — "no author of my own" — and falls back to the document's own author, while the title refuses a
+ * blank because a document must have a title. The field is prefilled with the author on screen and
+ * `yours` says whether it is the reader's, so the label can state whose it is.
+ */
+describe("the author editor's rule", () => {
+  it("prefills with the author on screen, whoever it belongs to", () => {
+    expect(authorEditor({ ...entry(), author: "The document's own", userAuthor: null })).toEqual({
+      value: "The document's own",
+      yours: false,
+    });
+    expect(authorEditor({ ...entry(), author: "Mine", userAuthor: "Mine" })).toEqual({
+      value: "Mine",
+      yours: true,
+    });
+  });
+
+  it("prefills with nothing when neither the document nor the reader has an author", () => {
+    // An empty field is the plain state for a document without an author; it is not an error, and
+    // saving it unchanged keeps meaning "no author of my own".
+    expect(authorEditor(entry({ author: null, userAuthor: null }))).toEqual({
+      value: "",
+      yours: false,
+    });
+  });
+
+  it("treats a blank reader's author as no author, for the same reason a blank title is no title", () => {
+    expect(authorEditor({ ...entry(), author: "A", userAuthor: "   " }).yours).toBe(false);
+  });
+});
+
+/**
+ * The authors the editor offers as suggestions.
+ *
+ * Derived from the listing the interface already holds — both the authors the documents carry and the
+ * ones readers set — so somebody does not retype a name and end up with two spellings of one person.
+ * Two entries whose authors differ only by surrounding spaces are one person, so the trimmed value is
+ * what makes them unique.
+ */
+describe("the author suggestions", () => {
+  it("offers every author the library already holds, without duplicates", () => {
+    const entries = [
+      entry({ id: 1, author: "Ursula K. Le Guin", userAuthor: null }),
+      entry({ id: 2, author: "Jorge Luis Borges", userAuthor: null }),
+      entry({ id: 3, author: "Ursula K. Le Guin", userAuthor: "Ursula K. Le Guin" }),
+    ];
+
+    expect(libraryAuthors(entries)).toEqual(["Ursula K. Le Guin", "Jorge Luis Borges"]);
+  });
+
+  it("does not offer the same author twice for spellings that differ only by surrounding spaces", () => {
+    const entries = [
+      entry({ id: 1, author: "  Jorge Luis Borges  ", userAuthor: null }),
+      entry({ id: 2, author: "Jorge Luis Borges", userAuthor: "Jorge Luis Borges" }),
+      entry({ id: 3, author: null, userAuthor: " Jorge Luis Borges " }),
+    ];
+
+    expect(libraryAuthors(entries)).toEqual(["Jorge Luis Borges"]);
+  });
+
+  it("offers nothing when no document in the library has an author", () => {
+    expect(libraryAuthors([entry({ author: null, userAuthor: null }), entry({ id: 2 })])).toEqual(
+      [],
+    );
   });
 });
 

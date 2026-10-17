@@ -114,6 +114,10 @@ pub struct Document {
     /// document's own title" is a decision the interface can take rather than an act of data loss.
     pub title: Option<String>,
     /// Document author from the PDF metadata dictionary, when present.
+    ///
+    /// This is the document's **own** author, exactly as the scanner found it. It is never written by
+    /// the reader: an author a person typed is a separate fact ([`Document::user_author`]), so the
+    /// document's own author is never destroyed and can always be shown again.
     pub author: Option<String>,
     /// The title the reader typed, or [`None`] when they have not set one (R31).
     ///
@@ -122,6 +126,15 @@ pub struct Document {
     /// its own field, instead of overwriting [`Document::title`], is what lets the interface say
     /// whose title it is showing and what makes restoring the document's own title possible at all.
     pub user_title: Option<String>,
+    /// The author the reader typed, or [`None`] when they have not set one.
+    ///
+    /// **`None` means only "the reader has not set an author"** — it is the reader saying *no author
+    /// of my own*, which is legitimate because many documents have none. Keeping the reader's author in
+    /// its own field, instead of overwriting [`Document::author`], is what lets the interface fall back
+    /// to the document's own author when the reader clears theirs, and what makes that fallback a
+    /// decision rather than data loss. This is the deliberate difference from [`Document::user_title`],
+    /// whose field has no legitimate blank.
+    pub user_author: Option<String>,
     /// The page the reader chose for the cover, zero-based, or [`None`] for the first page (R32).
     ///
     /// `None` is the **default**, not "unknown": the first page is what a document without a choice
@@ -169,6 +182,7 @@ impl Document {
             title: None,
             author: None,
             user_title: None,
+            user_author: None,
             cover_page: None,
             cover_image: None,
         }
@@ -194,6 +208,24 @@ impl Document {
             return own.to_owned();
         }
         title_from_path(&self.path)
+    }
+
+    /// The author to show a person.
+    ///
+    /// The reader's author wins when they have set one; otherwise it is the document's own author, or
+    /// [`None`] when the PDF carries none. **This is the one place the rule lives**, exactly like
+    /// [`Document::display_title`]: the interface receives this already-resolved value plus the
+    /// separate [`Document::user_author`] field, so no screen decides whose author it is rendering.
+    ///
+    /// A blank value counts as no value in either field, the same way it does for the title, and a
+    /// blank reader's author therefore falls back to the document's own. Unlike the title there is no
+    /// last-resort fallback to the file's name: an author is optional, and inventing one would be the
+    /// lie this field exists to make unnecessary.
+    pub fn display_author(&self) -> Option<String> {
+        if let Some(user) = non_blank(self.user_author.as_deref()) {
+            return Some(user.to_owned());
+        }
+        non_blank(self.author.as_deref()).map(str::to_owned)
     }
 
     /// The document's percent-encoded `file://` URI.
@@ -324,6 +356,47 @@ mod tests {
         document.cover_image = Some("   ".to_string());
 
         assert_eq!(document.cover_choice(), CoverChoice::Page(4));
+    }
+
+    /// The reader's author wins over the document's own, and this is the only place that decides.
+    #[test]
+    fn the_readers_author_wins_over_the_documents_own() {
+        let mut document = Document::new("/library/report.pdf");
+        document.author = Some("Embedded author".to_string());
+        document.user_author = Some("The reader's author".to_string());
+
+        assert_eq!(document.display_author().as_deref(), Some("The reader's author"));
+    }
+
+    #[test]
+    fn without_a_readers_author_the_documents_own_is_shown() {
+        let mut document = Document::new("/library/report.pdf");
+        document.author = Some("Embedded author".to_string());
+
+        assert_eq!(document.display_author().as_deref(), Some("Embedded author"));
+    }
+
+    #[test]
+    fn a_document_with_no_author_at_all_shows_none() {
+        // An author is optional, and there is no file-name fallback: inventing one would be a lie.
+        assert_eq!(Document::new("/library/report.pdf").display_author(), None);
+    }
+
+    #[test]
+    fn a_blank_embedded_author_is_treated_as_no_author() {
+        let mut document = Document::new("/u/report.pdf");
+        document.author = Some("   ".to_string());
+
+        assert_eq!(document.display_author(), None);
+    }
+
+    #[test]
+    fn a_blank_readers_author_falls_back_to_the_documents_own() {
+        let mut document = Document::new("/u/report.pdf");
+        document.author = Some("Embedded author".to_string());
+        document.user_author = Some("  ".to_string());
+
+        assert_eq!(document.display_author().as_deref(), Some("Embedded author"));
     }
 
     #[test]

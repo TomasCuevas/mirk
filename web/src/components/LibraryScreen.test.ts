@@ -26,6 +26,7 @@ function entry(): LibraryEntry {
     title: "A",
     userTitle: null,
     author: null,
+    userAuthor: null,
     pages: 10,
     progress: {
       page: 0,

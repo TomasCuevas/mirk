@@ -69,7 +69,22 @@ export interface LibraryEntry {
    * typecheck.
    */
   userTitle: string | null;
+  /**
+   * The author to display, **already resolved by the core**.
+   *
+   * It is the reader's author when they have set one, otherwise the document's own — and `null`
+   * when neither exists. Because the core resolves it, the interface never decides whose author it
+   * is rendering and the card keeps showing the author the way it always has.
+   */
   author: string | null;
+  /**
+   * The reader's own author, or `null` when they have not set one (`userAuthor` from the Rust view).
+   *
+   * This is what tells the editor whether the author on screen is the reader's, and what the
+   * suggestions list draws on beside the resolved authors. The backend always sends it — `null`
+   * means the reader has not set one — so a listing that forgets it must not typecheck.
+   */
+  userAuthor: string | null;
   /** Page count from the scanner; null when it was never established. */
   pages: number | null;
   progress: Progress | null;
@@ -363,6 +378,50 @@ export function titleEditor(entry: LibraryEntry): { value: string; yours: boolea
   // arrives from somewhere less careful — and then the interface must not offer to "restore" it.
   const yours = entry.userTitle != null && entry.userTitle.trim() !== "";
   return { value: displayTitle(entry), yours };
+}
+
+/**
+ * What the author editor shows for one document.
+ *
+ * The twin of [`titleEditor`], with one deliberate difference at the SAVE boundary rather than here:
+ * the title refuses a blank because a document must have a title, while an EMPTY author field means
+ * *no author of my own* and is a legitimate action that falls back to the document's own author. The
+ * field is prefilled with the author already on screen — the reader's when they set one, otherwise
+ * the document's own — and `yours` says whether that value is the reader's, so the field's label can
+ * state whose author it is instead of the interface having to guess.
+ */
+export function authorEditor(entry: LibraryEntry): { value: string; yours: boolean } {
+  const yours = entry.userAuthor != null && entry.userAuthor.trim() !== "";
+  return { value: entry.author ?? "", yours };
+}
+
+/**
+ * The authors already present in the library, for the editor's native suggestions.
+ *
+ * The reader should not have to retype a name and risk two spellings of the same person, so the
+ * listing they already hold is the source: both the authors the documents carry and the ones readers
+ * set are offered. It is derived here rather than fetched with a command, so there is no second
+ * source of truth and no new round trip.
+ *
+ * **Deduplication is by the trimmed value.** Two entries whose authors differ only by surrounding
+ * spaces are one person and must appear once; the first spelling wins and the surrounding spaces are
+ * never part of the name. The first-seen order is preserved rather than sorted, so the list is a
+ * function of the data alone and not of the machine's locale (the same reason the carousels' tiebreak
+ * avoids `localeCompare`).
+ */
+export function libraryAuthors(entries: readonly LibraryEntry[]): string[] {
+  const seen = new Set<string>();
+  const authors: string[] = [];
+  for (const entry of entries) {
+    for (const candidate of [entry.author, entry.userAuthor]) {
+      const trimmed = candidate?.trim() ?? "";
+      if (trimmed !== "" && !seen.has(trimmed)) {
+        seen.add(trimmed);
+        authors.push(trimmed);
+      }
+    }
+  }
+  return authors;
 }
 
 export function displayTitle(entry: LibraryEntry): string {

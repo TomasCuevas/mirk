@@ -14,6 +14,7 @@ function entries(count: number): LibraryEntry[] {
     title: `Document ${index}`,
     userTitle: null,
     author: null,
+    userAuthor: null,
     pages: 10,
     progress: {
       page: 1,
@@ -91,6 +92,22 @@ describe("the document editor", () => {
     expect(body).toContain(english("card.coverPageLabel"));
     expect(body).toContain(english("card.coverChooseImage"));
     expect(body).toContain(english("card.coverRemoveImage"));
+  });
+
+  it("holds the author field and offers the library's authors as native suggestions", () => {
+    const first = document({ id: 1, author: "Ursula K. Le Guin", userAuthor: null });
+    const second = document({ id: 2, author: "Jorge Luis Borges", userAuthor: null });
+    const body = render(BookGrid, {
+      props: { ...props, entries: [first, second], initialEditing: first },
+    }).body;
+
+    // The author lives in the same modal as the title and the cover, prefilled with the author on
+    // screen, and its suggestions are the authors the library already holds — so nobody retypes a name
+    // and ends up with two spellings of one person.
+    expect(body).toContain(english("card.authorLabel"));
+    expect(body).toContain("oct-author-suggestions");
+    expect(body).toContain('value="Ursula K. Le Guin"');
+    expect(body).toContain('value="Jorge Luis Borges"');
   });
 
   it("offers to remove the image only once the reader supplied one", () => {

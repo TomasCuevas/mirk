@@ -81,6 +81,7 @@ describe("a category's empty state while work is in flight (L47)", () => {
       title: "A",
       userTitle: null,
       author: null,
+      userAuthor: null,
       pages: 10,
       progress: {
         page: 0,

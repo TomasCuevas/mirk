@@ -166,6 +166,19 @@ fn set_document_title(id: i64, title: Option<String>) -> Result<(), String> {
     commands::set_document_title(&store, id, title.as_deref()).map_err(error_message)
 }
 
+/// Sets or clears the reader's author for the document with `id`.
+///
+/// `author: None` — or a blank value — means *no author of my own*, and restores the document's own
+/// author. It is a legitimate action rather than an error, and the deliberate difference from
+/// [`set_document_title`], which refuses a blank. The decision lives in
+/// [`commands::set_document_author`], so the interface receives the same named outcome every other
+/// write does.
+#[tauri::command]
+fn set_document_author(id: i64, author: Option<String>) -> Result<(), String> {
+    let store = open_store()?;
+    commands::set_document_author(&store, id, author.as_deref()).map_err(error_message)
+}
+
 /// Sets or clears the page the reader chose for the document's cover (R32).
 ///
 /// `page: None` restores the default, the first page, and is a legitimate action rather than an error.
@@ -723,6 +736,7 @@ fn main() {
             start_drag,
             list_library,
             set_document_title,
+            set_document_author,
             set_cover_page,
             choose_cover_image,
             remove_cover_image,

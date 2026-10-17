@@ -3,6 +3,7 @@
   import type { Translate } from "../lib/i18n";
   import {
     announceLibraryChanged,
+    authorEditor,
     coverEditor,
     coverPageFromInput,
     displayTitle,
@@ -10,6 +11,7 @@
     editorEntry,
     editorRefreshesLibrary,
     fetchCover,
+    libraryAuthors,
     titleEditor,
     type EditorCommit,
     type LibraryEntry,
@@ -69,12 +71,17 @@
     return {
       entry: opened,
       draft: opened === null ? "" : titleEditor(opened).value,
+      author: opened === null ? "" : authorEditor(opened).value,
       page: opened === null ? "" : coverEditor(opened).page,
       hasImage: opened === null ? false : coverEditor(opened).hasImage,
     };
   });
   let editing = $state<LibraryEntry | null>(seed.entry);
   let draft = $state(seed.draft);
+  // The reader's author draft, decided by the same Cancel/Save pair as the title. An EMPTY value is
+  // legitimate here ("no author of my own") and is sent as no value, unlike the title — the two fields
+  // share the pair of controls but not the blank rule.
+  let authorDraft = $state(seed.author);
   let saving = $state(false);
   let titleError = $state<string | null>(null);
   // R32: the cover's own draft and error, in the same editor as the title.
@@ -94,12 +101,21 @@
   // are never rewritten by a refresh, which is what keeps an undecided title from being discarded.
   const shownEditing = $derived(editing === null ? null : editorEntry(entries, editing));
 
+  // The editor is a single modal with an id unique within it: only one grid renders an editor at a
+  // time, so the author field's native suggestions can point at it without a global registry.
+  const AUTHOR_SUGGESTIONS_ID = "oct-author-suggestions";
+
+  // The authors already present in the library, the source of the field's suggestions. Derived from
+  // the listing the grid already holds rather than fetched, so there is no second source of truth.
+  const authorSuggestions = $derived(libraryAuthors(entries));
+
   function openDocumentEditor(entry: LibraryEntry): void {
     // The document may have changed on another screen since the card was drawn, so the editor seeds
     // from the current listing entry rather than the card's snapshot.
     const current = editorEntry(entries, entry);
     editing = current;
     draft = titleEditor(current).value;
+    authorDraft = authorEditor(current).value;
     coverPageDraft = coverEditor(current).page;
     coverHasImage = coverEditor(current).hasImage;
     titleError = null;
@@ -133,15 +149,20 @@
       titleError = t("card.titleBlank");
       return;
     }
-    await sendTitle(value);
+    // The author's empty value is legitimate — no author of my own — so it is sent as no value rather
+    // than refused, and it falls back to the document's own author. This is the deliberate difference
+    // from the title above, which refuses a blank because a document must have a title.
+    const author = authorDraft.trim();
+    await sendTitle(value, author === "" ? null : author);
   }
 
   async function restoreTitle(): Promise<void> {
-    // `null` is "restore the document's own title": a legitimate action, not a blank one.
+    // `null` is "restore the document's own title": a legitimate action, not a blank one. It does not
+    // touch the author draft, which belongs to the same Save/Cancel pair.
     await sendTitle(null);
   }
 
-  async function sendTitle(title: string | null): Promise<void> {
+  async function sendTitle(title: string | null, author?: string | null): Promise<void> {
     if (editing === null) {
       return;
     }
@@ -155,6 +176,12 @@
     titleError = null;
     try {
       await invoke("set_document_title", { id: editing.id, title });
+      if (author !== undefined) {
+        // Cancel and Save are the only controls that decide the author draft, and the author is written
+        // beside the title by the same Save. `undefined` means Restore, which decides the TITLE and
+        // nothing else, so the reader's author is left exactly as it was.
+        await invoke("set_document_author", { id: editing.id, author });
+      }
       settleEditorAfter("title");
     } catch (error) {
       titleError = String(error);
@@ -277,7 +304,9 @@
 <!-- R31/R32: the document editor, one per grid, and the ONE surface where a document is edited. Its
      title field is prefilled with the DISPLAYED title — the reader's when they set one, the document's
      own otherwise — and the restore control appears only when the reader's title is set, because
-     restoring something that was never set is an action without a meaning.
+     restoring something that was never set is an action without a meaning. The author field is its
+     twin: prefilled with the author on screen, with the library's own authors as native suggestions,
+     and an empty value meaning "no author of my own".
 
      The cover lives here too: a page of the reader's own (the first page is the plain default, and an
      empty field means it) and an image of their own, with the remove control appearing only once an
@@ -287,6 +316,7 @@
      small cover and the pencil already means "edit this document". -->
 {#if shownEditing !== null}
   {@const editor = titleEditor(shownEditing)}
+  {@const author = authorEditor(shownEditing)}
   <Modal title={t("card.documentEditor")} onClose={closeDocumentEditor}>
     <label class="title-field">
       <span>{t(editor.yours ? "card.titleLabelYours" : "card.titleLabel")}</span>
@@ -305,6 +335,32 @@
     {#if titleError !== null}
       <p class="title-error" role="alert">{titleError}</p>
     {/if}
+
+    <!-- The author, in the SAME editor and decided by the same Cancel/Save pair as the title: the user
+         asked for it behind the pencil, never as another control on the card. Its empty value is
+         legitimate — leave it empty to fall back to the document's own author — which is the deliberate
+         difference from the title's blank refusal. The suggestions are the authors the library already
+         holds, offered natively so nobody retypes a name and ends up with two spellings of one person. -->
+    <label class="title-field">
+      <span>{t(author.yours ? "card.authorLabelYours" : "card.authorLabel")}</span>
+      <input
+        type="text"
+        list={AUTHOR_SUGGESTIONS_ID}
+        bind:value={authorDraft}
+        aria-label={t(author.yours ? "card.authorLabelYours" : "card.authorLabel")}
+        onkeydown={(event) => {
+          if (event.key === "Enter") {
+            void saveTitle();
+          }
+        }}
+      />
+    </label>
+    <p class="cover-hint">{t("card.authorHint")}</p>
+    <datalist id={AUTHOR_SUGGESTIONS_ID}>
+      {#each authorSuggestions as suggestion (suggestion)}
+        <option value={suggestion}></option>
+      {/each}
+    </datalist>
 
     <!-- Two ROWS, and that is a decision rather than a wrapped line. Restore is a different kind of
          action from the pair below it: Cancel and Save apply or discard the DRAFT, while Restore throws

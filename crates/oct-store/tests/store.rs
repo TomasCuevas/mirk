@@ -813,6 +813,7 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
         "last_opened_at",
         "status",
         "user_title",
+        "user_author",
         "cover_page",
         "cover_image",
     ] {
@@ -823,8 +824,8 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
     }
     assert_eq!(
         columns.len(),
-        22,
-        "the documents table must keep its twenty-two columns, found {columns:?}"
+        23,
+        "the documents table must keep its twenty-three columns, found {columns:?}"
     );
 
     let tables: Vec<String> = raw
@@ -998,8 +999,190 @@ fn a_step_that_fails_on_the_way_to_v6_leaves_the_database_at_v5_untouched() {
     );
     assert_eq!(
         columns.len(),
-        22,
-        "the documents table must keep its twenty-two columns, found {columns:?}"
+        23,
+        "the documents table must keep its twenty-three columns, found {columns:?}"
+    );
+
+    let tables: Vec<String> = raw
+        .prepare(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        tables,
+        vec![
+            "documents",
+            "folders",
+            "open_events",
+            "progress",
+            "settings",
+            "suggestions",
+            "viewers",
+        ],
+        "the failed migration must not have created or dropped a table"
+    );
+
+    let document_count: i64 = raw
+        .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+        .expect("count the documents");
+    let progress_count: i64 = raw
+        .query_row("SELECT COUNT(*) FROM progress", [], |row| row.get(0))
+        .expect("count the positions");
+    assert_eq!(
+        (document_count, progress_count),
+        (1, 1),
+        "no row may be lost or duplicated by a failed migration"
+    );
+}
+
+#[test]
+fn a_step_that_fails_on_the_way_to_v7_leaves_the_database_at_v6_untouched() {
+    // The same shape as the V4, V5 and V6 atomicity tests, one version later. A database is built with
+    // the store's own current schema — so `documents` already has `user_author` — and then only its
+    // version stamp is rewound to 6. Reopening it runs the V7 step, `ALTER TABLE documents ADD COLUMN
+    // user_author TEXT`, against a table that already has that column, which SQLite refuses with
+    // "duplicate column name". A step stamped before its work would leave the database claiming version
+    // 7 with work that did not happen; the transaction must leave the version at 6 and every row
+    // untouched.
+    let (_dir, path) = temp_db();
+
+    let document_id;
+    {
+        let store = Store::open(&path).expect("build a current database");
+        let mut doc = document("/library/at-risk.pdf", FileId::Posix { dev: 3, ino: 20 });
+        doc.pages = Some(120);
+        doc.title = Some("The document's own title".to_string());
+        doc.author = Some("The document's own author".to_string());
+        document_id = store.upsert_document(&doc).expect("insert the document");
+        store
+            .set_user_title(document_id, Some("The reader's title"))
+            .expect("name the document");
+        store
+            .set_user_author(document_id, Some("The reader's author"))
+            .expect("name the author");
+        store
+            .set_cover_page(document_id, Some(7))
+            .expect("choose a cover page");
+        store
+            .set_cover_image(document_id, Some("9-cover.png"))
+            .expect("choose a cover image");
+        store
+            .record_progress(
+                document_id,
+                &StoredProgress::new(
+                    12,
+                    Some(120),
+                    ProgressSource::External("evince-gvfs"),
+                    Confidence::Exact,
+                )
+                .with_read_at(Some(1_700_000_000)),
+            )
+            .expect("record the position");
+        store.set_setting("language", "es").expect("write a setting");
+    }
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.pragma_update(None, "user_version", 6i64)
+            .expect("rewind the version stamp to the pre-V7 database shape");
+    }
+
+    // 1. The failing step reaches the caller rather than being swallowed or papered over.
+    let error =
+        Store::open(&path).expect_err("the V7 step must fail when `user_author` already exists");
+    assert!(
+        matches!(error, OctError::Storage(_)),
+        "a failed migration must surface as a storage error, got {error:?}"
+    );
+
+    // 2. The version was not stamped ahead of work that did not happen.
+    let raw = rusqlite::Connection::open(&path).expect("open raw");
+    let version: i64 = raw
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("read the version");
+    assert_eq!(
+        version, 6,
+        "a failed V7 step must leave the database at version 6, not claim version 7"
+    );
+
+    // 3. Every pre-existing value is still readable: both titles, both authors, the cover choice, the
+    //    page count, the position with its reading time, and the setting the previous steps recorded.
+    let (path_value, own_title, user_title, pages): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+    ) = raw
+        .query_row(
+            "SELECT path, title, user_title, pages FROM documents WHERE id = ?1",
+            rusqlite::params![document_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("the document must survive the failed migration");
+    let (own_author, user_author): (Option<String>, Option<String>) = raw
+        .query_row(
+            "SELECT author, user_author FROM documents WHERE id = ?1",
+            rusqlite::params![document_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("both authors must survive the failed migration");
+    let (cover_page, cover_image): (Option<i64>, Option<String>) = raw
+        .query_row(
+            "SELECT cover_page, cover_image FROM documents WHERE id = ?1",
+            rusqlite::params![document_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("the cover choice must survive the failed migration");
+    assert_eq!(path_value, "/library/at-risk.pdf");
+    assert_eq!(own_title.as_deref(), Some("The document's own title"));
+    assert_eq!(user_title.as_deref(), Some("The reader's title"));
+    assert_eq!(own_author.as_deref(), Some("The document's own author"));
+    assert_eq!(user_author.as_deref(), Some("The reader's author"));
+    assert_eq!(cover_page, Some(7));
+    assert_eq!(cover_image.as_deref(), Some("9-cover.png"));
+    assert_eq!(pages, Some(120));
+
+    let (page, source, stored_read_at): (i64, String, Option<i64>) = raw
+        .query_row(
+            "SELECT page, source, read_at FROM progress WHERE doc_id = ?1",
+            rusqlite::params![document_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("the position must survive the failed migration");
+    assert_eq!(page, 12);
+    assert_eq!(source, "evince-gvfs");
+    assert_eq!(stored_read_at, Some(1_700_000_000));
+
+    let language: String = raw
+        .query_row("SELECT value FROM settings WHERE key = 'language'", [], |row| {
+            row.get(0)
+        })
+        .expect("the setting must survive the failed migration");
+    assert_eq!(language, "es");
+
+    // 4. No half-applied state: the column the failing step wanted to add is still there exactly once,
+    //    the table keeps its documented columns, and no table was created or dropped.
+    let mut statement = raw
+        .prepare("SELECT name FROM pragma_table_info('documents')")
+        .expect("prepare");
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        columns.iter().filter(|name| name.as_str() == "user_author").count(),
+        1,
+        "the failed ADD COLUMN must not have left a second `user_author`; columns: {columns:?}"
+    );
+    assert_eq!(
+        columns.len(),
+        23,
+        "the documents table must keep its twenty-three columns, found {columns:?}"
     );
 
     let tables: Vec<String> = raw
@@ -1238,6 +1421,7 @@ fn the_schema_has_the_documented_columns_of_every_table() {
                 "last_opened_at",
                 "status",
                 "user_title",
+                "user_author",
             ],
         ),
         (
@@ -1551,6 +1735,120 @@ fn an_upsert_never_erases_the_readers_title() {
         "the reader's title must still be the one displayed after a rescan"
     );
     // The rescan's fresh metadata still landed: the rule is "do not touch the reader's title", not
+    // "ignore the rescan".
+    assert_eq!(found.document.pages, Some(120));
+}
+
+#[test]
+fn the_readers_author_is_a_separate_fact_and_is_the_one_displayed() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let identity = FileId::Posix { dev: 7, ino: 21 };
+    let mut doc = document("/library/authored.pdf", identity.clone());
+    doc.author = Some("The document's own author".to_string());
+    let id = store.upsert_document(&doc).expect("insert the document");
+
+    // Before anyone names it, there is only the document's own author and `user_author` is `None`.
+    let found = store
+        .find_document_by_identity(&identity)
+        .expect("lookup")
+        .expect("present");
+    assert_eq!(found.document.user_author, None);
+    assert_eq!(found.document.display_author().as_deref(), Some("The document's own author"));
+
+    store
+        .set_user_author(id, Some("What the reader called them"))
+        .expect("name the author");
+
+    let found = store
+        .find_document_by_identity(&identity)
+        .expect("lookup")
+        .expect("present");
+    // Both facts are stored, and the reader's is the one displayed.
+    assert_eq!(
+        found.document.author.as_deref(),
+        Some("The document's own author"),
+        "the reader's author must not overwrite the document's own"
+    );
+    assert_eq!(
+        found.document.user_author.as_deref(),
+        Some("What the reader called them")
+    );
+    assert_eq!(found.document.display_author().as_deref(), Some("What the reader called them"));
+}
+
+#[test]
+fn an_empty_author_falls_back_to_the_documents_own() {
+    // The deliberate difference from the title: the title refuses a blank because a document must have
+    // one, while an author has a legitimate empty state — "no author of my own". Clearing what the
+    // reader typed restores the document's own author, and a blank value means the same thing as no
+    // value rather than being refused.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let identity = FileId::Posix { dev: 7, ino: 22 };
+    let mut doc = document("/library/authored.pdf", identity.clone());
+    doc.author = Some("The document's own author".to_string());
+    let id = store.upsert_document(&doc).expect("insert the document");
+
+    for cleared in [None, Some(""), Some("   ")] {
+        store
+            .set_user_author(id, Some("A reader's author"))
+            .expect("set the reader's author");
+        store
+            .set_user_author(id, cleared)
+            .expect("clearing the reader's author is a legitimate action, not an error");
+
+        let found = store
+            .find_document_by_identity(&identity)
+            .expect("lookup")
+            .expect("present");
+        assert_eq!(
+            found.document.user_author, None,
+            "clearing must leave no reader's author, got {cleared:?}"
+        );
+        assert_eq!(
+            found.document.display_author().as_deref(),
+            Some("The document's own author"),
+            "an empty author must fall back to the document's own, cleared {cleared:?}"
+        );
+    }
+}
+
+#[test]
+fn an_upsert_never_erases_the_readers_author() {
+    // The twin of the title's rescan rule: the scanner's upsert refreshes the document's own metadata,
+    // including its own author, but must not touch the author a person chose.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let identity = FileId::Posix { dev: 8, ino: 23 };
+    let id = store
+        .upsert_document(&document("/library/authored.pdf", identity.clone()))
+        .expect("insert the document");
+    store
+        .set_user_author(id, Some("What the reader called them"))
+        .expect("name the author");
+
+    // The rescan knows the same identity and fresher metadata, and nothing about the reader's author.
+    let mut rescan = document("/library/authored.pdf", identity.clone());
+    rescan.author = Some("The document's own author, as the file embeds it".to_string());
+    rescan.pages = Some(120);
+    store.upsert_document(&rescan).expect("rescan the document");
+
+    let found = store
+        .find_document_by_identity(&identity)
+        .expect("lookup")
+        .expect("present");
+    assert_eq!(
+        found.document.user_author.as_deref(),
+        Some("What the reader called them"),
+        "a rescan must never rename an author a person chose"
+    );
+    assert_eq!(
+        found.document.display_author().as_deref(),
+        Some("What the reader called them"),
+        "the reader's author must still be the one displayed after a rescan"
+    );
+    // The rescan's fresh metadata still landed: the rule is "do not touch the reader's author", not
     // "ignore the rescan".
     assert_eq!(found.document.pages, Some(120));
 }

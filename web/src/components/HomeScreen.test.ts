@@ -47,6 +47,7 @@ function withProgress(
     title: "A",
     userTitle: null,
     author: null,
+    userAuthor: null,
     pages: 10,
     progress,
     ...overrides,
@@ -145,6 +146,7 @@ describe("Inicio", () => {
       title: "A",
       userTitle: null,
       author: null,
+      userAuthor: null,
       pages: 10,
       progress: {
         page: 0,
@@ -203,6 +205,7 @@ describe("Inicio", () => {
       title: "A",
       userTitle: null,
       author: null,
+      userAuthor: null,
       pages: 10,
       progress: {
         page: 0,

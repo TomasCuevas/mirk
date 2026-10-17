@@ -69,7 +69,11 @@ pub struct LibraryEntryView {
     pub title: String,
     /// The reader's own title, or `null` when they have not set one (`userTitle` over IPC).
     pub user_title: Option<String>,
+    /// The author to show, resolved by the core: the reader's when set, otherwise the document's own
+    /// (`author` over IPC). `null` when neither the document nor the reader has an author.
     pub author: Option<String>,
+    /// The reader's own author, or `null` when they have not set one (`userAuthor` over IPC).
+    pub user_author: Option<String>,
     pub pages: Option<u32>,
     pub progress: Option<ProgressView>,
     /// The page the reader chose for the cover, zero-based, or `null` for the first page (R32).
@@ -91,7 +95,8 @@ impl From<LibraryEntry> for LibraryEntryView {
             path: display_path(&document.document.path),
             title: document.document.display_title(),
             user_title: document.document.user_title.clone(),
-            author: document.document.author,
+            author: document.document.display_author(),
+            user_author: document.document.user_author.clone(),
             pages: document.document.pages,
             cover_page: document.document.cover_page,
             cover_image: document.document.cover_image.clone(),
@@ -247,6 +252,21 @@ pub fn library_entries(store: &Store) -> Result<Vec<LibraryEntryView>, OctError>
 /// document named in this application can always be restored to the title the file itself carries.
 pub fn set_document_title(store: &Store, id: i64, title: Option<&str>) -> Result<(), OctError> {
     store.set_user_title(id, title)
+}
+
+/// Sets or clears the reader's author for one document.
+///
+/// `author` is a `String` on the IPC boundary, so the interface sends either the reader's text or
+/// nothing at all. An empty value — `None`, or a blank string — means *no author of my own* and is a
+/// legitimate action: clearing what the reader typed falls back to the document's own author. That is
+/// the deliberate difference from [`set_document_title`], which refuses a blank because a document must
+/// have a title. The normalisation lives in [`Store::set_user_author`], so this command and any future
+/// caller cannot disagree about what an empty author means.
+///
+/// Nothing here touches the document's own author: the reader's author is a separate fact, and a
+/// document can always be restored to the author the file itself carries.
+pub fn set_document_author(store: &Store, id: i64, author: Option<&str>) -> Result<(), OctError> {
+    store.set_user_author(id, author)
 }
 
 /// Sets or clears the page the reader chose for one document's cover (R32).
@@ -881,6 +901,44 @@ mod tests {
             entries[0].user_title.as_deref(),
             Some("What the reader called it")
         );
+    }
+
+    // --- the reader's author travels beside the document's own -----------------------------------
+
+    #[test]
+    fn the_library_view_displays_the_readers_author_and_marks_it_as_theirs() {
+        let store = in_memory_store();
+        let mut doc = document("/library/authored.pdf", 5, 9);
+        doc.author = Some("The document's own author".to_string());
+        let id = store.upsert_document(&doc).expect("insert");
+
+        // Before anyone names it, the view shows the document's own author and no reader's author.
+        let entries = library_entries(&store).expect("list");
+        assert_eq!(entries[0].author.as_deref(), Some("The document's own author"));
+        assert_eq!(entries[0].user_author, None);
+
+        set_document_author(&store, id, Some("What the reader called them")).expect("name it");
+
+        let entries = library_entries(&store).expect("list again");
+        // `author` is the displayed value, and `userAuthor` marks it as the reader's.
+        assert_eq!(entries[0].author.as_deref(), Some("What the reader called them"));
+        assert_eq!(entries[0].user_author.as_deref(), Some("What the reader called them"));
+    }
+
+    #[test]
+    fn clearing_the_readers_author_restores_the_documents_own() {
+        let store = in_memory_store();
+        let mut doc = document("/library/authored.pdf", 5, 10);
+        doc.author = Some("The document's own author".to_string());
+        let id = store.upsert_document(&doc).expect("insert");
+
+        set_document_author(&store, id, Some("The reader's author")).expect("name it");
+        // An empty author — `None` here, a blank field in the interface — is the legitimate "no author
+        // of my own" action, not an error, and restores the document's own author.
+        set_document_author(&store, id, None).expect("clear the reader's author");
+        let entries = library_entries(&store).expect("list again");
+        assert_eq!(entries[0].author.as_deref(), Some("The document's own author"));
+        assert_eq!(entries[0].user_author, None);
     }
 
     #[test]

@@ -261,6 +261,24 @@ ALTER TABLE documents ADD COLUMN cover_page INTEGER;
 ALTER TABLE documents ADD COLUMN cover_image TEXT;
 ";
 
+/// Version 7: the reader's own author, kept apart from the document's own.
+///
+/// A twin of V5's `user_title`, with one deliberate difference that lives at the WRITE boundary rather
+/// than here: the title refuses a blank because a document must have a title, while an author has a
+/// legitimate empty state — *no author of my own* — and clearing the reader's value restores the
+/// document's own author. Exactly like `user_title`, `NULL` means only "the reader has not set one",
+/// and the value never overwrites `documents.author`, so a rescan cannot rename an author a person
+/// chose and the document's own author is never destroyed.
+///
+/// Added as a migration rather than by editing an earlier schema, because all of them are **frozen**:
+/// a database an earlier build already created reports their versions, and editing the text would
+/// leave that database without the column forever while claiming otherwise. The step is stamped in
+/// its own transaction, so a failure leaves the version behind and no half-added column (the V7
+/// atomicity test pins exactly that).
+const SCHEMA_V7: &str = "
+ALTER TABLE documents ADD COLUMN user_author TEXT;
+";
+
 /// A stored document, together with its database id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentRecord {
@@ -387,7 +405,7 @@ pub fn covering_folder<'a>(folders: &'a [WatchedFolder], path: &Path) -> Option<
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 6;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 7;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -505,8 +523,9 @@ impl Store {
     /// retrying is deliberately deferred — `oct` currently opens one store per process, so the race
     /// requires a second process writing the same database, which no code does yet.
     ///
-    /// Only the columns the scanner can supply are written; the reader's title is deliberately not
-    /// one of them, because it is a separate fact with its own write path ([`Store::set_user_title`]).
+    /// Only the columns the scanner can supply are written; the reader's title and the reader's author
+    /// are deliberately not among them, because they are separate facts with their own write paths
+    /// ([`Store::set_user_title`], [`Store::set_user_author`]).
     /// The scanner fills metadata such as `size`, `mtime` and `discovered_via` when it exists.
     pub fn upsert_document(&self, document: &Document) -> Result<i64, OctError> {
         let path = path_to_string(&document.path)?;
@@ -634,6 +653,38 @@ impl Store {
         Ok(())
     }
 
+    /// Sets or clears the reader's author for the document with `id`.
+    ///
+    /// `None` is the reader saying *no author of my own*, and it is a legitimate, first-class action
+    /// rather than an error: many documents have no author at all, so clearing what the reader typed
+    /// must restore the document's own author instead of refusing the edit. **This is the deliberate
+    /// difference from [`Store::set_user_title`], which refuses a blank because a document must have a
+    /// title.** For the same reason a blank `Some` is normalised to `None` rather than refused: the
+    /// empty field is exactly the reader's way of clearing their author, and `NULL` stays the only
+    /// stored spelling of "not set".
+    ///
+    /// This is deliberately separate from [`Store::upsert_document`], which never touches
+    /// `user_author`: a rescan that refreshes the document's own metadata must not be able to rename an
+    /// author a person chose. The reader's author is a separate fact with its own write path.
+    pub fn set_user_author(&self, id: i64, author: Option<&str>) -> Result<(), OctError> {
+        let normalized: Option<&str> = author.map(str::trim).filter(|trimmed| !trimmed.is_empty());
+
+        let affected = self
+            .connection
+            .execute(
+                "UPDATE documents SET user_author = ?1 WHERE id = ?2",
+                params![normalized, id],
+            )
+            .map_err(storage_error)?;
+
+        if affected == 0 {
+            return Err(OctError::Storage(format!(
+                "no document with id {id} to set an author on"
+            )));
+        }
+        Ok(())
+    }
+
     /// Sets or clears the page the reader chose for the document's cover (R32).
     ///
     /// `None` restores the default — the first page — and is a legitimate action, not an error. A
@@ -720,7 +771,7 @@ impl Store {
         let row = self
             .connection
             .query_row(
-                "SELECT id, path, file_id_kind, volume_id, file_index, content_hash, pages, title, author, user_title, cover_page, cover_image \
+                "SELECT id, path, file_id_kind, volume_id, file_index, content_hash, pages, title, author, user_title, user_author, cover_page, cover_image \
                  FROM documents \
                  WHERE file_id_kind = ?1 AND volume_id IS ?2 AND file_index IS ?3 AND content_hash IS ?4 \
                  LIMIT 1",
@@ -737,8 +788,9 @@ impl Store {
                         row.get::<_, Option<String>>(7)?,
                         row.get::<_, Option<String>>(8)?,
                         row.get::<_, Option<String>>(9)?,
-                        row.get::<_, Option<i64>>(10)?,
-                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<i64>>(11)?,
+                        row.get::<_, Option<String>>(12)?,
                     ))
                 },
             )
@@ -756,6 +808,7 @@ impl Store {
             title,
             author,
             user_title,
+            user_author,
             cover_page,
             cover_image,
         )) = row
@@ -787,6 +840,7 @@ impl Store {
                 title,
                 author,
                 user_title,
+                user_author,
                 cover_page,
                 cover_image,
             },
@@ -1034,7 +1088,7 @@ impl Store {
             .connection
             .prepare(
                 "SELECT d.id, d.path, d.file_id_kind, d.volume_id, d.file_index, d.content_hash, \
-                        d.pages, d.title, d.author, d.user_title, d.cover_page, d.cover_image, \
+                        d.pages, d.title, d.author, d.user_title, d.user_author, d.cover_page, d.cover_image, \
                         p.page, p.total, p.source, p.confidence, p.read_at, p.updated_at \
                  FROM documents d \
                  LEFT JOIN progress p ON p.id = (\
@@ -1055,19 +1109,20 @@ impl Store {
                 let title: Option<String> = row.get(7)?;
                 let author: Option<String> = row.get(8)?;
                 let user_title: Option<String> = row.get(9)?;
-                let cover_page: Option<i64> = row.get(10)?;
-                let cover_image: Option<String> = row.get(11)?;
+                let user_author: Option<String> = row.get(10)?;
+                let cover_page: Option<i64> = row.get(11)?;
+                let cover_image: Option<String> = row.get(12)?;
                 // The LEFT JOIN leaves every `progress` column NULL for a document with none, so
                 // `p.page` is the presence check: it is NOT NULL whenever the row exists.
                 let progress: Option<LatestProgressColumns> =
-                    match row.get::<_, Option<i64>>(12)? {
+                    match row.get::<_, Option<i64>>(13)? {
                         Some(page) => Some((
                             page,
-                            row.get(13)?,
                             row.get(14)?,
                             row.get(15)?,
                             row.get(16)?,
                             row.get(17)?,
+                            row.get(18)?,
                         )),
                         None => None,
                     };
@@ -1082,6 +1137,7 @@ impl Store {
                     title,
                     author,
                     user_title,
+                    user_author,
                     cover_page,
                     cover_image,
                     progress,
@@ -1102,6 +1158,7 @@ impl Store {
                 title,
                 author,
                 user_title,
+                user_author,
                 cover_page,
                 cover_image,
                 progress,
@@ -1154,6 +1211,7 @@ impl Store {
                         title,
                         author,
                         user_title,
+                        user_author,
                         cover_page,
                         cover_image,
                     },
@@ -1376,6 +1434,15 @@ fn migrate(connection: &mut Connection) -> Result<(), OctError> {
         transaction.execute_batch(SCHEMA_V6).map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 6i64)
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+    }
+
+    if version < 7 {
+        let transaction = connection.transaction().map_err(storage_error)?;
+        transaction.execute_batch(SCHEMA_V7).map_err(storage_error)?;
+        transaction
+            .pragma_update(None, "user_version", 7i64)
             .map_err(storage_error)?;
         transaction.commit().map_err(storage_error)?;
     }
@@ -1675,7 +1742,7 @@ mod tests {
         let (_dir, path) = a_version_4_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 6);
+        assert_eq!(store.schema_version().expect("schema version"), Store::CURRENT_SCHEMA_VERSION);
 
         // The document's own title survives the V4 -> V5 step untouched, and it reads back with no
         // reader's title: the migration adds a fact, it does not invent one.
@@ -1716,7 +1783,7 @@ mod tests {
         let (_dir, path) = a_version_3_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 6);
+        assert_eq!(store.schema_version().expect("schema version"), Store::CURRENT_SCHEMA_VERSION);
 
         // The watch, the document and its position all survive the V3 -> V4 step.
         let folders = store.folders().expect("list folders");
@@ -1758,7 +1825,7 @@ mod tests {
         let (_dir, path) = a_version_2_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 6);
+        assert_eq!(store.schema_version().expect("schema version"), Store::CURRENT_SCHEMA_VERSION);
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -1786,7 +1853,7 @@ mod tests {
         let (_dir, path) = a_version_1_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), 6);
+        assert_eq!(store.schema_version().expect("schema version"), Store::CURRENT_SCHEMA_VERSION);
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -1823,7 +1890,7 @@ mod tests {
         let before = std::fs::read(&path).expect("read the database bytes");
 
         let store = Store::open(&path).expect("reopen");
-        assert_eq!(store.schema_version().expect("schema version"), 6);
+        assert_eq!(store.schema_version().expect("schema version"), Store::CURRENT_SCHEMA_VERSION);
         drop(store);
 
         let after = std::fs::read(&path).expect("read the database bytes");

@@ -13,6 +13,7 @@ function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
     title: "Cosmos",
     userTitle: null,
     author: null,
+    userAuthor: null,
     pages: 300,
     progress: null,
     ...overrides,
