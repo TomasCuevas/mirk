@@ -49,3 +49,6 @@ spike/r12/logs/
 #   target/   cargo build output
 spike/parser/vendor/
 spike/parser/target/
+
+# CodeGraph index (a tool artifact, not part of the product)
+.codegraph/

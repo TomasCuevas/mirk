@@ -22,6 +22,7 @@ import {
   editorRefreshesLibrary,
   fetchCover,
   filterEntries,
+  folderActionOutcome,
   libraryView,
   paginate,
   progressFraction,
@@ -841,6 +842,33 @@ describe("a document's cover", () => {
     expect(coverSource(undefined)).toBeNull();
     expect(coverSource("")).toBeNull();
     expect(coverSource(42)).toBeNull();
+  });
+});
+
+/**
+ * The containing-folder action's outcome, decided by a pure rule.
+ *
+ * The card no longer renders the result of "open containing folder": the user removed both the
+ * success and the failure sentences (L27, L30), which left the outcome plumbing with no consumer. The
+ * action itself remains, and it still either opened the folder or did not — a decision, and one whose
+ * failure has to reach the console where the application reports failures that have no user state to
+ * carry them. The rule lives here, with no webview and no DOM, so both branches are pinned even though
+ * no screen draws them.
+ */
+describe("the containing-folder action's outcome", () => {
+  it("names the folder and the viewer when the command opened the folder", () => {
+    expect(
+      folderActionOutcome({
+        status: "fulfilled",
+        value: { folder: "/library/documents", viewer: "Files" },
+      }),
+    ).toEqual({ kind: "opened", folder: "/library/documents", viewer: "Files" });
+  });
+
+  it("reports a failure rather than inventing an opened folder", () => {
+    expect(
+      folderActionOutcome({ status: "rejected", reason: new Error("no such folder") }),
+    ).toEqual({ kind: "failed", message: "Error: no such folder" });
   });
 });
 

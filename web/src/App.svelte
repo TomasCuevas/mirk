@@ -3,8 +3,8 @@
   import { translate, type Locale } from "./lib/i18n";
   import {
     LIBRARY_CHANGED_EVENT,
+    folderActionOutcome,
     startLibraryRefresh,
-    type FolderActionStatus,
     type HomeCategory,
     type LibraryEntry,
     type OpenedFolder,
@@ -55,9 +55,6 @@
   // `null` until the store answers, for the same reason as the providers.
   let folders = $state<WatchedFolder[] | null>(null);
   let foldersError = $state<string | null>(null);
-
-  // The result of the last card action. Held here, not in the card, so the card stays a renderer.
-  let folderStatus = $state<FolderActionStatus | null>(null);
 
   // R27 (L42). What removing a watched folder would take with it, while the confirmation is open. It is
   // the store's own plan and not a guess: the count the modal states comes from the same computation the
@@ -190,13 +187,18 @@
     }
   }
 
+  // The card's containing-folder action (L27, L30). Both sentences that used to render its outcome were
+  // removed at the user's request, so there is no state to hold and no screen to update; what remains is
+  // the decision the command's answer forces, which `folderActionOutcome` makes as a pure rule. A failure
+  // is reported where the application reports failures that have no user state to carry them — the same
+  // console the window actions use.
   async function openContainingFolder(entry: LibraryEntry): Promise<void> {
-    folderStatus = null;
-    try {
-      const opened = await invoke<OpenedFolder>("open_containing_folder", { path: entry.path });
-      folderStatus = { id: entry.id, kind: "ok", folder: opened.folder, viewer: opened.viewer };
-    } catch (error) {
-      folderStatus = { id: entry.id, kind: "error", message: String(error) };
+    const [settled] = await Promise.allSettled([
+      invoke<OpenedFolder>("open_containing_folder", { path: entry.path }),
+    ]);
+    const outcome = folderActionOutcome(settled);
+    if (outcome.kind === "failed") {
+      console.error("the folder could not be opened", outcome.message);
     }
   }
 
@@ -374,7 +376,6 @@
         inFlight={libraryInFlight}
         error={libraryError}
         {t}
-        {folderStatus}
         onOpenFolder={openContainingFolder}
         onOpenCategory={selectCategory}
         onNavigate={selectScreen}
@@ -386,7 +387,6 @@
         error={libraryError}
         locale={locale}
         {t}
-        {folderStatus}
         onOpenFolder={openContainingFolder}
       />
     {:else if view.kind === "screen"}
@@ -418,7 +418,6 @@
         inFlight={libraryInFlight}
         error={libraryError}
         {t}
-        {folderStatus}
         onOpenFolder={openContainingFolder}
         onBack={() => selectScreen("home")}
       />

@@ -12,7 +12,6 @@
     fetchCover,
     titleEditor,
     type EditorCommit,
-    type FolderActionStatus,
     type LibraryEntry,
   } from "../lib/library";
   import { invoke, runningInTauri } from "../lib/tauri";
@@ -22,14 +21,12 @@
   let {
     entries,
     t,
-    folderStatus,
     onOpenFolder,
     layout = "grid",
     initialEditing = null,
   }: {
     entries: readonly LibraryEntry[];
     t: Translate;
-    folderStatus: FolderActionStatus | null;
     onOpenFolder: (entry: LibraryEntry) => void;
     layout?: "grid" | "strip";
     /**
@@ -272,7 +269,6 @@
         {onOpenFolder}
         onEditDocument={openDocumentEditor}
         cover={coverOverrides[entry.id]}
-        status={folderStatus?.id === entry.id ? folderStatus : null}
       />
     </li>
   {/each}

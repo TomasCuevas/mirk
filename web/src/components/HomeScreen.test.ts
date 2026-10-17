@@ -13,7 +13,6 @@ function homeProps(overrides: { entries?: LibraryEntry[]; inFlight?: boolean } =
     inFlight: false,
     error: null as string | null,
     t: english,
-    folderStatus: null,
     onOpenFolder: () => {},
     onOpenCategory: () => {},
     onNavigate: () => {},
@@ -46,6 +45,7 @@ function withProgress(
     id: 1,
     path: "/library/a.pdf",
     title: "A",
+    userTitle: null,
     author: null,
     pages: 10,
     progress,
@@ -143,6 +143,7 @@ describe("Inicio", () => {
       id: 1,
       path: "/library/a.pdf",
       title: "A",
+      userTitle: null,
       author: null,
       pages: 10,
       progress: {
@@ -200,6 +201,7 @@ describe("Inicio", () => {
       id: 1,
       path: "/library/a.pdf",
       title: "A",
+      userTitle: null,
       author: null,
       pages: 10,
       progress: {

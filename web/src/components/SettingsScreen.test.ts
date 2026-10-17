@@ -216,7 +216,7 @@ describe("the removal's confirmation", () => {
     });
 
     expect(body).toContain("¿Dejar de vigilar esta carpeta?");
-    expect(body).toContain("1 documento de esta carpeta sale de tu biblioteca.");
+    expect(body).toContain("1 documento de esta carpeta sale de su biblioteca.");
     expect(body).toContain("Quitar la carpeta y sus documentos");
   });
 });

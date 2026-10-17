@@ -64,10 +64,11 @@ export interface LibraryEntry {
    * The reader's own title, or `null` when they have not set one (`userTitle` from the Rust view).
    *
    * This is what lets a card say "this title is yours": the reader's title is a separate fact, so
-   * the interface can tell it apart from the document's own rather than having to guess. Optional on
-   * the type so a listing shaped before R31 still compiles; in practice the Rust view always sends it.
+   * the interface can tell it apart from the document's own rather than having to guess. The backend
+   * always sends it — `null` means the reader has not set one — so a listing that forgets it must not
+   * typecheck.
    */
-  userTitle?: string | null;
+  userTitle: string | null;
   author: string | null;
   /** Page count from the scanner; null when it was never established. */
   pages: number | null;
@@ -90,10 +91,35 @@ export interface OpenedFolder {
   viewer: string;
 }
 
-/** The result of a card's "open containing folder" action, so the card can report it. */
-export type FolderActionStatus =
-  | { id: number; kind: "ok"; folder: string; viewer: string }
-  | { id: number; kind: "error"; message: string };
+/**
+ * What a card's "open containing folder" action produced.
+ *
+ * The outcome is a real decision even though no screen draws it: opening the folder either named the
+ * folder and the viewer that took it, or it did not happen at all. It is a plain value rather than
+ * component state, so both branches can be pinned without a webview — which matters here because the
+ * two sentences that used to render it were removed at the user's request (L27, L30), and this rule
+ * is what keeps the behaviour checked now that nothing draws it.
+ */
+export type FolderActionOutcome =
+  | { kind: "opened"; folder: string; viewer: string }
+  | { kind: "failed"; message: string };
+
+/**
+ * Decides the folder action's outcome from the command's settled answer, and nothing else.
+ *
+ * A fulfilled `open_containing_folder` is the folder that was opened and the viewer that opened it; a
+ * rejection is a failure whose message the caller reports to the console — the same place the window
+ * actions report failures that have no user state to carry them. A `null` or an error is never
+ * dressed up as an opened folder.
+ */
+export function folderActionOutcome(
+  settled: PromiseSettledResult<OpenedFolder>,
+): FolderActionOutcome {
+  if (settled.status === "fulfilled") {
+    return { kind: "opened", folder: settled.value.folder, viewer: settled.value.viewer };
+  }
+  return { kind: "failed", message: String(settled.reason) };
+}
 
 /** A progress provider and whether this machine can use it. */
 export interface Provider {

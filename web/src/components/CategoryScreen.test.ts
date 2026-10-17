@@ -16,7 +16,6 @@ function categoryProps(
     inFlight: false,
     error: null as string | null,
     t: english,
-    folderStatus: null,
     onOpenFolder: () => {},
     onBack: () => {},
     ...overrides,
@@ -80,6 +79,7 @@ describe("a category's empty state while work is in flight (L47)", () => {
       id: 1,
       path: "/library/a.pdf",
       title: "A",
+      userTitle: null,
       author: null,
       pages: 10,
       progress: {

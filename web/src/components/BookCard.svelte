@@ -6,7 +6,6 @@
     describeProgressView,
     displayTitle,
     fetchCover,
-    type FolderActionStatus,
     type LibraryEntry,
   } from "../lib/library";
   import { invoke } from "../lib/tauri";
@@ -14,14 +13,12 @@
   let {
     entry,
     t,
-    status,
     onOpenFolder,
     onEditDocument,
     cover,
   }: {
     entry: LibraryEntry;
     t: Translate;
-    status: FolderActionStatus | null;
     onOpenFolder: (entry: LibraryEntry) => void;
     /** Opens the document editor for this entry: its title and its cover, in the one modal (R32). */
     onEditDocument: (entry: LibraryEntry) => void;
@@ -194,8 +191,9 @@
   </div>
 
   <!-- The folder action carries no status text at all (L27, L30): the user removed the green "folder
-       opened" sentence and then the failure sentence as well, so the card says nothing in either case.
-       Opening the folder window is its own confirmation, and a failure is silent here — their call,
+       opened" sentence and then the failure sentence as well. The card therefore receives no outcome
+       and renders none — the two sentences' plumbing is gone with them. Opening the folder window is
+       its own confirmation, and a failure is reported to the console by the application; their call,
        recorded as theirs rather than dressed up as a design decision. -->
 </article>
 

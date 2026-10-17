@@ -7,7 +7,6 @@
     homeCategories,
     libraryView,
     startCategoryRefresh,
-    type FolderActionStatus,
     type HomeCategory,
     type LibraryEntry,
   } from "../lib/library";
@@ -19,7 +18,6 @@
     inFlight,
     error,
     t,
-    folderStatus,
     onOpenFolder,
     onOpenCategory,
     onNavigate,
@@ -28,7 +26,6 @@
     inFlight: boolean;
     error: string | null;
     t: Translate;
-    folderStatus: FolderActionStatus | null;
     onOpenFolder: (entry: LibraryEntry) => void;
     onOpenCategory: (category: HomeCategory) => void;
     onNavigate: (target: "library" | "settings") => void;
@@ -130,7 +127,7 @@
             </div>
           </div>
         {:else}
-          <BookGrid entries={section.items} {t} {folderStatus} {onOpenFolder} layout="strip" />
+          <BookGrid entries={section.items} {t} {onOpenFolder} layout="strip" />
         {/if}
       </section>
     {/each}

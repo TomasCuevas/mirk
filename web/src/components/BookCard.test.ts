@@ -34,7 +34,6 @@ describe("the containing-folder action", () => {
       props: {
         entry: entry(),
         t: english,
-        status: null,
         onOpenFolder: () => {},
         onEditDocument: () => {},
       },
@@ -64,32 +63,6 @@ describe("the containing-folder action", () => {
     // Icon only: strip the drawing and every tag, and nothing readable is left.
     expect(button.replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<[^>]*>/g, "").trim()).toBe("");
   });
-
-  it("says nothing at all about the folder action, in any status", () => {
-    const props = { entry: entry(), t: english, onOpenFolder: () => {}, onEditDocument: () => {} };
-    // Compared with Svelte's own SSR comment markers stripped: those are an implementation detail of how
-    // a block renders, not what the reader is told — an earlier version of this test failed on them.
-    const said = (html: string) => html.replace(/<!--[\s\S]*?-->/g, "");
-    const quiet = said(render(BookCard, { props: { ...props, status: null } }).body);
-
-    // L27 removed the green "folder opened" sentence, and L30 removed the failure sentence too, so the
-    // card carries no status text in either case. Recorded as the user's decision, not as a preference
-    // of the maintainer's: the folder window opening is its own confirmation, and a failure is silent.
-    expect(
-      said(
-        render(BookCard, {
-          props: { ...props, status: { kind: "ok", folder: "/tmp", viewer: "Files" } },
-        }).body,
-      ),
-    ).toBe(quiet);
-    expect(
-      said(
-        render(BookCard, {
-          props: { ...props, status: { kind: "error", message: "no such folder" } },
-        }).body,
-      ),
-    ).toBe(quiet);
-  });
 });
 
 /**
@@ -105,7 +78,6 @@ describe("the reader's title", () => {
       props: {
         entry: entry({ title: "Cosmos" }),
         t: english,
-        status: null,
         onOpenFolder: () => {},
         onEditDocument: () => {},
       },
@@ -135,7 +107,6 @@ describe("the reader's title", () => {
         props: {
           entry: entry({ title: "Cosmos" }),
           t: translate(locale),
-          status: null,
           onOpenFolder: () => {},
           onEditDocument: () => {},
         },
@@ -154,7 +125,7 @@ describe("the reader's title", () => {
     // replaces it is in the EDITOR — the field says whose title is being edited, and the restore control
     // exists only when there is one to restore — which `titleEditor` keeps in one place and
     // `library.test.ts` pins. This test is the inverse guard: the phrase must not come back onto a card.
-    const props = { t: english, status: null, onOpenFolder: () => {}, onEditDocument: () => {} };
+    const props = { t: english, onOpenFolder: () => {}, onEditDocument: () => {} };
 
     const named = render(BookCard, {
       props: { ...props, entry: entry({ title: "Mine", userTitle: "Mine" }) },
@@ -175,7 +146,7 @@ describe("the reader's title", () => {
  * that would otherwise become `src=""`.
  */
 describe("the card's cover", () => {
-  const props = { t: english, status: null, onOpenFolder: () => {}, onEditDocument: () => {} };
+  const props = { t: english, onOpenFolder: () => {}, onEditDocument: () => {} };
 
   it("shows its placeholder, and no image, until there is a cover", () => {
     const { body } = render(BookCard, { props: { ...props, entry: entry() } });
@@ -215,7 +186,7 @@ describe("the card's cover", () => {
  * is the inverse guard that keeps the control from coming back.
  */
 describe("the cover's own corner", () => {
-  const props = { t: english, status: null, onOpenFolder: () => {}, onEditDocument: () => {} };
+  const props = { t: english, onOpenFolder: () => {}, onEditDocument: () => {} };
 
   it("carries no control, only the page badge", () => {
     const { body } = render(BookCard, { props: { ...props, entry: entry({ title: "Cosmos" }) } });

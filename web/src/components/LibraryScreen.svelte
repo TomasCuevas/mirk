@@ -7,7 +7,6 @@
     paginate,
     sortEntries,
     sortKeys,
-    type FolderActionStatus,
     type LibraryEntry,
     type SortKey,
   } from "../lib/library";
@@ -19,7 +18,6 @@
     error,
     locale,
     t,
-    folderStatus,
     onOpenFolder,
   }: {
     entries: LibraryEntry[];
@@ -27,7 +25,6 @@
     error: string | null;
     locale: string;
     t: Translate;
-    folderStatus: FolderActionStatus | null;
     onOpenFolder: (entry: LibraryEntry) => void;
   } = $props();
 
@@ -87,7 +84,7 @@
            snippet rendered twice, so the two copies cannot drift apart. -->
       {@render pager()}
 
-      <BookGrid entries={paged.items} {t} {folderStatus} {onOpenFolder} />
+      <BookGrid entries={paged.items} {t} {onOpenFolder} />
 
       {@render pager()}
     {/if}

@@ -6,7 +6,6 @@
     currentUnixSeconds,
     libraryView,
     startCategoryRefresh,
-    type FolderActionStatus,
     type HomeCategory,
     type LibraryEntry,
   } from "../lib/library";
@@ -19,7 +18,6 @@
     inFlight,
     error,
     t,
-    folderStatus,
     onOpenFolder,
     onBack,
   }: {
@@ -28,7 +26,6 @@
     inFlight: boolean;
     error: string | null;
     t: Translate;
-    folderStatus: FolderActionStatus | null;
     onOpenFolder: (entry: LibraryEntry) => void;
     onBack: () => void;
   } = $props();
@@ -70,7 +67,7 @@
   {:else if view === "empty"}
     <p class="state">{t("home.categoryEmpty")}</p>
   {:else}
-    <BookGrid entries={items} {t} {folderStatus} {onOpenFolder} />
+    <BookGrid entries={items} {t} {onOpenFolder} />
   {/if}
 </section>
 

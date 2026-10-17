@@ -216,7 +216,7 @@ describe("what a removal takes with it", () => {
       "7 documents of this folder leave your library.",
     );
     expect(describeRemoval(removal(1), spanish)).toBe(
-      "1 documento de esta carpeta sale de tu biblioteca.",
+      "1 documento de esta carpeta sale de su biblioteca.",
     );
   });
 
@@ -240,7 +240,7 @@ describe("what a removal takes with it", () => {
       "No document of this folder is in your library, so only the watch is removed.",
     );
     expect(describeRemoval(removal(0), spanish)).toBe(
-      "No hay ningún documento de esta carpeta en tu biblioteca, así que solo se quita la vigilancia.",
+      "No hay ningún documento de esta carpeta en su biblioteca, así que solo se quita la vigilancia.",
     );
   });
 });
