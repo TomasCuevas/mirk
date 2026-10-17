@@ -1,0 +1,9 @@
+{
+  // The Svelte-aware pass (svelte-check) needs the components in its `include`, which the
+  // repository-root `tsconfig.json` deliberately does not have: that one exists for the plain
+  // `tsc --noEmit` pass over the logic files, where a `.svelte` import is an opaque value
+  // (`src/ambient.d.ts`). Everything else — strictness, module resolution, `noUnusedLocals` — is
+  // inherited, so the two passes cannot drift apart in how they judge the same code.
+  "extends": "../tsconfig.json",
+  "include": ["src/**/*.svelte", "src/**/*.ts"]
+}

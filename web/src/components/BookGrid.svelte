@@ -6,7 +6,6 @@
     authorEditor,
     coverEditor,
     coverPageFromInput,
-    displayTitle,
     editorClosesAfterCommit,
     editorEntry,
     editorRefreshesLibrary,
