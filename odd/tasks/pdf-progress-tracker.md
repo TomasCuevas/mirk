@@ -1451,6 +1451,32 @@ transacción desaparece: *"un guardado cuyo autor fue rechazado no debe dejar el
 **Estado**: 269 comprobaciones del proyecto y 165 de la interfaz, clippy limpio, y el chequeo de tipos —que ahora
 también mira los componentes— con 0 errores y 0 avisos.
 
+
+**L56 — la cola de sugerencias, mitad de atrás: la base, los comandos y el productor (esquema V8).**
+
+Lo que este encargo dejó en claro ANTES de escribir código, y que vale más que el código: **la pantalla de capacidades
+ya existe completa** (proveedores, qué puede cada uno, por qué falta el que falta, en los dos idiomas), así que no
+había nada que construir ahí; **el override manual no se puede hacer donde se lo había encargado** (necesita el bucle
+que observa y el editor de documentos) y hoy un dato manual sería **derrotado en silencio** por el automático; y la
+cola de sugerencias era lo único real y faltante, dividida en dos mitades.
+
+**Esta unidad es la mitad de atrás**: el esquema V8, la API del almacén, los cuatro comandos y el productor enganchado
+en el tick. La mitad de adelante —que el lector la vea y decida— es su propia unidad y NO se empezó: hoy la función
+existe pero es inalcanzable desde la pantalla, y el trabajador lo dijo en vez de disimularlo.
+
+**Un muerto y un vivo, y lo que el vivo encontró**: el primer trabajador murió por un error del proveedor dejando el
+árbol coherente (compilaba entero) y las pruebas de los comandos ya escritas. El segundo confirmó lo que había,
+completó lo que faltaba (las dos falsificaciones con su rojo exacto y su hash restaurado), y **encontró un defecto
+real en el código del muerto**: la operación que decide una sugerencia prometía en su comentario que una decisión no
+se puede tomar dos veces, pero la condición que lo garantiza no estaba en la operación — así que una segunda decisión
+pisaba la primera EN SILENCIO, y dos tests ya escritos estaban en rojo por eso. Se arregló con una línea. Es el tipo
+de cosa que el proyecto persigue desde el principio: una promesa escrita que el código no cumplía.
+
+**Estado**: 283 comprobaciones del proyecto y 165 de la interfaz, clippy limpio, y el chequeo de tipos —que ahora mira
+los componentes— con 0 errores y 0 avisos. **Residual declarado y no escondido**: la garantía de "primero persiste,
+después decide" está cubierta por comportamiento, pero no es falsificable de forma independiente, porque la guarda
+anterior corre antes que las dos escrituras; lo que la sostiene de verdad es el chequeo posterior al escaneo.
+
 ## Delivery slices (recorded on request)
 
 **Slice boundary, recorded here because the branch has grown past any PR-sized unit**: `feat/phase-1-core`
