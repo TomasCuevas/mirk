@@ -1321,6 +1321,49 @@ en vez de afirmar una causa que no se probó, y el usuario confirmó que el comp
 **Estado final**: 255 comprobaciones del proyecto y 152 de la interfaz, clippy y tipos limpios, la base del
 usuario verificada antes y después (42 documentos, su título, su página 5) y la aplicación corriendo con todo.
 
+
+
+**L52 — el español con una sola voz, un campo que se declara siempre, y la limpieza de la cadena muerta (con un agujero del propio proyecto anotado en el camino).**
+
+Tres unidades chicas verificadas y commiteadas juntas: el catálogo español deja de hablarle al lector con dos
+voces (once valores reescritos al registro neutro, con un test que vigila tres FORMAS —terminaciones verbales,
+pronombres informales, imperativos al inicio de oración— y un meta-test que prueba que las palabras regionales
+NO se marcan, que es lo que protege la línea deliberada: quien lee esto es rioplatense y neutralizar su dialecto
+haría el producto más frío sin volverlo más correcto); un campo que la interfaz declaraba opcional pasa a ser
+obligatorio, porque el backend siempre lo manda; y se removió la cadena de estado de la acción de carpeta, que
+recorría la aplicación y tres pantallas hasta una tarjeta que ya no dibujaba nada desde que el usuario pidió
+sacar esas frases.
+
+**Dos briefs equivocados, en la misma dirección**: en los dos casos el padre eligió las superficies de memoria y
+se equivocó. En la cadena muerta pasaba por SEIS archivos y no tres (la aplicación le entregaba el estado a las
+tres pantallas, y dos de ellas lo reenviaban al componente compartido que alimentaba la tarjeta); el trabajador
+se detuvo en vez de dejar una remoción a medias, el padre aprobó los seis caminos derivados, y la completitud
+quedó PROBADA y no prometida: cero rastros en todo el frontend, la regla que la reemplaza en un solo lugar con
+sus dos ramas fijadas, y la prueba de pantalla que faltaba ahora existe.
+
+**Y lo que ese trabajador dejó, que vale más que el encargo**: la red de seguridad de este proyecto tiene un
+agujero donde viven los bugs de interfaz, y quedó escrito en su propia sección más abajo. Cuatro de los defectos
+de esta sesión fueron de cableado entre componentes.
+
+## A hole in this project's own checks (found while removing dead code, recorded the same day)
+
+**The type check does not look at the components.** The script runs over the logic files only, the declaration
+for component imports types them as an unknown value, and no Svelte-aware check is installed or run — the build
+does not check them either. So a component can be structurally broken: a required property nobody supplies, a
+property removed while a screen still passes it, a forward to something that no longer exists. Every check the
+project runs stays green, because the tests only render the paths somebody chose to exercise and the framework
+silently ignores unknown properties.
+
+**Why this matters more than a normal gap**: it is exactly where this session's interface defects lived. Four of
+them — the extra icon, the title reverting on screen, the page not coming back into its field, and the empty
+state that claimed to be empty — were in component wiring, and the safety net I was leaning on when I said "the
+tests will catch it" has its hole precisely there. The worker found it while refusing to leave a half-removal,
+because it could not rely on the checks to catch the damage.
+
+**To fix it properly, with the standard this project applies to everything else**: make the components part of
+what is checked, and PROVE it by breaking a component on purpose — a required property left unsupplied — and
+watching the check fail. A new check that has never been seen to fail is not a check.
+
 ## Delivery slices (recorded on request)
 
 **Slice boundary, recorded here because the branch has grown past any PR-sized unit**: `feat/phase-1-core`
