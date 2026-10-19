@@ -3154,6 +3154,50 @@ of real values cannot be mistyped, and it shows the reader who is on their shelf
   the filter's rules (compose with text and sort, clamp the page), the silent fallback, the two "nothing matches"
   sentences, a server-rendered check of the control, and a real selection in a simulated browser.
 
+### Specs — round 13: the editor's author picker, and Inicio without definitions (R40, R41, L70)
+
+Two reports from the same message.
+
+**R41 — Inicio's carousels stop explaining themselves.** Verbatim: *"debes quitar la descripcion que está
+debajo del titulo de cada carrusel en la pagina inicio, son innecesarias esas descripciones"*. The three
+sentences go, with no replacement. The **category's own screen keeps its definition** — one line on a screen
+that holds nothing else is not noise, and it is where a reader who disagrees with the list can see the rule that
+produced it — so `categoryDefinition` stays and only its use on Inicio is removed. The stale threshold stays
+reachable from the category screen, which is what B3 promised.
+
+**R40 — the editor's author suggestions are broken, and the user found the cause.** Verbatim: *"el selector de
+autor en la edicion de cada obra es muy malo, no funciona correctamente. No lista correctamente todos los
+autores, en ocasiones no lista ningun autor o lista algunos pocos"*, and then: *"solo aparecen los autores que
+esten en los libros de la pagina actual y no de todos los PDF disponibles y cargados"*.
+
+- **S1 — the suggestions come from the WHOLE library, not from the page the editor was opened on.** This is the
+  defect, and it is a scope bug: the editor lives in `BookGrid`, `BookGrid` derived its list from the `entries`
+  it was handed, and the library screen hands it one **page** (ten documents) while Inicio hands it a carousel
+  slice. So an author whose only document sat on page two did not exist. The list is now computed where the
+  whole listing lives and passed down.
+- **S2 — the list is a real `<select>`, not a `<datalist>`.** The `datalist` popup is not implemented by
+  WebKitGTK, the engine this window actually renders in (the same class of platform limitation the project
+  already recorded for `set_maximizable`), so even a complete list could open nothing. The text field stays
+  editable — the reader must still be able to type a new author — and the `<select>` is the way to reuse an
+  existing name.
+- **S3 — the list is sorted for the reader's locale**, like the filter's list, instead of first-seen order: it
+  is a list a person reads, and "Ávila" belongs before "Borges".
+- **S4 — one rule per list, and they are different rules.** The editor offers every author the reader has ever
+  used on a document — the resolved one **and** the reader's own (`userAuthor`) — because there the list is a
+  spelling suggestion. The library's filter offers only the authors cards **show**, because there a choice must
+  have a document behind it or it empties the shelf. Both are sorted with the locale.
+- **S5 — nothing else about the editor changes**: the same Cancel/Save pair, the same empty value meaning "no
+  author of my own", and the same single atomic write.
+
+### Tasks — round 13
+
+- **U26** R41 — the definition paragraph and its styles removed from Inicio, the guard that it cannot come back,
+  and the category screen's own definition left alone.
+- **U27** R40 — the suggestions computed from the whole listing and passed into `BookGrid`, `libraryAuthors`
+  sorted by locale, the `<datalist>` replaced by a `<select>` beside the text field, the catalogue string for
+  it, and the regression test the user's report names: an author whose only document is on page two is offered
+  in the editor opened from page one.
+
 **L45 — the carousels' order: the most recently read document first (U13/R29).** The user asked that
 *"el ultimo elemento que se haya leido siempre aparezca primero … de mas reciente a más antiguo"*. The order
 lives in the same pure selector that decides which documents a category holds, so the carousel, a category's
@@ -3643,3 +3687,56 @@ previa, descubierta acá, y la parte del orden se prueba sobre las funciones rea
 VERIFICACIÓN, corrida por mí y no tomada del reporte: **233** pruebas en 15 archivos, chequeo de tipos en 0 y 0,
 paquete reconstruido antes del binario y aplicación relanzada (pid 1394363). El árbol queda **sin commitear**,
 por la regla nueva del usuario: los commits se hacen cuando él confirma que está como lo quiere.
+
+**L70 — Inicio sin definiciones, y el selector de autor del editor: dos defectos, uno de ellos de alcance.**
+El usuario reportó dos cosas en un mensaje, y a la segunda le agregó después el dato que la cerraba.
+
+R41, PRIMERO, PORQUE ERA CHICO. *"debes quitar la descripcion que esta debajo del titulo de cada carrusel
+en la pagina inicio, son innecesarias esas descripciones"*. Las tres frases se fueron con sus estilos y sus
+claves de catálogo, y la guarda que queda afirma su **ausencia** para que no vuelvan sin que se note. La
+pantalla de cada categoría **conserva** su definición: una línea sola en una pantalla que no tiene otra cosa no
+es ruido, y es donde alguien que no está de acuerdo con la lista ve la regla que la produjo. El umbral de
+"hace mucho" queda alcanzable ahí, que es lo que B3 prometió. Mi primer intento borró el helper entero y rompió
+la pantalla de categoría; el test de esa pantalla lo dijo antes que yo, y el helper volvió con su comentario
+corregido para decir dónde se usa y por qué.
+
+R40, EL SELECTOR DEL EDITOR, Y SU DIAGNÓSTICO NO ERA EL QUE PARECÍA. Reporte: *"no lista correctamente todos
+los autores, en ocasiones no lista ningun autor o lista algunos pocos"*, y después: *"solo aparecen los autores
+que esten en los libros de la pagina actual"*. Había DOS defectos, y el suyo era el segundo en el orden en que
+yo los habría sospechado:
+
+1. **Alcance (el que encontró el usuario).** El editor vive en `BookGrid`, y `BookGrid` armaba la lista con las
+   entradas que recibía. En Biblioteca eso es **una página** —diez documentos— y en Inicio un tramo del
+   carrusel. Un autor cuyo único documento estaba en la página dos simplemente no existía para el editor. La
+   lista ahora se calcula donde vive el listado completo y baja como prop.
+2. **El motor.** Las sugerencias se dibujaban con `<datalist>`, y WebKitGTK —el motor de esta ventana— nunca
+   implementó ese desplegable. Aun con la lista completa no se abría nada. Se reemplazó por un `<select>`
+   real, como el del buscador que sí funciona, y el campo de texto sigue editable: escribir un autor nuevo
+   tiene que seguir andando.
+
+El `<select>` es un **selector**, no una segunda copia del valor: elegir un nombre llena el campo y la lista
+vuelve a "Elija un autor…", para que limpiar el campo y elegir el mismo nombre otra vez siga funcionando (un
+select que todavía lo mostrara no manda `change` en la segunda elección). Esa vuelta está pinneada por un test.
+
+DOS REGLAS DE LISTA, DELIBERADAMENTE DISTINTAS, y ahora los dos comentarios se apuntan entre sí: `libraryAuthors`
+(el editor) ofrece también `userAuthor`, porque ahí la lista es una sugerencia de ortografía; `filterAuthors`
+(el buscador) ofrece sólo el autor que las tarjetas muestran, porque ahí una entrada sin documento detrás vacía
+el estante. Las dos se ordenan por el idioma del lector, y `libraryAuthors` dejó de estar en orden de aparición:
+"Ávila" va antes que "Borges".
+
+EL WORKER DEJÓ DOS COSAS ANOTADAS Y YO CERRÉ UNA. La primera: en Inicio y en la pantalla de categoría la lista
+se ordenaba con el locale por defecto (`"en"`) porque `locale` vive en `App.svelte`, fuera de sus superficies;
+el efecto observable es nulo para los casos que S3 nombra, pero no era literalmente el locale del lector. Lo
+cerré yo: `locale` baja desde `App.svelte` a las dos pantallas y de ahí a `libraryAuthors`. La segunda queda
+como residual: que la lista del editor se vea bien en pantalla es del usuario.
+
+VERIFICACIÓN, corrida por mí: **239** pruebas en 15 archivos (antes 233: el worker sumó seis, entre ellas la de
+regresión que reproduce el reporte con once documentos y un autor que sólo existe en la página dos),
+chequeo de tipos en 0 y 0, paquete reconstruido antes del binario y aplicación relanzada (pid 1418717). El
+worker observó cuatro rojos antes de implementar —el orden por locale dos veces, el `<datalist>` todavía en el
+markup, y la regresión del autor de la página dos— y falsificó dos veces después, las dos con archivos
+restaurados idénticos: quitar el `list.value = ""` (rojo: `expected 'Jorge Luis Borges' to be ''`) y volver a
+pasarle a la grilla los autores de la página (`expected [ '', 'Page One Author' ] to include 'Only On Page
+Two'`).
+
+SIN COMMITEAR, por la regla del usuario: esto queda en el árbol de trabajo hasta que él lo apruebe.
