@@ -3226,3 +3226,33 @@ la portada: la posición del lector es la última palabra, y el automático no l
 Lo que la pieza necesita, para cuando llegue: el bucle que observa (crates/oct-desktop/src/track.rs) y la
 superficie donde el lector escribe. No es un control suelto: es precedencia, y la precedencia se prueba en el
 bucle, no en la pantalla.
+
+**L63 — las revisiones nativas, por fin: aprobadas, y con un defecto crítico real en el medio.**
+El usuario pidió reintentar y esta vez el relay del host funcionó: los tres revisores corrieron —34 KB de prompt y
+unos 2 KB de resultado cada uno— y el refutador también. El refutador devolvió UN hallazgo grave y propio del
+candidato, y tenía razón: en la mitad de interfaz de L61 la cola preguntaba UNA sola vez, antes de que existiera
+la respuesta, y nunca volvía a preguntar, mientras toda respuesta que no fuera "instalado" se volvía falsa. Un
+fallo de lectura pasajero se convertía así en una afirmación permanente de que esta máquina no puede saber qué
+documentos están abiertos: exactamente la frase que el backend se escribió para no decir nunca.
+
+La corrección son cuatro creencias en vez de un flag —unknown, installed, unsupported, unavailable— y una regla:
+sólo "unsupported", que es una plataforma que no implementa el detector, habilita hablar de la máquina. Se
+pregunta hasta obtener una respuesta definitiva, y un fallo nunca degrada una respuesta definitiva. Queda pinneado
+por un test que hace lo que el hallazgo pedía: una sonda que falla seguida de una que responde, y la oración que
+se recupera en vez de quedarse pegada.
+
+Dos cosas operativas que costaron intentos y quedan anotadas: el plan de corrección se declaró en 114 líneas de
+las 121 de presupuesto —la primera versión medía 154 y hubo que recortar prosa, no código— y, como la revisión es
+de rango commiteado, la corrección tuvo que commiteárse (46a8b0c) porque el proveedor responde
+corrected_candidate_unavailable a un árbol de trabajo sin commitear. El binding del validador dirigido se rechaza
+como "stale" si no se envía el objeto COMPLETO del slot, validationRequest incluido; omitirlo parece un problema
+de frescura y costó dos intentos.
+
+El validador dirigido aprobó el candidato corregido y el reconocimiento quemó la autoridad (revisión 8eac6d7e,
+linaje review-8f90dc0ff360d6b8, 9 archivos y 241 líneas de alcance original). Quedan DOS hallazgos informativos,
+explícitamente no bloqueantes y jamás razón para repetir la revisión: R2-001 (legibilidad, App.svelte:69-71) y
+R4-transient-capability-cache (resiliencia, App.svelte:188-193).
+
+T12 CERRADO POR DECISIÓN DEL USUARIO, en sus propias palabras: "que no descubra, puede abrumar al usuario con
+tantos documentos". La biblioteca sigue siendo lo que el lector eligió vigilar, y nada más. El tray queda
+pendiente de una persona, y los tests que clickeen esperan su decisión sobre una dependencia de DOM.
