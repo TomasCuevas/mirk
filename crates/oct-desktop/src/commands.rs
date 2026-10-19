@@ -13,6 +13,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use oct_core::domain::CoverChoice;
 use oct_core::{
@@ -543,6 +544,80 @@ fn cover_from_page(
             Err(error.into())
         }
     }
+}
+
+// --- L60: the preview of a suggestion, which has no row to key a cache on ---
+
+/// A unique temporary path for one preview render.
+///
+/// The process id separates concurrent runs of the application and the serial separates concurrent
+/// renders inside one run. Both are only names: nothing is ever found again by this name, which is
+/// exactly why the preview needs no cache key it could collide on.
+fn preview_file() -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("oct-preview-{}-{serial}.png", std::process::id()))
+}
+
+/// The first page of a document that is not in the library yet, as a PNG data URL (L60).
+///
+/// A suggestion is a path the application observed open, not a row: it has no id, so it has no name
+/// in the cover cache document_cover keeps (a row id and a page). Inventing one from the path would
+/// mean either a hash — which can one day serve one document's page for another — or a sanitised
+/// path, which has no useful length bound. So the preview is rendered to a temporary file, read
+/// back and discarded: nothing is cached, nothing can go stale, and nothing can be attributed to the
+/// wrong document. The cost is one render per card, and a card asks once.
+///
+/// Page zero is the FIRST page, the same default []CoverChoice] gives a document whose reader has
+/// chosen nothing — which is every suggested document, since nobody can have chosen a page for a
+/// file that is not in the library (R32).
+///
+/// `None` is the answer document_cover already gives for a document it cannot read: gone, not a PDF,
+/// encrypted, unreadable. The card keeps its placeholder and the reason goes to stderr. A failure of
+/// the application itself — no pdfium — stays an error, because reporting "no cover" when the
+/// renderer could not even be loaded would be a lie about the document.
+pub fn suggestion_cover(document: &Path) -> Result<Option<String>, OctError> {
+    let pdfium = oct_scan::bind_pdfium_library().map_err(|error| {
+        eprintln!(
+            "the preview of {} could not be produced: {error}",
+            display_path(document)
+        );
+        error
+    })?;
+
+    let preview = preview_file();
+    // Read FIRST, then clean up. The first version of this deleted the temporary files before
+    // reading the page it had just rendered, and the test said so in one line: "could not be read
+    // back: No such file or directory".
+    let result = match cover_for(&pdfium, &preview, document, 0) {
+        Ok(CoverOutcome::Ready { path }) => match fs::read(&path) {
+            Ok(bytes) => Ok(Some(png_data_url(&bytes))),
+            Err(error) => {
+                eprintln!(
+                    "the preview of {} could not be read back: {error}",
+                    display_path(document)
+                );
+                Err(error.into())
+            }
+        },
+        Ok(CoverOutcome::Unavailable { reason }) => {
+            eprintln!("no preview for {}: {reason}", display_path(document));
+            Ok(None)
+        }
+        Err(error) => {
+            eprintln!(
+                "the preview of {} could not be produced: {error}",
+                display_path(document)
+            );
+            Err(error)
+        }
+    };
+
+    // Whatever happened, the temporary files do not outlive the request.
+    let _ = fs::remove_file(&preview);
+    let _ = fs::remove_file(preview.with_extension("tmp"));
+
+    result
 }
 
 /// The document with `id`, cover choice included, or `None` when the id names nothing.
@@ -1844,6 +1919,45 @@ mod tests {
         set_cover_page(&store, id, Some(99)).expect("choose a page the PDF does not have");
         assert_eq!(
             document_cover(&store, id, &directory.path).expect("no cover, no error"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_suggested_document_shows_its_first_page() {
+        // L60: a suggestion is a path, not a library row — the reader has not accepted it yet — so its
+        // cover cannot come from the row-keyed cache document_cover uses. This test never opens a
+        // store at all, which is the point: the preview must work for a document the library has
+        // never seen.
+        let directory = TempDir::new("suggestion-cover");
+        let pdf = directory.path.join("suggested.pdf");
+        fs::write(
+            &pdf,
+            include_bytes!("../../oct-scan/tests/fixtures/with-info-metadata.pdf"),
+        )
+        .expect("write the fixture");
+
+        let cover = suggestion_cover(&pdf)
+            .expect("the preview is produced")
+            .expect("a readable PDF has a first page");
+        assert!(cover.starts_with("data:image/png;base64,"), "{cover}");
+    }
+
+    #[test]
+    fn a_suggested_path_that_cannot_be_read_is_no_cover_and_not_an_error() {
+        // The file is not a PDF, or is no longer there: the card keeps its placeholder. An error here
+        // would put a message on screen for a fact about the file, which is what document_cover
+        // already refuses to do for a library document.
+        let directory = TempDir::new("suggestion-cover-none");
+        let not_a_pdf = directory.path.join("notes.txt");
+        fs::write(&not_a_pdf, b"this is not a PDF").expect("write the file");
+
+        assert_eq!(
+            suggestion_cover(&not_a_pdf).expect("no cover, no error"),
+            None
+        );
+        assert_eq!(
+            suggestion_cover(&directory.path.join("gone.pdf")).expect("no cover, no error"),
             None
         );
     }

@@ -258,6 +258,21 @@ async fn document_cover(id: i64) -> Result<Option<String>, String> {
     .map_err(|error| format!("the cover task could not run: {error}"))?
 }
 
+/// Returns the first page of a suggested document as a data URL, or `null` when it has none (L60).
+///
+/// The path comes from the suggestion queue, which is the application's own observation. Nothing is
+/// stored: a preview is a look at a file the reader has not accepted, and if they accept it the
+/// library produces its own cover. The work runs off the interface thread for the same reason a
+/// library cover does — rendering is CPU-bound and pdfium is single-threaded behind the binding.
+#[tauri::command]
+async fn suggestion_cover(path: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::suggestion_cover(Path::new(&path)).map_err(error_message)
+    })
+    .await
+    .map_err(|error| format!("the preview task could not run: {error}"))?
+}
+
 /// Scans `folder` into the library and returns the report, including any per-file failure.
 #[tauri::command]
 fn scan_folder(folder: String) -> Result<ScanReportView, String> {
@@ -797,6 +812,7 @@ fn main() {
             choose_cover_image,
             remove_cover_image,
             document_cover,
+            suggestion_cover,
             scan_folder,
             progress_providers,
             list_suggestions,
