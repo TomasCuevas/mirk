@@ -3120,6 +3120,40 @@ verde dependiendo el porcentaje"*.
   screenshot, and "stays green, and keeps moving, from 70 % to the end". The monotonicity rule moved from a
   channel to the hue, because the deepening green makes the green channel fall by design.
 
+### Specs — round 12: filter the library by author (R39, L69)
+
+The user's request, verbatim: *"ahora otra feature que quiero agregar es la posibilidad de poder filtrar por
+autor"*. The shape was their decision too, asked before any code: a **selector of the authors that really exist
+in the library** — with an "all" entry — rather than making the existing text box also search the author. A list
+of real values cannot be mistyped, and it shows the reader who is on their shelf.
+
+- **S1 — the library screen gains an author selector beside the existing text filter and sort.** It lists the
+  authors present in the listing, plus an "all" entry, and "all" is what it starts on. It does not replace the
+  text filter and it does not replace the sort: the three compose.
+- **S2 — the list is the authors the CARDS show.** That is `entry.author`, which the core already resolved to the
+  reader's author when they set one and the document's own otherwise — never `userAuthor`, never a raw metadata
+  field. Unique, trimmed, blanks excluded, and ordered for the reader's locale so the list reads alphabetically
+  to the person looking at it, not by code unit.
+- **S3 — choosing an author narrows the listing, together with the text filter and the sort.** Text first, then
+  author, then order — one pipeline, so no two controls can disagree about what is on screen. Paging keeps
+  working over the narrowed listing, and the page is clamped when the narrowing shrinks it.
+- **S4 — a chosen author that is no longer in the library falls back to "all", and the screen says nothing about
+  it.** An edit or a rescan can remove the only document by that author; leaving the stale value selected would
+  show an empty library caused by a choice the reader cannot see is impossible. The fallback is silent because
+  it is not an error: the shelf changed.
+- **S5 — the "nothing matches" sentence names what was filtered.** With an author and no text it says no document
+  by that author; with text it keeps the sentence that names the query. A sentence that says `No document matches
+  ""` is a sentence nobody wrote.
+- **S6 — no backend change and no new dependency.** The listing already carries the resolved author; the filter is
+  a pure function over the entries the interface already holds.
+
+### Tasks — round 12
+
+- **U25** R39 — `filterAuthors` and `filterByAuthor` in `library.ts`, the selector on the library screen with its
+  two catalogue strings, and the tests: the list's rules (resolved author, unique, trimmed, blank-free, ordered),
+  the filter's rules (compose with text and sort, clamp the page), the silent fallback, the two "nothing matches"
+  sentences, a server-rendered check of the control, and a real selection in a simulated browser.
+
 **L45 — the carousels' order: the most recently read document first (U13/R29).** The user asked that
 *"el ultimo elemento que se haya leido siempre aparezca primero … de mas reciente a más antiguo"*. The order
 lives in the same pure selector that decides which documents a category holds, so the carousel, a category's
@@ -3561,3 +3595,51 @@ than 125`).
 RESIDUAL: el tono exacto sigue siendo gusto. Con la captura del 76 % como referencia, ahora hay verde donde el
 usuario lo pidió; si el tramo 60–70 % (oliva que vira a verde) le resulta incómodo, se mueve el amarillo o el
 verde en `PROGRESS_STOPS` y las guardas de paso, tono y luminancia avisan si el ajuste rompe algo.
+
+**L69 — el selector de autor, y tres reglas que no eran obvias.**
+Pedido: *"ahora otra feature que quiero agregar es la posibilidad de poder filtrar por autor"*, con la forma
+decidida por el usuario antes de escribir código: **selector de los autores que existen en la biblioteca**, con
+una entrada "todos", en vez de hacer que el buscador de texto mire también el autor. Un valor elegido de una
+lista real no se puede tipear mal, y la lista le muestra al lector quién está en su estante.
+
+LA LISTA ES LA DE LAS TARJETAS, y eso es una regla, no un detalle. `filterAuthors` lee `entry.author` —el autor
+ya resuelto por el core: el del lector cuando puso uno, si no el del documento— y **nunca** `userAuthor`. La
+diferencia importa porque `libraryAuthors` (que ya existía para las sugerencias del editor) sí ofrece las dos
+cosas: ahí un nombre a medio escribir es útil, mientras que acá la lista es el conjunto de documentos entre los
+que el lector elige, y una entrada que ninguna tarjeta respalda sería una elección que vacía el estante. No se
+tocó `libraryAuthors` ni una coma. La deduplicación es por el valor recortado, y el orden es por el idioma del
+lector: una lista que se lee tiene que poner "Ávila" antes que "Borges", y el orden por unidad de código lo pone
+después de todo nombre ASCII.
+
+EL FALLBACK ES SILENCIOSO, Y ES UNA FUNCIÓN PURA. Un autor elegido puede irse de la biblioteca con la pantalla
+abierta —una edición o un reescaneo borra el único documento suyo—. `authorFilter` resuelve la elección a
+"todos" y no pasa nada más: ni mensaje ni aviso, porque no es un error, cambió el estante. Dejar el valor viejo
+mostraría una biblioteca vacía por una elección que el lector no puede ver como imposible, y dejaría al selector
+afirmando un valor que ya no está entre sus opciones. Y es una función derivada del listado actual, así que el
+fallback ocurre en cada render en vez de necesitar un efecto que vigile el cambio.
+
+LA FRASE DE "SIN COINCIDENCIAS" NOMBRA LO QUE SE FILTRÓ. Con texto en el campo nombra la consulta; sólo con el
+campo vacío nombra el autor; y sin ninguna de las dos cosas **no dice nada** (`null`), porque no hay filtro que
+culpar: `Ningún documento coincide con ""` es una frase que nadie escribió, salida de pasarle la consulta a la
+frase sin mirar si había una. La rama del autor hoy no es alcanzable desde este selector —la lista sale de las
+mismas entradas, y una elección que se va cae a "todos" antes de poder filtrar— y se responde igual, porque una
+regla que sólo es correcta donde el marcado actual la alcanza es una regla esperando estar mal.
+
+EL WORKER HIZO LA MITAD FÁCIL Y DEJÓ LA EVIDENCIA. `library.ts` ganó cuatro funciones puras probadas por quince
+tests; la pantalla ganó el tercer control y un solo pipeline (texto → autor → orden → página); el catálogo ganó
+tres claves en los dos idiomas, en registro neutro. El test de navegador simulado elige un autor de verdad y
+afirma qué tarjetas quedan, qué líneas de autor dibujan y qué dice el contador — no toca el estado del
+componente. Dos falsificaciones suyas, ambas con rojo observado y revertidas: comparar el autor sin recortar
+(rojo: "matches the trimmed name…") y quitar el fallback (dos rojos).
+
+DOS COSAS QUE EL PROPIO WORKER DECLARÓ Y QUE YO VERIFIQUÉ. La primera: el efecto en el DOM del fallback no está
+pinneado, porque `mount` recibe sus props una sola vez y el test no puede cambiar el listado bajo un componente
+vivo; el `value={chosenAuthor}` es unidireccional a propósito, así que un valor viejo no puede quedarse en la
+caja, pero nada lo observa —residual anotado, no escondido—. La segunda: happy-dom responde `null` a
+`querySelector(":checked")` aunque haya una opción seleccionada, y Svelte lee el binding de un select por ese
+selector, así que el binding del control de ORDEN no se puede ejercitar en el proyecto dom; es una limitación
+previa, descubierta acá, y la parte del orden se prueba sobre las funciones reales.
+
+VERIFICACIÓN, corrida por mí y no tomada del reporte: **233** pruebas en 15 archivos, chequeo de tipos en 0 y 0,
+paquete reconstruido antes del binario y aplicación relanzada (pid 1394363). El árbol queda **sin commitear**,
+por la regla nueva del usuario: los commits se hacen cuando él confirma que está como lo quiere.
