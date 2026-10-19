@@ -3174,3 +3174,38 @@ RESIDUAL, stated rather than hidden: that the first page appears ON SCREEN is th
 evidence is a test that renders the repository's four-page fixture through pdfium and comes back with a data
 URL, plus one live command registered next to document_cover; a card whose file vanished keeps its
 placeholder and writes the reason to stderr.
+
+**L61 — el hueco que yo mismo dejé marcado: la cola no podía distinguir "no hay nada" de "no sé nada".**
+El productor de sugerencias ya propagaba NotSupported y su propio comentario exigía que quien llama pudiera decir
+que la capacidad falta; el registro de proveedores, en cambio, sólo listaba los de progreso, y
+observe_open_documents no estaba expuesto. En una máquina sin detector la cola se veía vacía, que es
+exactamente la buena noticia que el proyecto no se permite inventar.
+
+suggestion_detector PREGUNTA en lugar de leer una declaración, y eso es una decisión, no un atajo: el trait
+OpenDocumentDetector sólo ofrece un id, una plataforma y los documentos que ve, así que no puede declararse. La
+pregunta además responde lo único que la pantalla necesita saber: ¿se puede creer en una cola vacía acá?
+
+La respuesta se clasifica en tres y no se aplana en dos: unsupported es una capacidad que la plataforma no
+implementa y la cola nunca se llenará; unavailable es un detector que falló esta vez y puede contestar en la
+próxima. Las dos cosas —y no sólo la primera— tienen que impedir que la pantalla diga que la cola está vacía.
+Ninguna de las dos es un error que haya que levantar, porque ninguna es un defecto de esta aplicación.
+
+Del lado de la interfaz la regla quedó en la función pura: con la lista vacía y la capacidad en falso, la
+oración habla de la máquina; con elementos, ganan los elementos, porque un elemento es un hecho y un informe de
+capacidad es contexto; y unknown NO es falso, porque una respuesta que no llegó no es una capacidad que falta.
+Se pregunta una vez por corrida y no en cada vuelta del sondeo: la respuesta no cambia mientras la aplicación
+vive, y preguntar recorre la tabla de procesos.
+
+Tres falsificaciones, todas con rojo observado y ambos archivos restaurados idénticos (commands.rs 0a35ba53…,
+suggestions.ts 65d770bb…): el detector inexistente reportado como instalado, el detector fallado reportado como
+funcionando, y la oración de la capacidad que nunca se elige — el rojo fue literal, "No document is waiting for
+a decision" donde correspondía hablar de la máquina.
+
+Verificación: oct-desktop en 86 tests (83 más los tres de acá), las trece suites del espacio de trabajo en
+verde, clippy limpio, 190 tests de interfaz, chequeo de tipos en 0 y 0, el paquete reconstruido antes que el
+binario, y la aplicación relanzada. Que el detector funcione en la máquina del usuario es la evidencia de que
+la oración nueva no aparece donde no debe: su cola sigue hablando de documentos.
+
+DECISIÓN DE ENTREGA, tomada por el usuario: seguir trabajando en la rama, sin pull request por ahora; la
+estrategia se decide más adelante. Queda anotado que en L57–L60 el registro viajó dentro del commit del código
+en vez de en su propio commit como indica la convención del repositorio; desde L61 vuelven a ir separados.
