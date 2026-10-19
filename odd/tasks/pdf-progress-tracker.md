@@ -3082,10 +3082,12 @@ verde dependiendo el porcentaje"*.
 - **S1 — the FILL changes colour; the bar does not.** The coloured element is the span that stands for what was
   read. The track keeps its neutral grey, so the empty part of the bar still says "nothing read here" without
   competing with the colour that means something.
-- **S2 — one continuous ramp, corrected by L67 (was: four bands at the four quarters).** The four colours the
-  user named are the ramp's **landmarks**, not four states: red at 0 %, orange at ⅓, yellow at ⅔, green at 100 %,
-  and every fraction in between gets its own colour, interpolated in **OKLab** so the intermediate tones keep
-  their chroma instead of turning into muddy olive the way sRGB blending does. The rendered output is plain
+- **S2 — one continuous ramp, corrected by L67 and positioned by L68 (was: four bands at the four quarters).**
+  The four colours the user named are the ramp's **landmarks**, not four states: red at 0 %, orange at 28 %,
+  yellow at 50 %, **green at 70 %** — the user's threshold, with their screenshot: a document at 76 % was olive
+  and read as "still yellow" — and a deepened green at 100 %, so the last stretch keeps moving instead of
+  flattening on one green. Every fraction in between gets its own colour, interpolated in **OKLab** so the
+  intermediate tones keep their chroma instead of turning into muddy olive the way sRGB blending does. The rendered output is plain
   `rgb()`, so the perceptual work happens in code that can be tested rather than in the browser. The user's
   correction, verbatim: *"no quiero que sean colores fijos, quiero que se vayan transformando poco a poco a
   medida que el porcentaje avanza, no que cambie bruscamente de un rojo a naranja y despues de naranja a
@@ -3113,6 +3115,10 @@ verde dependiendo el porcentaje"*.
   the colour on `ProgressView` and inline on the fill, and the tests: the four landmarks, the measured maximum
   step between neighbouring hundredths, monotonicity, the luminance ceiling, the clamps, and two neighbouring
   readings drawn in two different colours.
+- **U24** R38/S2 positioned by L68 — green moved to 70 %, a fifth stop so the top of the ramp keeps darkening,
+  and three tests: the landmarks at their new fractions, the 70 % threshold with the 76 % case from the
+  screenshot, and "stays green, and keeps moving, from 70 % to the end". The monotonicity rule moved from a
+  channel to the hue, because the deepening green makes the green channel fall by design.
 
 **L45 — the carousels' order: the most recently read document first (U13/R29).** The user asked that
 *"el ultimo elemento que se haya leido siempre aparezca primero … de mas reciente a más antiguo"*. The order
@@ -3518,3 +3524,40 @@ inline del relleno (dos rojos, `expected null to be 'rgb(90, 120, 42)'`).
 
 RESIDUAL: que la rampa se vea bien en la pantalla del usuario sigue siendo suyo confirmarlo. Un ajuste de tono
 son cuatro hex en `PROGRESS_STOPS`, y las guardas de luminancia y monotonía avisan si el ajuste rompe algo.
+
+**L68 — el verde empieza en el 70 %, y la corrección costó dos reglas.**
+El usuario mandó captura y número: *"siento que el verde ya deberia de comenzar desde el 70%, ya que elementos
+que van por encima del 70% se ven muy amarillos aun"*, con `Data Structures & Algorithms` al 76 % en un oliva
+que, efectivamente, no se lee como verde. La captura se miró antes de tocar nada, y el diagnóstico coincide con
+el número: 76 % estaba a un cuarto del camino entre el amarillo (⅔) y el verde (100 %), así que era ámbar con
+un poco de verde.
+
+LAS PARADAS SE MOVIERON, y no sólo el verde: rojo 0 %, naranja **28 %**, amarillo **50 %**, verde **70 %**. Mover
+sólo el verde habría comprimido el tramo amarillo→verde a quince puntos y hecho que la rampa cambiara más rápido
+justo donde el usuario pedía calma. Con esta distribución el paso máximo entre dos documentos vecinos es **11
+unidades por canal** (antes 9, con las bandas 115): el tramo amarillo→verde ahora ocupa veinte puntos y el resto
+se reparte antes. A 76 % el relleno es `#2b762f`, verde sin discusión.
+
+UNA QUINTA PARADA, Y ES UNA DECISIÓN. Si el verde llegara al 70 % y se quedara igual hasta el 100 %, la rampa
+dejaría de moverse exactamente donde vive el último tramo de un libro largo: el color pasaría a ser una etiqueta
+de tercios y no una medida. Así que del 70 al 100 % el verde se **profundiza** (`#2e7d32` → `#1e5b22`): sigue
+siendo verde, y sigue diciendo cuánto falta. El ancho ya lo dice también; el color no deja de decirlo.
+
+DOS REGLAS TUVIERON QUE CORREGIRSE, y las dos eran mías. La primera: el test de monotonía medía el canal verde,
+que ahora **baja** por diseño al profundizarse — la regla correcta es el **tono**, que nunca retrocede (3° a
+124°) y que además es lo que el ojo lee como "¿estoy más cerca?". La segunda: el umbral de suavidad estaba en 10
+unidades por centésimo, calibrado contra la distribución anterior; con la nueva el máximo medido es 11 y el
+umbral subió a 15, con el comentario diciendo que 15 es la línea entre una rampa y un juego de estados, no un
+número ajustado a la paleta de hoy. Un umbral que se mueve porque el número no da es exactamente lo que hay que
+saber distinguir de un umbral que se mueve porque la regla cambió.
+
+VERIFICACIÓN. Interfaz en **211** pruebas (las 209 anteriores, más dos de la posición del verde y del tramo
+final), chequeo de tipos en 0 y 0, paquete reconstruido antes que el binario, y la aplicación relanzada
+(pid 1354497). Falsificaciones, las dos con rojo observado y `library.ts` restaurado idéntico (f7c2ea0e…): mover
+el verde a 85 % (tres rojos —`expected 'rgb(109, 116, 37)' to be 'rgb(46, 125, 50)'`, el umbral del 70 % y el
+tramo final—) y quitar la profundización del último tramo (dos rojos, el hito final y `expected 125 to be less
+than 125`).
+
+RESIDUAL: el tono exacto sigue siendo gusto. Con la captura del 76 % como referencia, ahora hay verde donde el
+usuario lo pidió; si el tramo 60–70 % (oliva que vira a verde) le resulta incómodo, se mueve el amarillo o el
+verde en `PROGRESS_STOPS` y las guardas de paso, tono y luminancia avisan si el ajuste rompe algo.
