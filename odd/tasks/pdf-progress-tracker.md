@@ -3256,3 +3256,34 @@ R4-transient-capability-cache (resiliencia, App.svelte:188-193).
 T12 CERRADO POR DECISIÓN DEL USUARIO, en sus propias palabras: "que no descubra, puede abrumar al usuario con
 tantos documentos". La biblioteca sigue siendo lo que el lector eligió vigilar, y nada más. El tray queda
 pendiente de una persona, y los tests que clickeen esperan su decisión sobre una dependencia de DOM.
+
+**L64 — el clic que faltaba: el guardado del editor ya tiene un test que aprieta el botón.**
+El usuario autorizó explícitamente una dependencia para esto —"si se requiere una dependencia para mejorar el
+alcance y la efectividad de los test, adelante"— y era el único modo honesto de cerrarlo: el resto de la suite
+renderiza del lado del servidor, así que dibuja el HTML y no ejecuta ni un clic ni el momento de montar. Quedaba
+sin cubrir el eslabón que lleva la respuesta del lector al almacén: un cambio futuro podía borrar esa llamada, o
+duplicarla y escribir dos veces, con todo en verde.
+
+Entró happy-dom (21.0.3) y el test monta el editor por su costura de render (initialEditing), aprieta Guardar de
+verdad y afirma el contrato: UN solo comando que lleva título y autor juntos —la mitad atómica de L55—, una sola
+escritura por clic, y un guardado que falla que deja el editor abierto y el motivo a la vista. El guardián real de
+Tauri no se simula: el test pone el global que runningInTauri mira, y la función corre de verdad.
+
+Dos cosas que este archivo me enseñó a la mala, y quedan escritas para no repetirlas. La primera: la suite fija
+environment node, así que Svelte se resuelve en su build de servidor y mount directamente no existe; la
+configuración pasó a DOS proyectos de vitest —node para los tests puros, happy-dom con condiciones de navegador
+para los de clic— para que ninguno tome prestada una capacidad que no necesita. La segunda es más importante: mi
+PRIMERA versión del test pasaba igual con dos escrituras, porque contaba las llamadas en una carrera contra la
+segunda. Un test que pasa contra el defecto no prueba nada, y se descubrió falsificándolo, no leyéndolo. Ahora
+espera el final observable del guardado —el editor que se cierra— y sólo entonces cuenta: con dos escrituras
+falla con "expected [ …(2) ] to have a length of 1 but got 2".
+
+Falsificaciones, las dos con rojo observado y BookGrid.svelte restaurado idéntico (66356a51…): la escritura
+duplicada y el guardado fallido que cierra el editor. Verificación: 193 tests de interfaz en 13 archivos,
+chequeo de tipos en 0 y 0, paquete reconstruido antes que el binario, y la aplicación relanzada.
+
+QUEDAN DOS HALLAZGOS INFORMATIVOS DE LA REVISIÓN, nombrados y sin acción posible hoy: R2-001 (legibilidad,
+App.svelte:69-71) y R4-transient-capability-cache (resiliencia, App.svelte:188-193). El proveedor dio sus
+identificadores, severidad y ubicación, pero no el texto del hallazgo, así que actuar sobre ellos sería adivinar;
+se registran como trabajo posterior y no como razón para repetir la revisión. El tray quedó verificado por el
+usuario: cerró desde el ícono y el chequeo no devolvió ningún proceso vivo.
