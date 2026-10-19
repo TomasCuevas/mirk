@@ -273,6 +273,15 @@ async fn suggestion_cover(path: String) -> Result<Option<String>, String> {
     .map_err(|error| format!("the preview task could not run: {error}"))?
 }
 
+/// Reports whether this machine can say which documents are open (R4).
+///
+/// The queue's own capability. It is what keeps an empty queue from looking like good news on a
+/// machine that has no detector, which is the case the producer's own doc comment names.
+#[tauri::command]
+fn suggestion_detector() -> commands::DetectorView {
+    commands::suggestion_detector(oct_platform::backends().open_documents.as_ref())
+}
+
 /// Scans `folder` into the library and returns the report, including any per-file failure.
 #[tauri::command]
 fn scan_folder(folder: String) -> Result<ScanReportView, String> {
@@ -813,6 +822,7 @@ fn main() {
             remove_cover_image,
             document_cover,
             suggestion_cover,
+            suggestion_detector,
             scan_folder,
             progress_providers,
             list_suggestions,

@@ -723,6 +723,47 @@ pub fn provider_registry() -> Vec<ProviderView> {
         .collect()
 }
 
+// --- L61: whether this machine can say which documents are open at all ---
+
+/// Whether the machine can report the documents that are open, as the interface must see it (R4).
+///
+/// Without this, an empty queue and a machine with no detector are the same screen: "nothing is
+/// waiting" would be a claim the application cannot support, and the reader would have no reason to
+/// look again. The producer propagates the same fact as OctError::NotSupported, and this is its
+/// reader-facing half.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectorView {
+    /// The detector's own identifier, so the screen can name which one answered.
+    pub id: String,
+    /// "installed", "unsupported" or "unavailable" — whether an empty queue can be believed.
+    pub availability: String,
+}
+
+/// Asks the detector once and reports what it said.
+///
+/// The answer comes from asking rather than from a declaration, because OpenDocumentDetector has no
+/// way to declare itself — its trait offers an id, a platform and the documents it sees, and nothing
+/// else. Asking also answers the only question the screen actually has: can an empty queue be
+/// believed on this machine?
+///
+/// The failure is classified rather than flattened: a capability the platform does not implement is
+/// unsupported and stays empty forever, while a detector that failed this time is unavailable and may
+/// answer on the next ask. Both must keep the screen from saying the queue is empty. Neither is an
+/// error to raise, because neither is a defect of this application.
+pub fn suggestion_detector(detector: &dyn OpenDocumentDetector) -> DetectorView {
+    let availability = match detector.open_documents() {
+        Ok(_) => "installed",
+        Err(OctError::NotSupported { .. }) => "unsupported",
+        Err(_) => "unavailable",
+    };
+
+    DetectorView {
+        id: detector.id().to_string(),
+        availability: availability.to_string(),
+    }
+}
+
 // --- The suggestion queue (R4) ---------------------------------------------------------------
 //
 // The queue is the one place the application observes documents the reader did not nominate. It is
@@ -1959,6 +2000,77 @@ mod tests {
         assert_eq!(
             suggestion_cover(&directory.path.join("gone.pdf")).expect("no cover, no error"),
             None
+        );
+    }
+
+    /// The three answers a detector can give, as three collaborators rather than one flag.
+    struct DetectorAnswering;
+    impl OpenDocumentDetector for DetectorAnswering {
+        fn id(&self) -> &'static str {
+            "answering"
+        }
+        fn platform(&self) -> Platform {
+            Platform::Linux
+        }
+        fn open_documents(&self) -> Result<Vec<OpenDocument>, OctError> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct DetectorUnsupported;
+    impl OpenDocumentDetector for DetectorUnsupported {
+        fn id(&self) -> &'static str {
+            "unsupported"
+        }
+        fn platform(&self) -> Platform {
+            Platform::Linux
+        }
+        fn open_documents(&self) -> Result<Vec<OpenDocument>, OctError> {
+            Err(OctError::NotSupported {
+                capability: "open-document detection",
+                platform: Platform::Linux,
+            })
+        }
+    }
+
+    struct DetectorFailing;
+    impl OpenDocumentDetector for DetectorFailing {
+        fn id(&self) -> &'static str {
+            "failing"
+        }
+        fn platform(&self) -> Platform {
+            Platform::Linux
+        }
+        fn open_documents(&self) -> Result<Vec<OpenDocument>, OctError> {
+            Err(std::io::Error::other("the process table could not be read").into())
+        }
+    }
+
+    #[test]
+    fn a_detector_that_answers_is_reported_as_installed() {
+        let view = suggestion_detector(&DetectorAnswering);
+        assert_eq!(view.id, "answering");
+        assert_eq!(view.availability, "installed");
+    }
+
+    #[test]
+    fn a_machine_without_a_detector_is_unsupported_rather_than_empty() {
+        // The case the producer's own comment names: the capability is missing here, so the queue
+        // cannot fill. "There is nothing to decide" would be a claim the application cannot support,
+        // and the reader would have no reason to look again.
+        assert_eq!(
+            suggestion_detector(&DetectorUnsupported).availability,
+            "unsupported"
+        );
+    }
+
+    #[test]
+    fn a_detector_that_failed_is_not_reported_as_working() {
+        // A failure is not an empty queue either. Presenting a transient failure as good news is the
+        // same defect one step further away.
+        assert_eq!(
+            suggestion_detector(&DetectorFailing).availability,
+            "unavailable"
         );
     }
 
