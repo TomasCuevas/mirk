@@ -3073,6 +3073,33 @@ left off**, falling back to the default application).
   two controls, the catalogue strings in both languages, and the tests: the store's single-document lookup, the
   five backend rules, the card's markup, the pure outcome rule, and a real click on both controls.
 
+### Specs — round 11: the fill's colour says how far along the reading is (R38, L66)
+
+The user's request, verbatim: *"quiero que la barra de progreso cambie de color dependiendo el porcentaje
+donde este, unicamente el progreso, no la barra como tal. Pensando en colores como rojo, naranja, amarillo y
+verde dependiendo el porcentaje"*.
+
+- **S1 — the FILL changes colour; the bar does not.** The coloured element is the span that stands for what was
+  read. The track keeps its neutral grey, so the empty part of the bar still says "nothing read here" without
+  competing with the colour that means something.
+- **S2 — four bands, red orange yellow green, at the four quarters.** `[0, ¼)` red, `[¼, ½)` orange,
+  `[½, ¾)` yellow, `[¾, 1]` green. Each boundary belongs to the band ABOVE it, so a document that has crossed a
+  quarter reads as having crossed it — the alternative would make 25 % look like barely started.
+- **S3 — one number, two channels.** The band is derived from the same `fraction` the fill's width comes from,
+  so colour and width cannot disagree; and the number on the bar still states the percentage, so the colour is
+  redundant information rather than the only one. A reader who cannot tell the hues apart loses nothing.
+- **S4 — a fraction that cannot be read is the floor, not a colour invented from it.** `NaN` is treated as
+  "nothing read"; values outside `0..1` are clamped, because a viewer can report page 90 of 80 and the fraction
+  is already clamped upstream.
+- **S5 — nothing changes about what is stated.** The percentage, the page marker, the provenance sentence and
+  the "no record means 0 %" decision (L23) are exactly as they were. This unit is a colour, not a new claim.
+
+### Tasks — round 11
+
+- **U22** R38 — `progressBand` and the band on `ProgressView`, the four classes on the fill (and nothing on the
+  track), and the tests: the quarters from both sides of every edge, the clamps, the `NaN` floor, the band and
+  the width read from one fraction, and a rendered card per band.
+
 **L45 — the carousels' order: the most recently read document first (U13/R29).** The user asked that
 *"el ultimo elemento que se haya leido siempre aparezca primero … de mas reciente a más antiguo"*. The order
 lives in the same pure selector that decides which documents a category holds, so the carousel, a category's
@@ -3386,3 +3413,50 @@ el manejador predeterminado de `application/pdf`. Lo que **no** se hizo, a prop�
 base real, porque abrir un documento de verdad escribe la posición en el estado de Evince y T1 ya documentó que
 una prueba así pisó la página de un libro real ("Cosmos - Carl Sagan", página 72). Nadie prueba sobre datos del
 lector.
+
+**L66 — el color del progreso, y las cuatro bandas que el usuario pidió por nombre.**
+Pedido textual: *"quiero que la barra de progreso cambie de color dependiendo el porcentaje donde este,
+unicamente el progreso, no la barra como tal. Pensando en colores como rojo, naranja, amarillo y verde
+dependiendo el porcentaje"*. Las dos mitades del pedido se respetaron literalmente: la que cambia es la **barra
+llena**, no la pista (que conserva su gris #e8ebef), y son **cuatro** colores en el orden que nombró.
+
+LA BANDA ES UN VALOR, NO UN COLOR. `progressBand(fraction)` devuelve `started | some | most | nearly`, y el
+color es una de las formas de dibujarla: un nombre de color habría metido la paleta dentro de la regla, y el día
+que la paleta cambie por contraste o por daltonismo, la regla tendría que cambiar con ella. El tipo es la
+fracción (`why`: la fracción es un hecho, el tono es gusto). Las cuatro clases viven en el CSS de la tarjeta y la
+banda viaja como clase del relleno.
+
+LOS BORDES SON LOS CUARTOS, y cada borde pertenece a la banda de ARRIBA: 25 % exacto es "some", no "started". La
+alternativa —que el borde quede en la banda de abajo— haría que un documento con un cuarto leído se viera como
+recién empezado, que es justo lo que la persona que mira la pantalla quiere distinguir. Los cuatro bordes están
+pinneados por los dos lados (0.2499 / 0.25, 0.4999 / 0.5, 0.7499 / 0.75), porque una regla de bandas probada
+sólo en el medio de cada banda pasa contra un off-by-one en todos los bordes.
+
+UN NÚMERO, DOS CANALES. La banda sale de la MISMA `fraction` que el ancho, así que color y ancho no pueden
+discrepar — y hay un test que lo afirma leyendo las dos cosas de la misma vista. El porcentaje sigue escrito
+sobre la barra, así que el color es información redundante y no la única: quien no distinga los tonos no pierde
+nada. Eso importa más acá que en casi cualquier otro lado, porque rojo y verde son justamente el par que el
+daltonismo más común confunde.
+
+DOS COSAS QUE EL CÓDIGO YA TENÍA Y HABÍA QUE RESPETAR, no cambiar. La fracción de la tarjeta es
+`(page + 1) / total`, porque la tarjeta cuenta páginas desde uno (el almacén es cero-based): mi primera versión
+del test esperaba 0.5 para "página 50 de 100" y el código contestó 0.51, que es lo correcto. Y una posición
+registrada sin total no produce fracción: la barra queda vacía y el marcador dice la página, así que la banda es
+la del piso (`started`) y no se dibuja nada — no se inventó un color para "no sé".
+
+VERIFICACIÓN. Interfaz en **207** pruebas (antes 200: cinco de la regla, dos de la tarjeta renderizada), chequeo
+de tipos en 0 y 0, paquete reconstruido antes que el binario, y la aplicación relanzada. Falsificaciones, las dos
+con rojo observado y archivos restaurados idénticos (`library.ts` e2891ce9…, `BookCard.svelte` f366e15a…): mover
+el borde de un cuarto a 0.3 (rojo: `expected 'started' to be 'some'`) y quitar la clase de banda del relleno
+(rojos: `expected 'class="fill …' to contain 'band-nearly'` y `to contain 'band-started'`).
+
+UN DEFECTO EN MI PROPIO TEST, encontrado y corregido antes de creerlo verde: buscaba el relleno por la palabra
+`fill` y encontraba `fill="none"` del lápiz, así que la primera versión afirmaba sobre el string equivocado. Ahora
+se busca por la clase. Y queda anotado el accidente del relanzamiento: `pkill -f "target/debug/oct-desktop"`
+mató también la línea que iba a levantar la aplicación, porque el patrón coincidía con su propia línea de
+comando — la misma clase de auto-contaminación que R7 documentó con `pgrep -f`. El relanzamiento usa `setsid
+nohup` y se verifica por pid.
+
+RESIDUAL: que los cuatro tonos se vean bien en la pantalla del usuario es suyo confirmarlo. Los valores son
+#b3261e, #c2410c, #a16207 y #2e7d32, elegidos oscuros para leerse contra la pista clara y contra la tarjeta
+blanca; un ajuste de tono es una línea en el CSS de la tarjeta y ninguna prueba de la regla cambia.
