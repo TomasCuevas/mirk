@@ -215,44 +215,117 @@ export interface ScanReport {
 }
 
 /**
- * How far along a reading is, as one of four bands (R38).
+ * The colours the progress fill travels through, at the fractions that anchor them (R39).
  *
- * The bands are what the bar's colour stands for, and they are deliberately a value of their own rather
- * than a colour name: a band is a fact about the reading ("less than a quarter read"), and the colour is
- * one way of drawing it. A card, a future legend or a screen reader could each draw the same band
- * differently without the rule moving.
+ * The user named these four and then corrected how they should relate: red, orange, yellow and green
+ * are the **landmarks** of one continuous ramp, not four states with hard edges. So they are the ends
+ * and the two interior stops, and everything between them is interpolated (see `progressColor`).
  *
- * The names are the fraction, not the hue, because the hue is taste and the fraction is not.
+ * They are deliberately dark for their hue. The bar they are painted on is pale (#e8ebef) and the card
+ * is white, so a light yellow would be a bar that disappears at exactly the moment it means "halfway".
+ * `progressColor` interpolates in a perceptual space, which keeps the intermediate colours as dark as
+ * the stops instead of muddying them the way naive RGB blending does.
  */
-export type ProgressBand = "started" | "some" | "most" | "nearly";
+const PROGRESS_STOPS: readonly { at: number; hex: string }[] = [
+  { at: 0, hex: "#b3261e" },
+  { at: 1 / 3, hex: "#c2410c" },
+  { at: 2 / 3, hex: "#a16207" },
+  { at: 1, hex: "#2e7d32" },
+];
+
+/** A colour in OKLab: perceptual lightness, then the two opponent axes. */
+interface Oklab {
+  readonly l: number;
+  readonly a: number;
+  readonly b: number;
+}
 
 /**
- * The band a fraction read falls in, at the four quarters (R38).
+ * The colour of the progress fill for a fraction read (R39).
  *
- * `fraction` is `0..1` and is clamped, so a viewer that reports a stale total (page 90 of 80) lands in
- * the top band instead of falling off the scale. `NaN` — which no real fraction produces, but which a
- * future caller could — is treated as "nothing read", the honest floor: a band invented from a broken
- * number would be a colour claiming a fact.
+ * **One continuous ramp, not four bands.** The user's own correction: *"no quiero que sean colores
+ * fijos, quiero que se vayan transformando poco a poco a medida que el porcentaje avanza, no que
+ * cambie bruscamente"*. The four colours they named are the stops; every fraction between two stops
+ * gets its own colour, so a card at 41 % and a card at 42 % differ by a shade nobody would notice
+ * individually and everybody would notice as a jump.
  *
- * **The boundaries are the quarters, and they are the whole rule**: `[0, ¼)` started, `[¼, ½)` some,
- * `[½, ¾)` most, `[¾, 1]` nearly. A document at exactly 25 % is "some", not "started": the boundary
- * belongs to the band above it, so a document that has crossed a quarter reads as having crossed it.
+ * **Interpolated in OKLab, not in sRGB.** Blending red and green channel-by-channel in sRGB runs
+ * through a muddy olive; OKLab is close enough to how the eye works that the ramp keeps its chroma and
+ * its lightness. The output is plain `rgb()`, so no engine support beyond CSS Color 3 is needed — the
+ * perceptual work happens here, where it can be tested, not in the browser.
+ *
+ * The input is clamped to `0..1` and a value that cannot be read (`NaN`) takes the floor, for the same
+ * reason the band did: a colour is a claim, and one invented from a broken number would be a lie. The
+ * floor is red at 0 %, which is also what an empty fill draws — nothing.
  */
-export function progressBand(fraction: number): ProgressBand {
-  if (Number.isNaN(fraction)) {
-    return "started";
+export function progressColor(fraction: number): string {
+  const clamped = Number.isNaN(fraction) ? 0 : Math.min(1, Math.max(0, fraction));
+
+  // The segment this fraction falls in. `stops.length - 1` segments, so the last one is inclusive of
+  // the top: `clamped === 1` belongs to the final segment rather than past the end of the array.
+  let index = 0;
+  while (index < PROGRESS_STOPS.length - 2 && clamped > PROGRESS_STOPS[index + 1].at) {
+    index += 1;
   }
-  const clamped = Math.min(1, Math.max(0, fraction));
-  if (clamped < 0.25) {
-    return "started";
-  }
-  if (clamped < 0.5) {
-    return "some";
-  }
-  if (clamped < 0.75) {
-    return "most";
-  }
-  return "nearly";
+  const from = PROGRESS_STOPS[index];
+  const to = PROGRESS_STOPS[index + 1];
+  const span = to.at - from.at;
+  const position = span === 0 ? 0 : (clamped - from.at) / span;
+
+  const start = hexToOklab(from.hex);
+  const end = hexToOklab(to.hex);
+  return oklabToRgb({
+    l: start.l + (end.l - start.l) * position,
+    a: start.a + (end.a - start.a) * position,
+    b: start.b + (end.b - start.b) * position,
+  });
+}
+
+/** `#rrggbb` to OKLab, through linear sRGB (Ottosson's published matrices). */
+function hexToOklab(hex: string): Oklab {
+  const value = hex.replace("#", "");
+  const r = srgbToLinear(Number.parseInt(value.slice(0, 2), 16) / 255);
+  const g = srgbToLinear(Number.parseInt(value.slice(2, 4), 16) / 255);
+  const b = srgbToLinear(Number.parseInt(value.slice(4, 6), 16) / 255);
+
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+
+  return {
+    l: 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+    a: 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+    b: 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+  };
+}
+
+/** OKLab back to an `rgb()` string a stylesheet can use. */
+function oklabToRgb(colour: Oklab): string {
+  const l = Math.pow(colour.l + 0.3963377774 * colour.a + 0.2158037573 * colour.b, 3);
+  const m = Math.pow(colour.l - 0.1055613458 * colour.a - 0.0638541728 * colour.b, 3);
+  const s = Math.pow(colour.l - 0.0894841775 * colour.a - 1.291485548 * colour.b, 3);
+
+  const r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+  const g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+  const b = -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s;
+
+  return `rgb(${toByte(r)}, ${toByte(g)}, ${toByte(b)})`;
+}
+
+/** Linear sRGB to the sRGB transfer function the display expects. */
+function linearToSrgb(channel: number): number {
+  const clamped = Math.min(1, Math.max(0, channel));
+  return clamped <= 0.0031308 ? 12.92 * clamped : 1.055 * Math.pow(clamped, 1 / 2.4) - 0.055;
+}
+
+/** The sRGB transfer function to linear light. */
+function srgbToLinear(channel: number): number {
+  return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+}
+
+/** A linear channel to the 0..255 byte an `rgb()` string carries. */
+function toByte(linear: number): number {
+  return Math.round(linearToSrgb(linear) * 255);
 }
 
 /** What the card draws and says about reading progress (R7). */
@@ -264,8 +337,11 @@ export interface ProgressView {
   /** Where the marker sits along the bar, `0..1` — the fraction itself, so the number states the
    *  fraction rather than merely sitting next to it. */
   readonly markerAt: number;
-  /** The band the fill is coloured by (R38), derived from the same fraction the width comes from. */
-  readonly band: ProgressBand;
+  /**
+   * The fill's colour, as a CSS `rgb()` (R39). It is a continuous ramp over the fraction the width
+   * comes from, so a long bar's colour and its length always tell the same story.
+   */
+  readonly color: string;
   /** The provenance in words, or `null` when nothing is recorded — the one case with no sentence. */
   readonly provenance: string | null;
 }
@@ -291,7 +367,7 @@ export function describeProgressView(entry: LibraryEntry, t: Translate): Progres
       fraction: 0,
       marker: t("card.progressPercent", { percent: 0 }),
       markerAt: 0,
-      band: progressBand(0),
+      color: progressColor(0),
       provenance: null,
     };
   }
@@ -304,7 +380,7 @@ export function describeProgressView(entry: LibraryEntry, t: Translate): Progres
       fraction: 0,
       marker: t("progress.position", { page: progress.page + 1 }),
       markerAt: 0,
-      band: progressBand(0),
+      color: progressColor(0),
       provenance,
     };
   }
@@ -313,7 +389,7 @@ export function describeProgressView(entry: LibraryEntry, t: Translate): Progres
     fraction,
     marker: t("card.progressPercent", { percent: Math.round(fraction * 100) }),
     markerAt: fraction,
-    band: progressBand(fraction),
+    color: progressColor(fraction),
     provenance,
   };
 }

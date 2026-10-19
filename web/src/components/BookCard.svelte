@@ -218,13 +218,14 @@
          progress is never stated as a bare percentage was the user's as well, and only the sentence for
          a document with no record at all was asked to go.
 
-         R38: the FILL is coloured by how far along the reading is — red, orange, yellow, green at the
-         four quarters — and the bar itself keeps the neutral track it always had. The colour is a
-         second channel, never the only one: the number on the bar states the percentage, so a reader
-         who cannot tell the hues apart loses nothing. -->
+         R39: the FILL travels a continuous colour ramp as the reading advances — from red through
+         orange and yellow to green, slowly enough that two neighbouring documents differ by a shade
+         rather than by a state — and the bar itself keeps the neutral track it always had. The colour
+         is a second channel, never the only one: the number on the bar states the percentage, so a
+         reader who cannot tell the hues apart loses nothing. -->
     <div class="progress">
       <div class="bar">
-        <span class="fill band-{view.band}" style="width: {view.fraction * 100}%"></span>
+        <span class="fill" style="width: {view.fraction * 100}%; background: {view.color}"></span>
         <span class="marker" style="--at: {view.markerAt * 100}%">{view.marker}</span>
       </div>
       {#if view.provenance !== null}
@@ -413,26 +414,12 @@
     background: #24506b;
   }
 
-  /* R38: the fill's colour says how far along the reading is, at the four quarters. The hues are dark
-     enough to read against the track (#e8ebef) and against the white card, and they follow the same
-     intensity order as the fraction: red, orange, yellow, green. The track keeps its own neutral
-     grey — the user asked for the progress to change colour, not the bar — so the empty part of the
-     bar still says "nothing read here" without competing with the colour that means something. */
-  .band-started {
-    background: #b3261e;
-  }
-
-  .band-some {
-    background: #c2410c;
-  }
-
-  .band-most {
-    background: #a16207;
-  }
-
-  .band-nearly {
-    background: #2e7d32;
-  }
+  /* R39: the fill's colour is computed from the fraction and arrives as an inline `background`, so it
+     travels from red to green through orange and yellow in one continuous ramp instead of switching
+     between four states. The `background` above in `.fill` stays as the fallback for a caller that
+     builds a view without a colour: a fill that lost its background would be an invisible bar, and an
+     invisible bar says "nothing read" about a document that was read. The track keeps its own neutral
+     grey — the user asked for the progress to change colour, not the bar. */
 
   .marker {
     position: absolute;

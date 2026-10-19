@@ -28,7 +28,7 @@ import {
   libraryView,
   libraryAuthors,
   paginate,
-  progressBand,
+  progressColor,
   progressFraction,
   sortEntries,
   startCategoryRefresh,
@@ -119,62 +119,104 @@ describe("the card's progress view", () => {
 });
 
 /**
- * R38: the fill is coloured by how far along the reading is, at the four quarters.
+ * R39: the fill's colour travels one continuous ramp as the reading advances.
  *
- * The user asked for red, orange, yellow and green depending on the percentage, and for the PROGRESS
- * to change colour while the bar keeps its own. The boundaries are pinned from both sides, because a
- * band rule that is only tested in the middle of a band passes against an off-by-one at every edge.
+ * The user first asked for red, orange, yellow and green, and then corrected the shape of the answer:
+ * *"no quiero que sean colores fijos, quiero que se vayan transformando poco a poco"*. So the four are
+ * landmarks on one ramp, and what this file pins is exactly that: the stops are still the colours they
+ * named, and between them the colour moves in small steps rather than jumping.
  */
-describe("the band the progress fill is coloured by", () => {
-  it("puts each quarter in its own band", () => {
-    expect(progressBand(0)).toBe("started");
-    expect(progressBand(0.1)).toBe("started");
-    expect(progressBand(0.2499)).toBe("started");
-    expect(progressBand(0.25)).toBe("some");
-    expect(progressBand(0.4)).toBe("some");
-    expect(progressBand(0.4999)).toBe("some");
-    expect(progressBand(0.5)).toBe("most");
-    expect(progressBand(0.6)).toBe("most");
-    expect(progressBand(0.7499)).toBe("most");
-    expect(progressBand(0.75)).toBe("nearly");
-    expect(progressBand(0.99)).toBe("nearly");
-    expect(progressBand(1)).toBe("nearly");
+describe("the progress fill's colour", () => {
+  /** `rgb(r, g, b)` to its three channels, so a test can compare numbers instead of strings. */
+  function channels(colour: string): [number, number, number] {
+    const match = colour.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
+    expect(match, `an rgb() triple, got ${colour}`).not.toBeNull();
+    const [, r, g, b] = match as RegExpMatchArray;
+    return [Number(r), Number(g), Number(b)];
+  }
+
+  it("keeps the four colours the user named as the ramp's landmarks", () => {
+    expect(progressColor(0)).toBe("rgb(179, 38, 30)");
+    expect(progressColor(1 / 3)).toBe("rgb(194, 65, 12)");
+    expect(progressColor(2 / 3)).toBe("rgb(161, 98, 7)");
+    expect(progressColor(1)).toBe("rgb(46, 125, 50)");
   });
 
-  it("clamps a stale total instead of falling off the scale", () => {
-    // A viewer can report page 90 of 80. The fraction is clamped upstream, and the band clamps too,
-    // so a broken total cannot produce a fifth colour nobody designed.
-    expect(progressBand(1.2)).toBe("nearly");
-    expect(progressBand(-0.3)).toBe("started");
+  it("moves the colour in small steps instead of switching between states", () => {
+    // The measurement the user's correction asks for: walking the fraction in hundredths, the biggest
+    // change between two neighbouring documents has to be small. With the four bands this same walk
+    // produced three jumps of 60-90 units per channel at 25, 50 and 75 %; the measured maximum here is
+    // well under 10, which is the difference between a ramp and a set of states.
+    let previous = channels(progressColor(0));
+    let largest = 0;
+    for (let step = 1; step <= 100; step += 1) {
+      const current = channels(progressColor(step / 100));
+      for (let channel = 0; channel < 3; channel += 1) {
+        largest = Math.max(largest, Math.abs(current[channel] - previous[channel]));
+      }
+      previous = current;
+    }
+
+    expect(largest).toBeLessThan(10);
   });
 
-  it("treats a fraction it cannot read as nothing read", () => {
-    // `NaN` is not a fraction. A band invented from it would be a colour claiming a fact.
-    expect(progressBand(Number.NaN)).toBe("started");
+  it("never travels backwards: red at the start, green at the end, monotonic in between", () => {
+    // One channel is enough to state the direction, and green is the one that rises from red to green
+    // across the whole ramp. A ramp that dipped and recovered would be a decoration, not a measure.
+    const greens: number[] = [];
+    for (let step = 0; step <= 20; step += 1) {
+      greens.push(channels(progressColor(step / 20))[1]);
+    }
+
+    for (let index = 1; index < greens.length; index += 1) {
+      expect(greens[index]).toBeGreaterThan(greens[index - 1]);
+    }
   });
 
-  it("derives the band from the same fraction the bar draws with", () => {
-    // The colour and the width must not be able to disagree: one number, one rule, two channels.
-    // Page 50 of 100 is the fiftieth page, and the card counts pages from one — the fraction is
-    // (page + 1) / total, which is `progressFraction`'s own rule and the reason this reads 0.5 here.
+  it("stays dark enough to read against the pale track at every point", () => {
+    // The track is #e8ebef and the card is white. A ramp that visited a light yellow would be a bar
+    // that disappears at the moment it means "halfway", so the relative luminance is pinned under the
+    // value of the palest stop's neighbourhood rather than left to the eye.
+    for (let step = 0; step <= 100; step += 1) {
+      const [r, g, b] = channels(progressColor(step / 100)).map((channel) => {
+        const value = channel / 255;
+        return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+      }) as [number, number, number];
+      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      expect(luminance, `luminance at ${step}%`).toBeLessThan(0.30);
+    }
+  });
+
+  it("clamps a fraction it cannot trust, and takes the floor for one it cannot read", () => {
+    expect(progressColor(1.4)).toBe(progressColor(1));
+    expect(progressColor(-0.2)).toBe(progressColor(0));
+    expect(progressColor(Number.NaN)).toBe(progressColor(0));
+  });
+
+  it("colours the fill from the same fraction the width comes from", () => {
+    // Colour and length must not be able to disagree: one number, one rule, two channels.
     const half = entry({
+      // Page 50 of 100 is the fiftieth page, and the card counts pages from one — the fraction is
+      // (page + 1) / total, which is `progressFraction`'s own rule and the reason this reads 0.5 here.
       progress: progress({ page: 49, total: 100, source: "native", confidence: "exact" }),
     });
     const view = describeProgressView(half, english);
 
     expect(view.fraction).toBe(0.5);
-    expect(view.band).toBe(progressBand(view.fraction));
-    expect(view.band).toBe("most");
+    expect(view.color).toBe(progressColor(view.fraction));
   });
 
-  it("gives a document with no record the floor band, which draws nothing", () => {
+  it("gives a document with no record the floor colour, which draws nothing", () => {
     const view = describeProgressView(entry({ progress: null }), english);
 
-    expect(view.band).toBe("started");
+    expect(view.color).toBe(progressColor(0));
     expect(view.fraction).toBe(0);
   });
 });
 
+/**
+ * The provenance half of the sentence, and the rule that keeps it from flattening two facts into one.
+ */
 describe("provenance in words", () => {
 
   it("renders every provenance combination differently", () => {
