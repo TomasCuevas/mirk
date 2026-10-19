@@ -3209,3 +3209,20 @@ la oración nueva no aparece donde no debe: su cola sigue hablando de documentos
 DECISIÓN DE ENTREGA, tomada por el usuario: seguir trabajando en la rama, sin pull request por ahora; la
 estrategia se decide más adelante. Queda anotado que en L57–L60 el registro viajó dentro del commit del código
 en vez de en su propio commit como indica la convención del repositorio; desde L61 vuelven a ir separados.
+
+**L62 — el override manual queda postergado al lector propio, por decisión del usuario.**
+Preguntado dónde escribe el lector su posición —en el editor de la tarjeta, en la tarjeta misma, o cuando exista
+el lector de primera parte— el usuario eligió esperar al lector. Es la respuesta de fondo de R5: los navegadores
+y LibreOffice no exponen progreso en ninguna plataforma, así que la posición manual es de carga, y el lector
+propio es la superficie donde escribirla deja de ser un parche.
+
+LO QUE QUEDA CONGELADO MIENTRAS TANTO, y es la parte que no se puede perder en una compactación: hoy un dato
+manual sería DERROTADO EN SILENCIO por el paso automático. El vocabulario ya existe —ProgressSource::Manual y
+Confidence::Manual, y una oración que lo dice—, pero el bucle que observa compara página y total mientras la
+biblioteca toma la fila más nueva, así que una lectura manual puede quedar sepultada por una observación
+posterior sin que nada lo advierta. Cuando se implemente, la regla es la misma que ya rige el nombre, el autor y
+la portada: la posición del lector es la última palabra, y el automático no la pisa.
+
+Lo que la pieza necesita, para cuando llegue: el bucle que observa (crates/oct-desktop/src/track.rs) y la
+superficie donde el lector escribe. No es un control suelto: es precedencia, y la precedencia se prueba en el
+bucle, no en la pantalla.
