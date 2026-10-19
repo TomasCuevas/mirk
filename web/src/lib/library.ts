@@ -215,11 +215,18 @@ export interface ScanReport {
 }
 
 /**
- * The colours the progress fill travels through, at the fractions that anchor them (R39).
+ * The colours the progress fill travels through, at the fractions that anchor them (R39, L68).
  *
- * The user named these four and then corrected how they should relate: red, orange, yellow and green
- * are the **landmarks** of one continuous ramp, not four states with hard edges. So they are the ends
- * and the two interior stops, and everything between them is interpolated (see `progressColor`).
+ * The four colours the user named are the **landmarks** of one continuous ramp, and their positions are a
+ * reading decision, not an even split: green is reached at **70 %**, because a document two thirds read
+ * is nearly finished and a reader who has got that far has stopped wanting to look at amber. The user's
+ * own words, with their screenshot: *"siento que el verde ya deberia de comenzar desde el 70%, ya que
+ * elementos que van por encima del 70% se ven muy amarillos"* — at 76 % the fill was olive, and it is
+ * now plainly green.
+ *
+ * There is a fifth stop beyond green on purpose: a ramp that held one green from 70 % to 100 % would
+ * stop moving exactly where the last stretch of a long book lives, so the green keeps deepening instead
+ * of flattening. The width already states how much is left; the colour no longer stops saying it.
  *
  * They are deliberately dark for their hue. The bar they are painted on is pale (#e8ebef) and the card
  * is white, so a light yellow would be a bar that disappears at exactly the moment it means "halfway".
@@ -228,9 +235,10 @@ export interface ScanReport {
  */
 const PROGRESS_STOPS: readonly { at: number; hex: string }[] = [
   { at: 0, hex: "#b3261e" },
-  { at: 1 / 3, hex: "#c2410c" },
-  { at: 2 / 3, hex: "#a16207" },
-  { at: 1, hex: "#2e7d32" },
+  { at: 0.28, hex: "#c2410c" },
+  { at: 0.5, hex: "#a16207" },
+  { at: 0.7, hex: "#2e7d32" },
+  { at: 1, hex: "#1e5b22" },
 ];
 
 /** A colour in OKLab: perceptual lightness, then the two opponent axes. */

@@ -127,6 +127,27 @@ describe("the card's progress view", () => {
  * named, and between them the colour moves in small steps rather than jumping.
  */
 describe("the progress fill's colour", () => {
+  /** The hue of an `rgb()` triple, in degrees — the one measure of direction that survives a ramp
+   *  whose last stretch darkens instead of brightening. */
+  function hue([r, g, b]: [number, number, number]): number {
+    const red = r / 255;
+    const green = g / 255;
+    const blue = b / 255;
+    const max = Math.max(red, green, blue);
+    const min = Math.min(red, green, blue);
+    const delta = max - min;
+    if (delta === 0) {
+      return 0;
+    }
+    const sector =
+      max === red
+        ? ((green - blue) / delta) % 6
+        : max === green
+          ? (blue - red) / delta + 2
+          : (red - green) / delta + 4;
+    return (sector * 60 + 360) % 360;
+  }
+
   /** `rgb(r, g, b)` to its three channels, so a test can compare numbers instead of strings. */
   function channels(colour: string): [number, number, number] {
     const match = colour.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
@@ -137,16 +158,44 @@ describe("the progress fill's colour", () => {
 
   it("keeps the four colours the user named as the ramp's landmarks", () => {
     expect(progressColor(0)).toBe("rgb(179, 38, 30)");
-    expect(progressColor(1 / 3)).toBe("rgb(194, 65, 12)");
-    expect(progressColor(2 / 3)).toBe("rgb(161, 98, 7)");
-    expect(progressColor(1)).toBe("rgb(46, 125, 50)");
+    expect(progressColor(0.28)).toBe("rgb(194, 65, 12)");
+    expect(progressColor(0.5)).toBe("rgb(161, 98, 7)");
+    expect(progressColor(0.7)).toBe("rgb(46, 125, 50)");
+    // The fifth stop is the deepened green the last stretch travels towards, so the ramp does not
+    // flatten exactly where the end of a long book lives.
+    expect(progressColor(1)).toBe("rgb(30, 91, 34)");
+  });
+
+  it("reaches green at 70 %, which is the threshold the user set", () => {
+    // The correction, with the screenshot that motivated it: at 76 % the fill was olive and read as
+    // "still yellow". Green is now a landmark at 70 %, and everything above it stays green.
+    const atSeventy = channels(progressColor(0.7));
+    expect(atSeventy).toEqual([46, 125, 50]);
+
+    const above = channels(progressColor(0.76));
+    expect(above[1]).toBeGreaterThan(above[0] + 40);
+    expect(above[1]).toBeGreaterThan(above[2] + 40);
+  });
+
+  it("stays green from 70 % to the end instead of flattening", () => {
+    // Two rules in one: the hue stays green (the green channel dominates both others), and the fill
+    // keeps moving — each step is darker than the one before, so 100 % is not a decorative plateau.
+    let previous = channels(progressColor(0.7))[1];
+    for (let step = 71; step <= 100; step += 1) {
+      const [r, g, b] = channels(progressColor(step / 100));
+      expect(g, `green dominates at ${step}%`).toBeGreaterThan(r);
+      expect(g, `green dominates at ${step}%`).toBeGreaterThan(b);
+      expect(g, `the fill keeps darkening at ${step}%`).toBeLessThan(previous);
+      previous = g;
+    }
   });
 
   it("moves the colour in small steps instead of switching between states", () => {
     // The measurement the user's correction asks for: walking the fraction in hundredths, the biggest
     // change between two neighbouring documents has to be small. With the four bands this same walk
-    // produced three jumps of 60-90 units per channel at 25, 50 and 75 %; the measured maximum here is
-    // well under 10, which is the difference between a ramp and a set of states.
+    // produced a jump of 115 units per channel at one boundary; the measured maximum here is 11, which
+    // is a shade between neighbours rather than a state change. The bound is 15 and not 11 on purpose:
+    // it is the line between "a ramp" and "a set of states", not a number fitted to today's palette.
     let previous = channels(progressColor(0));
     let largest = 0;
     for (let step = 1; step <= 100; step += 1) {
@@ -157,20 +206,29 @@ describe("the progress fill's colour", () => {
       previous = current;
     }
 
-    expect(largest).toBeLessThan(10);
+    expect(largest).toBeLessThan(15);
   });
 
-  it("never travels backwards: red at the start, green at the end, monotonic in between", () => {
-    // One channel is enough to state the direction, and green is the one that rises from red to green
-    // across the whole ramp. A ramp that dipped and recovered would be a decoration, not a measure.
-    const greens: number[] = [];
-    for (let step = 0; step <= 20; step += 1) {
-      greens.push(channels(progressColor(step / 20))[1]);
+  it("never travels backwards: the hue rotates one way, from red to green", () => {
+    // Direction is measured in hue, not in one channel. The green CHANNEL has to fall after the 70 %
+    // landmark, because the last stretch deepens the green rather than lightening it — so "the green
+    // goes up" would be the wrong invariant and would forbid the deepening. What must never happen is
+    // the colour turning back on itself, and hue is the measure of that: red is ~3°, green ~123°, and
+    // every step in between moves it the same way.
+    const hues: number[] = [];
+    for (let step = 0; step <= 100; step += 1) {
+      hues.push(hue(channels(progressColor(step / 100))));
     }
 
-    for (let index = 1; index < greens.length; index += 1) {
-      expect(greens[index]).toBeGreaterThan(greens[index - 1]);
+    // Never backwards, not "always forwards": once the ramp lands on green the hue holds steady while
+    // the fill keeps darkening, and that plateau is the design, not a defect. What the rule forbids is
+    // the colour turning back towards amber or red, which is what a dip would look like on a card.
+    for (let index = 1; index < hues.length; index += 1) {
+      expect(hues[index], `hue at ${index}%`).toBeGreaterThanOrEqual(hues[index - 1]);
     }
+    // Ends where the user's colours say it ends: red at nothing read, green at finished.
+    expect(hues[0]).toBeLessThan(10);
+    expect(hues[hues.length - 1]).toBeGreaterThan(110);
   });
 
   it("stays dark enough to read against the pale track at every point", () => {
