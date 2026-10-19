@@ -3122,3 +3122,55 @@ content edit, the rule could claim a reading that did not happen.
 
 **The user's verdict on the running build: *"Si, todo funciona correctamente como deberia"*** — with the five
 stale documents, their real day counts and the corrected definition sentence on screen.
+
+**L57 — la cola de sugerencias, mitad de adelante: la tarjeta, y el contador que el usuario no pidió.**
+The queue is shown as cards in Configuración, beside the watched folders. Each card carries the file's own
+name as its heading — the app never read the file, so it never claims a title it does not know — the path
+under it, and the two decisions as icons inside the cover's space: a check and an X, with accessible names,
+because a decision offered as a bare glyph is a decision a screen reader cannot take. Nothing enters the
+library on its own; accepting is the reader's action and the library is made current through the mechanism
+that already exists.
+
+**L58 — the user's two verdicts on the card, both taken as corrections rather than as taste.**
+First: "Sigue sin tener la portada bien colocada" — the only honest reading of "not placed right" was
+"not the same as the others", so the cover now uses the library card's own CSS: the same dashed border, the
+same corner radius, the same striped stand-in. Second: "Los botones deben estar en la parte inferior del
+medio de la portada" — they moved from the middle to the bottom, centred. The path became a small control
+that opens the document's folder, because a path a person cannot use is a dead line on the card. The
+screenshot was read twice and cost more context than it returned; the user's words were the specification.
+
+**L59 — the observation count removed, at the user's word.**
+"Se abrió 239 veces" was this project's addition, never a request, and the user does not want it: the
+sentence, the two i18n keys and the helper that chose singular from plural are gone. The test count says so
+without being asked — 185 became 183 — and a new assertion pins the absence rather than leaving it to
+memory.
+
+**L60 — the cover: the document's FIRST page, which the interface could not produce.**
+The user reminded me that the default cover is the first page, and they were right that explaining the limit
+was not the same as fixing it. The interface cannot render a PDF, so the piece belongs in Rust:
+commands::suggestion_cover takes a PATH, not a row id, because a suggestion is not in the library yet.
+
+The design decision worth writing down is that it does NOT cache. document_cover names its cache file with a
+row id and a page, and a suggestion has neither. A name invented from the path would be either a hash — which
+can one day serve one document's page for another — or a sanitised path, which has no useful length bound. So
+the preview is rendered to a temporary file, read back and discarded: nothing stale, nothing misattributed,
+one render per card, and a card asks once on mount. The cleanup is best effort and is not tested; the two
+user-visible rules are.
+
+THE TEST FOUND A REAL DEFECT IN MY OWN FIRST VERSION, in one line: it deleted the temporary file BEFORE
+reading the page it had just rendered — "could not be read back: No such file or directory". The order is
+read first, clean up last, and the comment says so where the mistake would be repeated.
+
+Three falsifications, all real RED and all restored byte-identical with their hashes (commands.rs
+84444723…, suggestions.ts 5867733d…): the render returning None (red on the first page), the unreadable
+branch returning an error instead of no cover (red on the placeholder rule), and the frontend reading a
+failed request as an empty image (three reds: no cover, failed call, empty string).
+
+Verification: the workspace suite green with oct-desktop at 83 tests (81 plus these two), clippy clean over
+all targets, the interface at 187 tests, and the component-aware type check at 0 errors and 0 warnings. The
+package was rebuilt before the binary, because the binary embeds it, and the application was relaunched.
+
+RESIDUAL, stated rather than hidden: that the first page appears ON SCREEN is the user's to confirm. The
+evidence is a test that renders the repository's four-page fixture through pdfium and comes back with a data
+URL, plus one live command registered next to document_cover; a card whose file vanished keeps its
+placeholder and writes the reason to stderr.

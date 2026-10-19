@@ -25,6 +25,9 @@
   } from "./lib/screens";
   import { OPEN_SCREEN_EVENT, invoke, listen, runningInTauri, type Unlisten } from "./lib/tauri";
   import { loadLanguage, saveLanguage } from "./lib/settings";
+  // L56. The suggestion queue's pure decisions live in their own module: what the section says in
+  // each of its three states, what a decision does to the list, and what to do when one fails.
+  import { suggestionOutcome, withoutSuggestion, type Suggestion } from "./lib/suggestions";
   import { type WindowControl } from "./lib/window";
   import CategoryScreen from "./components/CategoryScreen.svelte";
   import HomeScreen from "./components/HomeScreen.svelte";
@@ -55,6 +58,14 @@
   // `null` until the store answers, for the same reason as the providers.
   let folders = $state<WatchedFolder[] | null>(null);
   let foldersError = $state<string | null>(null);
+
+  // L56. `null` until the store answers, for the same reason as the providers and the folders: "still
+  // checking" and "nothing is waiting for a decision" are different facts, and the section says which.
+  let suggestions = $state<Suggestion[] | null>(null);
+  let suggestionError = $state<string | null>(null);
+  // True while a decision is being recorded, so neither button can be pressed twice — the backend
+  // refuses a second decision on the same row, and the interface must not be the one to offer it.
+  let deciding = $state(false);
 
   // R27 (L42). What removing a watched folder would take with it, while the confirmation is open. It is
   // the store's own plan and not a guess: the count the modal states comes from the same computation the
@@ -159,6 +170,57 @@
     } catch (error) {
       foldersError = String(error);
     }
+  }
+
+  async function loadSuggestions(): Promise<void> {
+    suggestionError = null;
+    try {
+      suggestions = await invoke<Suggestion[]>("list_suggestions");
+    } catch (error) {
+      suggestionError = String(error);
+    }
+  }
+
+  /**
+   * Records the reader's decision, and nothing decides for them.
+   *
+   * The order after a recorded decision matters: accepting has just put a document in the library, so
+   * the listing is re-read **without** raising the loading state — the same silent path a change of
+   * title uses — because flashing an empty grid over a listing that is already there would be worse
+   * than the fraction of a second it saves. Either way the queue is re-read from the store, which is
+   * the only thing that decides what is still pending.
+   */
+  /** Opens the folder that holds a suggested document, which is the only thing its path can do. */
+  async function openSuggestionFolder(path: string): Promise<void> {
+    const [settled] = await Promise.allSettled([
+      invoke<OpenedFolder>("open_containing_folder", { path }),
+    ]);
+    const outcome = folderActionOutcome(settled);
+    if (outcome.kind === "failed") {
+      console.error("the folder could not be opened", outcome.message);
+    }
+  }
+
+  async function decideSuggestion(id: number, accept: boolean): Promise<void> {
+    suggestionError = null;
+    deciding = true;
+    const command = accept ? "accept_suggestion" : "discard_suggestion";
+    const [settled] = await Promise.allSettled([invoke(command, { id })]);
+    deciding = false;
+
+    const outcome = suggestionOutcome(settled, id);
+    if (outcome.kind === "failed") {
+      suggestionError = outcome.message;
+      return;
+    }
+
+    // The item leaves the list at once — the backend will refuse a second decision, so leaving it
+    // visible would offer a promise the application cannot keep — and the store is asked again below.
+    suggestions = withoutSuggestion(suggestions ?? [], outcome.id);
+    if (accept) {
+      await refreshLibrary();
+    }
+    await loadSuggestions();
   }
 
   async function scan(path: string): Promise<void> {
@@ -321,11 +383,16 @@
       void loadLibrary();
       void loadProviders();
       void loadFolders();
+      void loadSuggestions();
       // R28: the same interval keeps the listing current, and it starts with the application rather than
       // with a screen, because the listing is what the screens receive. Outside the shell there is no store
       // to re-read, so the clock does not start.
       stopLibraryRefresh = startLibraryRefresh(() => {
         void refreshLibrary();
+        // The queue fills itself in the desktop process, so the same interval is what keeps the
+        // section current — otherwise a document the reader opened in their viewer would sit unseen
+        // until something else happened to re-read it.
+        void loadSuggestions();
       });
       void listen<string>(OPEN_SCREEN_EVENT, (screen) => {
         if (isScreen(screen)) {
@@ -400,6 +467,11 @@
         {scanning}
         {scanReport}
         {scanError}
+        {suggestions}
+        {suggestionError}
+        {deciding}
+        onOpenDocument={openSuggestionFolder}
+        onDecide={decideSuggestion}
         onScan={scan}
         onLocale={chooseLocale}
         onOpenFolder={openFolder}

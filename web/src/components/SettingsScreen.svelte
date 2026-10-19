@@ -15,6 +15,12 @@
     type FolderRemoval,
     type WatchedFolder,
   } from "../lib/screens";
+  import SuggestionCover from "./SuggestionCover.svelte";
+  import {
+    describeSuggestions,
+    suggestionTitle,
+    type Suggestion,
+  } from "../lib/suggestions";
   import { invoke } from "../lib/tauri";
   import Modal from "./Modal.svelte";
 
@@ -23,6 +29,9 @@
     providerError,
     folders,
     foldersError,
+    suggestions,
+    suggestionError,
+    deciding,
     locale,
     t,
     scanning,
@@ -31,6 +40,8 @@
     onScan,
     onLocale,
     onOpenFolder,
+    onOpenDocument,
+    onDecide,
     removal,
     onAskRemoval,
     onConfirmRemoval,
@@ -43,6 +54,9 @@
     providerError: string | null;
     folders: WatchedFolder[] | null;
     foldersError: string | null;
+    suggestions: Suggestion[] | null;
+    suggestionError: string | null;
+    deciding: boolean;
     locale: Locale;
     t: Translate;
     scanning: boolean;
@@ -51,6 +65,8 @@
     onScan: (folder: string) => Promise<void>;
     onLocale: (locale: Locale) => void;
     onOpenFolder: (path: string) => void;
+    onOpenDocument: (path: string) => void;
+    onDecide: (id: number, accept: boolean) => Promise<void>;
     removal: FolderRemoval | null;
     onAskRemoval: (id: number) => void;
     onConfirmRemoval: () => void;
@@ -62,6 +78,7 @@
 
   const providerMessage = $derived(describeProviderRegistry(providers, t));
   const folderMessage = $derived(describeWatchedFolders(folders, t));
+  const suggestionMessage = $derived(describeSuggestions(suggestions, t));
 
   let folder = $state("");
 
@@ -181,6 +198,52 @@
           </li>
         {/each}
       </ul>
+    {/if}
+  </div>
+
+  <!--
+    L56, restated in L57 after the user's verdict on the first attempt: a suggestion is shown as a CARD,
+    the same shape as a library card — the cover's reserved space and the text block under it — because
+    it belongs to the same family of things, and it read as a different kind of object before. The two
+    decisions sit INSIDE the cover's space, which is the document's own body and the same place a card's
+    edit and folder actions already live, and they are ICONS: an icon is not a name, so each button's
+    accessible name comes from the catalogue through \`aria-label\`, exactly as the card's own icon
+    actions do. The heading is the file's own name and never the path; the path is stated under it.
+  -->
+  <div class="panel">
+    <h2>{t("suggestion.heading")}</h2>
+    <p class="state">{t("suggestion.definition")}</p>
+    {#if suggestionError !== null}
+      <p class="state error">{t("suggestion.error", { message: suggestionError })}</p>
+    {:else if suggestionMessage !== null}
+      <p class="state">{suggestionMessage}</p>
+    {:else}
+      <div class="suggestions">
+        {#each suggestions ?? [] as suggestion (suggestion.id)}
+          <article>
+            <SuggestionCover
+              id={suggestion.id}
+              path={suggestion.path}
+              {t}
+              {deciding}
+              onDecide={onDecide}
+            />
+            <div class="body">
+              <h3 class="suggestion-title" title={suggestion.path}>
+                {suggestionTitle(suggestion.path)}
+              </h3>
+              <button
+                type="button"
+                class="suggestion-path"
+
+                title={t("suggestion.openFolder", { path: suggestion.path })}
+                aria-label={t("suggestion.openFolder", { path: suggestion.path })}
+                onclick={() => onOpenDocument(suggestion.path)}
+              >{suggestion.path}</button>
+            </div>
+          </article>
+        {/each}
+      </div>
     {/if}
   </div>
 
@@ -403,6 +466,54 @@
   .detail {
     font-size: 0.8rem;
     color: #5a6472;
+  }
+
+  /* L57: the suggestion cards, shaped like the library's. Two columns, because the window is 430 wide
+     and a card needs the room for its heading; nothing here scrolls sideways. */
+  .suggestions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem;
+    margin-top: 0.7rem;
+  }
+
+  .suggestions article {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+
+  /* Two lines at most, like a library card's title, so two suggestions never differ in height and the
+     block under the cover keeps one shape down the row. The whole name is still there for a pointer
+     through \`title=\` and for a screen reader. */
+  /* L58: the path is a small control that opens the document's own folder, the way a library card's
+     folder action does — a path a person cannot use is a dead line on the card. */
+  .suggestion-path {
+    background: none;
+    border: 0;
+    padding: 0;
+    text-align: left;
+    font-size: 0.7rem;
+    color: #5a6472;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+
+  .suggestion-path:hover {
+    color: #17364a;
+    text-decoration: underline;
+  }
+
+  .suggestion-title {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.2;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
   }
 
   .path {
