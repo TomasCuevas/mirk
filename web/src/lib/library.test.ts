@@ -471,12 +471,13 @@ describe("the author editor's rule", () => {
 });
 
 /**
- * The authors the editor offers as suggestions.
+ * The authors the editor offers (R40).
  *
  * Derived from the listing the interface already holds — both the authors the documents carry and the
  * ones readers set — so somebody does not retype a name and end up with two spellings of one person.
  * Two entries whose authors differ only by surrounding spaces are one person, so the trimmed value is
- * what makes them unique.
+ * what makes them unique. The list is sorted for the reader's locale (S3), because it is a list a
+ * person reads.
  */
 describe("the author suggestions", () => {
   it("offers every author the library already holds, without duplicates", () => {
@@ -486,7 +487,32 @@ describe("the author suggestions", () => {
       entry({ id: 3, author: "Ursula K. Le Guin", userAuthor: "Ursula K. Le Guin" }),
     ];
 
-    expect(libraryAuthors(entries)).toEqual(["Ursula K. Le Guin", "Jorge Luis Borges"]);
+    expect(libraryAuthors(entries)).toEqual(["Jorge Luis Borges", "Ursula K. Le Guin"]);
+  });
+
+  // S4: one rule per list, and they are DIFFERENT rules. The editor's list is a spelling suggestion,
+  // so it offers every author the reader has ever used on a document — including the reader's own,
+  // which no card shows, because the card shows the resolved author. The library's filter offers only
+  // what the cards show, because there a choice must have a document behind it.
+  it("keeps the reader's own author that no card shows, which is where it differs from the filter", () => {
+    const entries = [
+      entry({ id: 1, author: "Ursula K. Le Guin", userAuthor: "Le Guin" }),
+      entry({ id: 2, author: null, userAuthor: "Only The Reader's" }),
+    ];
+
+    expect(libraryAuthors(entries)).toEqual(["Le Guin", "Only The Reader's", "Ursula K. Le Guin"]);
+    expect(filterAuthors(entries)).toEqual(["Ursula K. Le Guin"]);
+  });
+
+  // S3. The editor's list reads alphabetically to the PERSON, so it is sorted with their locale rather
+  // than in first-seen order. The second assertion is the same two names in code-unit order — "Á" is
+  // U+00C1, so a plain sort puts the accented name after every ASCII one, which is not where a Spanish
+  // reader looks for it.
+  it("orders the list the way the reader's locale reads it, not by code unit", () => {
+    const entries = [entry({ id: 1, author: "Borges" }), entry({ id: 2, author: "Ávila" })];
+
+    expect(libraryAuthors(entries, "es")).toEqual(["Ávila", "Borges"]);
+    expect(["Borges", "Ávila"].sort()).toEqual(["Borges", "Ávila"]);
   });
 
   it("does not offer the same author twice for spellings that differ only by surrounding spaces", () => {

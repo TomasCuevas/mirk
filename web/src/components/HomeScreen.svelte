@@ -5,18 +5,20 @@
     categoryEntries,
     currentUnixSeconds,
     homeCategories,
+    libraryAuthors,
     libraryView,
     startCategoryRefresh,
     type HomeCategory,
     type LibraryEntry,
   } from "../lib/library";
-  import { categoryDefinition, categoryTitle } from "../lib/screens";
+  import { categoryTitle } from "../lib/screens";
   import BookGrid from "./BookGrid.svelte";
 
   let {
     entries,
     inFlight,
     error,
+    locale,
     t,
     onOpenFolder,
     onOpenDocument,
@@ -26,6 +28,7 @@
     entries: LibraryEntry[];
     inFlight: boolean;
     error: string | null;
+    locale: string;
     t: Translate;
     onOpenFolder: (entry: LibraryEntry) => void;
     /** Opens the document itself, in the system's own application for it (R37). */
@@ -58,6 +61,10 @@
   // of a rescan or a folder removal as it is of the first read, so no second string was added. That
   // sentence IS the loader — a spinner would add motion without adding information.
   const view = $derived(libraryView(entries, inFlight));
+
+  // R40/S1. The editor's author list comes from the WHOLE listing, not from the carousel slice each grid
+  // is handed: an author whose only document a carousel does not show would otherwise not exist there.
+  const authorSuggestions = $derived(libraryAuthors(entries, locale));
 
   // The tick is the shared helper, and it is stopped when the screen unmounts, so a screen that is
   // not open runs no timer.
@@ -112,10 +119,6 @@
           </button>
         </div>
 
-        <!-- B4: the definition is on screen because the category is a reading of the stored position,
-             not a fact the document carries. The stale definition carries its own threshold. -->
-        <p class="definition">{categoryDefinition(section.category, t)}</p>
-
         {#if section.items.length === 0}
           <!-- B1: an empty carousel keeps the place a card would take — the same cover placeholder, and
                the short message right under it — so the next heading is not pressed against this one.
@@ -130,7 +133,14 @@
             </div>
           </div>
         {:else}
-          <BookGrid entries={section.items} {t} {onOpenFolder} {onOpenDocument} layout="strip" />
+          <BookGrid
+            entries={section.items}
+            authors={authorSuggestions}
+            {t}
+            {onOpenFolder}
+            {onOpenDocument}
+            layout="strip"
+          />
         {/if}
       </section>
     {/each}
@@ -207,7 +217,6 @@
   }
 
   .head button,
-  .definition,
   .state {
     margin: 0;
   }
@@ -226,11 +235,6 @@
 
   .head button:hover {
     background: #f0f2f5;
-  }
-
-  .definition {
-    font-size: 0.8rem;
-    color: #5a6472;
   }
 
   .state {

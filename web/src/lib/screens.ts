@@ -88,10 +88,12 @@ export function screenLabel(screen: Screen, t: Translate): string {
 /**
  * The heading Inicio's carousel for `category` shows (B4).
  *
- * A category's definition is stated on screen because "finished" and "in progress" are readings of
- * a stored position, not facts the document carries: a reader who disagrees with the list can see
- * the rule that produced it. The stale definition carries the threshold itself, so "a long time" is
- * a number the reader can read rather than one hidden in the code (B3/B4).
+ * The CAROUSELS used to state each category's definition under this heading, and the reader asked for
+ * those three sentences to go (L70): a heading that already says "En curso" or "Terminados" does not
+ * need a line explaining what the words mean, and three of those lines made Inicio read like a manual.
+ * The category's own screen still states its definition — one line on a screen that holds nothing
+ * else is not noise, and it is where a reader who disagrees with the list can see the rule that
+ * produced it — so the helper below stays and only its use on Inicio was removed.
  */
 export function categoryTitle(category: HomeCategory, t: Translate): string {
   return t(`home.${category}.title`);

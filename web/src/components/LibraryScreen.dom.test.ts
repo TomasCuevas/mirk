@@ -201,3 +201,94 @@ describe("choosing an author in Biblioteca", () => {
     expect(titles()).toEqual(["Contact", "Cosmos"]);
   });
 });
+
+/**
+ * R40 / S1: the editor's author list comes from the WHOLE library, not from the page it was opened on.
+ *
+ * This is the user's own report — *"solo aparecen los autores que esten en los libros de la pagina
+ * actual y no de todos los PDF disponibles y cargados"* — and the defect was a scope bug: the editor
+ * lives in the grid, the grid derived its list from the `entries` it was handed, and the library screen
+ * hands it ONE PAGE of ten. An author whose only document sat on page two did not exist.
+ */
+describe("the editor's author list on a paged library", () => {
+  let component: ReturnType<typeof mount> | null = null;
+
+  afterEach(() => {
+    if (component !== null) {
+      unmount(component);
+      component = null;
+    }
+    window.document.body.innerHTML = "";
+  });
+
+  // Eleven documents so the listing really has two pages: the first ten fill page one in title order
+  // (`page-01`…`page-10`), and the eleventh — the only one by this author — lands on page two.
+  const ONLY_ON_PAGE_TWO = "Only On Page Two";
+  const paged: LibraryEntry[] = [
+    ...Array.from({ length: 10 }, (_, index) =>
+      entry({
+        id: index + 1,
+        path: `/library/page-${index + 1}.pdf`,
+        title: `page-${String(index + 1).padStart(2, "0")}`,
+        author: "Page One Author",
+      }),
+    ),
+    entry({
+      id: 11,
+      path: "/library/last.pdf",
+      title: "page-11",
+      author: ONLY_ON_PAGE_TWO,
+    }),
+  ];
+
+  function renderPaged(): void {
+    component = mount(LibraryScreen, {
+      target: window.document.body,
+      props: {
+        entries: paged,
+        inFlight: false,
+        error: null,
+        locale: "en",
+        t: english,
+        onOpenFolder: () => {},
+        onOpenDocument: () => {},
+      },
+    });
+    flushSync();
+  }
+
+  /** A card's pencil, found the way the reader finds it: by the document it edits. */
+  function editButton(title: string): HTMLButtonElement | undefined {
+    return [
+      ...window.document.querySelectorAll<HTMLButtonElement>("article button.edit-document"),
+    ].find(
+      (button) =>
+        button.getAttribute("aria-label") === english("card.editDocument", { title }),
+    );
+  }
+
+  /** The values the editor's author list is offering. */
+  function offeredAuthors(): string[] {
+    return [
+      ...window.document.querySelectorAll<HTMLOptionElement>('[role="dialog"] option'),
+    ].map((option) => option.value);
+  }
+
+  it("offers the author of a document that sits on another page", () => {
+    renderPaged();
+
+    // The page really hides that document: ten cards are drawn and none of them is by that author.
+    expect(titles()).toHaveLength(10);
+    expect(authorLines()).not.toContain(
+      english("library.author", { author: ONLY_ON_PAGE_TWO }),
+    );
+
+    // The editor is opened from a card that IS on page one…
+    editButton("page-01")?.click();
+    flushSync();
+
+    // …and the list offers the author whose only document is on page two, because the screen computed
+    // it from the whole listing (S1).
+    expect(offeredAuthors()).toContain(ONLY_ON_PAGE_TWO);
+  });
+});

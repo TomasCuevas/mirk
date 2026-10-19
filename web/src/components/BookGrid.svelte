@@ -21,6 +21,7 @@
 
   let {
     entries,
+    authors = null,
     t,
     onOpenFolder,
     onOpenDocument,
@@ -28,6 +29,16 @@
     initialEditing = null,
   }: {
     entries: readonly LibraryEntry[];
+    /**
+     * The authors the editor offers (R40), computed by the screen that holds the WHOLE listing.
+     *
+     * The grid cannot derive this itself: a screen hands it one page (ten documents) or one carousel
+     * slice, so an author whose only document sat elsewhere did not exist — the user's own report,
+     * "solo aparecen los autores que esten en los libros de la pagina actual". `null` means "derive it
+     * from the entries this grid holds", which is the sensible answer for a grid rendered on its own
+     * (a test), and never the right answer for a paged screen.
+     */
+    authors?: readonly string[] | null;
     t: Translate;
     onOpenFolder: (entry: LibraryEntry) => void;
     /**
@@ -108,13 +119,22 @@
   // are never rewritten by a refresh, which is what keeps an undecided title from being discarded.
   const shownEditing = $derived(editing === null ? null : editorEntry(entries, editing));
 
-  // The editor is a single modal with an id unique within it: only one grid renders an editor at a
-  // time, so the author field's native suggestions can point at it without a global registry.
-  const AUTHOR_SUGGESTIONS_ID = "oct-author-suggestions";
+  // The authors the editor's list offers. Computed by the screen where the whole listing lives and
+  // handed down (R40/S1); the fallback keeps a grid rendered on its own usable, and it is the WHY of
+  // this prop: a page of ten cannot know the library's authors.
+  const authorSuggestions = $derived(authors ?? libraryAuthors(entries));
 
-  // The authors already present in the library, the source of the field's suggestions. Derived from
-  // the listing the grid already holds rather than fetched, so there is no second source of truth.
-  const authorSuggestions = $derived(libraryAuthors(entries));
+  // The list is a PICKER, not a second copy of the value: choosing a name fills the draft and the list
+  // goes back to its "choose an author" entry, so the reader can clear the field and pick the same name
+  // again — a select that still showed it would send no `change` on the second pick. The value stays
+  // where the reader can edit it, in the text field (S2: typing a brand-new author keeps working).
+  function chooseAuthor(list: HTMLSelectElement): void {
+    const chosen = list.value;
+    list.value = "";
+    if (chosen !== "") {
+      authorDraft = chosen;
+    }
+  }
 
   function openDocumentEditor(entry: LibraryEntry): void {
     // The document may have changed on another screen since the card was drawn, so the editor seeds
@@ -355,28 +375,37 @@
     <!-- The author, in the SAME editor and decided by the same Cancel/Save pair as the title: the user
          asked for it behind the pencil, never as another control on the card. Its empty value is
          legitimate — leave it empty to fall back to the document's own author — which is the deliberate
-         difference from the title's blank refusal. The suggestions are the authors the library already
-         holds, offered natively so nobody retypes a name and ends up with two spellings of one person. -->
+         difference from the title's blank refusal.
+
+         R40/S2: the list of names is a real `<select>` beside the field, not a `<datalist>`. WebKitGTK —
+         the engine this window actually renders in — never implemented the `datalist` popup, so even a
+         complete list opened nothing. The field stays editable, because the reader must still be able to
+         type an author nobody in the library has yet. -->
     <label class="title-field">
       <span>{t(author.yours ? "card.authorLabelYours" : "card.authorLabel")}</span>
-      <input
-        type="text"
-        list={AUTHOR_SUGGESTIONS_ID}
-        bind:value={authorDraft}
-        aria-label={t(author.yours ? "card.authorLabelYours" : "card.authorLabel")}
-        onkeydown={(event) => {
-          if (event.key === "Enter") {
-            void saveTitle();
-          }
-        }}
-      />
+      <div class="author-row">
+        <input
+          type="text"
+          bind:value={authorDraft}
+          aria-label={t(author.yours ? "card.authorLabelYours" : "card.authorLabel")}
+          onkeydown={(event) => {
+            if (event.key === "Enter") {
+              void saveTitle();
+            }
+          }}
+        />
+        <select
+          aria-label={t("card.authorChoose")}
+          onchange={(event) => chooseAuthor(event.currentTarget)}
+        >
+          <option value="">{t("card.authorChoose")}</option>
+          {#each authorSuggestions as suggestion (suggestion)}
+            <option value={suggestion}>{suggestion}</option>
+          {/each}
+        </select>
+      </div>
     </label>
     <p class="cover-hint">{t("card.authorHint")}</p>
-    <datalist id={AUTHOR_SUGGESTIONS_ID}>
-      {#each authorSuggestions as suggestion (suggestion)}
-        <option value={suggestion}></option>
-      {/each}
-    </datalist>
 
     <!-- Two ROWS, and that is a decision rather than a wrapped line. Restore is a different kind of
          action from the pair below it: Cancel and Save apply or discard the DRAFT, while Restore throws
@@ -506,6 +535,31 @@
   }
 
   .title-field input {
+    padding: 0.5rem 0.6rem;
+    border: 1px solid #ccd2da;
+    border-radius: 0.4rem;
+    background: #ffffff;
+    font: inherit;
+    font-size: 0.95rem;
+    color: #1c2024;
+    box-sizing: border-box;
+  }
+
+  /* R40: the field and the list beside it. The field takes the room, because typing stays the primary
+     gesture and the list is the shortcut for a name the library already knows. */
+  .author-row {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .author-row input {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .author-row select {
+    flex: 0 1 auto;
+    max-width: 45%;
     padding: 0.5rem 0.6rem;
     border: 1px solid #ccd2da;
     border-radius: 0.4rem;

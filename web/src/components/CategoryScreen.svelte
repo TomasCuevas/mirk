@@ -4,6 +4,7 @@
   import {
     categoryEntries,
     currentUnixSeconds,
+    libraryAuthors,
     libraryView,
     startCategoryRefresh,
     type HomeCategory,
@@ -17,6 +18,7 @@
     entries,
     inFlight,
     error,
+    locale,
     t,
     onOpenFolder,
     onOpenDocument,
@@ -26,6 +28,7 @@
     entries: LibraryEntry[];
     inFlight: boolean;
     error: string | null;
+    locale: string;
     t: Translate;
     onOpenFolder: (entry: LibraryEntry) => void;
     /** Opens the document itself, in the system's own application for it (R37). */
@@ -44,6 +47,11 @@
   // a category that already shows documents never loses them to a loader. The loader is the catalogue's
   // existing loading sentence, which is as true of a scan as of the first read.
   const view = $derived(libraryView(items, inFlight));
+
+  // R40/S1. The editor's author list is computed from the WHOLE listing, not from the category's own
+  // items: the category is what this screen shows, and the authors a reader may want to type are every
+  // author the library holds.
+  const authorSuggestions = $derived(libraryAuthors(entries, locale));
 
   onMount(() => startCategoryRefresh(() => (now = currentUnixSeconds())));
 </script>
@@ -70,7 +78,13 @@
   {:else if view === "empty"}
     <p class="state">{t("home.categoryEmpty")}</p>
   {:else}
-    <BookGrid entries={items} {t} {onOpenFolder} {onOpenDocument} />
+    <BookGrid
+      entries={items}
+      authors={authorSuggestions}
+      {t}
+      {onOpenFolder}
+      {onOpenDocument}
+    />
   {/if}
 </section>
 

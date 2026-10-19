@@ -55,7 +55,10 @@ function saves(): unknown[][] {
   return invoke.mock.calls.filter((call) => call[0] === "set_document_naming");
 }
 
-function mountEditor(document_: LibraryEntry): ReturnType<typeof mount> {
+function mountEditor(
+  document_: LibraryEntry,
+  authors?: readonly string[],
+): ReturnType<typeof mount> {
   const component = mount(BookGrid, {
     target: window.document.body,
     props: {
@@ -64,6 +67,7 @@ function mountEditor(document_: LibraryEntry): ReturnType<typeof mount> {
       onOpenFolder: () => {},
       onOpenDocument: () => {},
       initialEditing: document_,
+      ...(authors === undefined ? {} : { authors }),
     },
   });
   flushSync();
@@ -73,6 +77,24 @@ function mountEditor(document_: LibraryEntry): ReturnType<typeof mount> {
 function saveButton(): HTMLButtonElement | undefined {
   return [...window.document.body.querySelectorAll("button")].find(
     (button) => button.textContent?.trim() === english("card.titleSave"),
+  );
+}
+
+/** The editor's author field, found the way the reader sees it: by its label. */
+function authorField(): HTMLInputElement | undefined {
+  const field = window.document.querySelector('input[aria-label="Author"]');
+  return field === null ? undefined : (field as HTMLInputElement);
+}
+
+/**
+ * The editor's author list, identified by the names among its options rather than by position.
+ *
+ * It is found that way on purpose: the test fails if the list stops offering the authors at all,
+ * instead of quietly finding some other control.
+ */
+function authorList(): HTMLSelectElement | undefined {
+  return [...window.document.body.querySelectorAll("select")].find(
+    (select) => select.querySelector('option[value="Jorge Luis Borges"]') !== null,
   );
 }
 
@@ -89,11 +111,11 @@ describe("the editor's Save, pressed for real", () => {
     invoke.mockImplementation(async () => null);
   });
 
-  function prepare(): LibraryEntry {
+  function prepare(authors?: readonly string[]): LibraryEntry {
     // Inside the desktop shell, which is the only place a save can happen: the real guard reads this.
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     const document_ = entry();
-    component = mountEditor(document_);
+    component = mountEditor(document_, authors);
     return document_;
   }
 
@@ -129,5 +151,47 @@ describe("the editor's Save, pressed for real", () => {
       expect(window.document.body.textContent).toContain("the store refused"),
     );
     expect(saveButton()).toBeDefined();
+  });
+
+  // S2, pressed for real. `datalist` cannot be exercised in WebKitGTK, so the list is a select beside
+  // the field; the field stays editable, and choosing a name there fills it. What matters beyond the
+  // field is that Save still sends ONE command carrying the author the reader chose.
+  it("fills the text field from the list, and saves that author in the same single write", async () => {
+    const document_ = prepare(["Ursula K. Le Guin", "Jorge Luis Borges"]);
+    const list = authorList();
+    expect(list, "the editor draws a list of the library's authors").toBeDefined();
+
+    // Chosen the way a browser reports it: set the value, then send the `change` that travels up.
+    list!.value = "Jorge Luis Borges";
+    list!.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+
+    // The field carries the name, so the reader can still correct it by hand before saving…
+    expect(authorField()?.value).toBe("Jorge Luis Borges");
+
+    saveButton()?.click();
+    await vi.waitFor(() => expect(saveButton()).toBeUndefined());
+
+    // …and that name is what reached the store, in the one and only write.
+    expect(saves()).toHaveLength(1);
+    expect(saves()[0]).toEqual([
+      "set_document_naming",
+      { id: document_.id, title: document_.title, author: "Jorge Luis Borges" },
+    ]);
+  });
+
+  // The list is a picker, never a second copy of the value: it goes back to its "choose an author"
+  // entry, so a reader who clears the field can pick the same name again and a real browser sends the
+  // `change` that fills it.
+  it("returns the list to its choose-an-author entry after a name is picked", () => {
+    prepare(["Jorge Luis Borges"]);
+    const list = authorList();
+
+    list!.value = "Jorge Luis Borges";
+    list!.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+
+    expect(authorList()?.value).toBe("");
+    expect(authorField()?.value).toBe("Jorge Luis Borges");
   });
 });

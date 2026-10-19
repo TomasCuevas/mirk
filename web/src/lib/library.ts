@@ -566,32 +566,39 @@ export function authorEditor(entry: LibraryEntry): { value: string; yours: boole
 }
 
 /**
- * The authors already present in the library, for the editor's native suggestions.
+ * The authors the editor offers, from the WHOLE library (R40).
  *
  * The reader should not have to retype a name and risk two spellings of the same person, so the
  * listing they already hold is the source: both the authors the documents carry and the ones readers
  * set are offered. It is derived here rather than fetched with a command, so there is no second
- * source of truth and no new round trip.
+ * source of truth and no new round trip. The caller must hand it the WHOLE listing, not a page of it:
+ * deriving it from the ten documents a page happens to hold is exactly how an author whose only
+ * document sat on page two stopped existing (S1).
+ *
+ * **It offers the reader's own author as well as the resolved one, and that is where it differs from
+ * [`filterAuthors`] (S4).** There the list is the set of documents the reader can choose between, so an
+ * entry no card stands for would empty the shelf; here the list is a spelling suggestion, so a name the
+ * reader typed once is useful even before a card shows it.
  *
  * **Deduplication is by the trimmed value.** Two entries whose authors differ only by surrounding
  * spaces are one person and must appear once; the first spelling wins and the surrounding spaces are
- * never part of the name. The first-seen order is preserved rather than sorted, so the list is a
- * function of the data alone and not of the machine's locale (the same reason the carousels' tiebreak
- * avoids `localeCompare`).
+ * never part of the name. A blank is not an author at all.
+ *
+ * **Sorted with the reader's locale**, like the filter's list (S3): this is a list a person reads, so
+ * "Ávila" belongs before "Borges" for a Spanish reader, while a plain sort puts it after every ASCII
+ * name.
  */
-export function libraryAuthors(entries: readonly LibraryEntry[]): string[] {
+export function libraryAuthors(entries: readonly LibraryEntry[], locale = "en"): string[] {
   const seen = new Set<string>();
-  const authors: string[] = [];
   for (const entry of entries) {
     for (const candidate of [entry.author, entry.userAuthor]) {
       const trimmed = candidate?.trim() ?? "";
-      if (trimmed !== "" && !seen.has(trimmed)) {
+      if (trimmed !== "") {
         seen.add(trimmed);
-        authors.push(trimmed);
       }
     }
   }
-  return authors;
+  return [...seen].sort((left, right) => left.localeCompare(right, locale));
 }
 
 /**
@@ -814,8 +821,8 @@ export function filterEntries(
  *
  * **Sorted with the reader's locale**, not by code unit: this is a list a person reads, so "Ávila"
  * belongs before "Borges" for a Spanish reader, while a plain sort puts it after every ASCII name.
- * `libraryAuthors`' first-seen order is right for suggestions, which follow the listing, and wrong
- * for a list that has to read alphabetically.
+ * [`libraryAuthors`] is sorted the same way and differs from this function in which entries it
+ * reads, not in how it orders them.
  */
 export function filterAuthors(entries: readonly LibraryEntry[], locale = "en"): string[] {
   const seen = new Set<string>();

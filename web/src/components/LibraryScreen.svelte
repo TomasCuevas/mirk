@@ -8,6 +8,7 @@
     filterAuthors,
     filterByAuthor,
     filterEntries,
+    libraryAuthors,
     libraryView,
     paginate,
     sortEntries,
@@ -50,6 +51,10 @@
   let authorChoice = $state(ALL_AUTHORS);
   const authors = $derived(filterAuthors(entries, locale));
   const chosenAuthor = $derived(authorFilter(authors, authorChoice));
+  // R40/S1. The editor's own list is a different rule over a different scope: every author the reader
+  // has used, including their own, computed from the WHOLE listing — never from `paged.items`, which is
+  // the ten documents this page holds and is exactly how an author on page two stopped existing.
+  const authorSuggestions = $derived(libraryAuthors(entries, locale));
 
   // `null` means there is something to list, so the empty-library sentence and the grid are
   // mutually exclusive rather than layered.
@@ -125,7 +130,13 @@
            snippet rendered twice, so the two copies cannot drift apart. -->
       {@render pager()}
 
-      <BookGrid entries={paged.items} {t} {onOpenFolder} {onOpenDocument} />
+      <BookGrid
+        entries={paged.items}
+        authors={authorSuggestions}
+        {t}
+        {onOpenFolder}
+        {onOpenDocument}
+      />
 
       {@render pager()}
     {/if}

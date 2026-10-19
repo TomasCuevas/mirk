@@ -15,6 +15,7 @@ function categoryProps(
     entries: [] as LibraryEntry[],
     inFlight: false,
     error: null as string | null,
+    locale: "en",
     t: english,
     onOpenFolder: () => {},
     onOpenDocument: () => {},

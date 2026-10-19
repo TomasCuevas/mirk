@@ -79,8 +79,9 @@ describe("the home categories", () => {
   });
 
   it("states every category's definition, and the stale threshold with it", () => {
-    // B4: each category says what it means on screen, and "a long time" is a number the reader can
-    // read rather than one hidden in the code (B3).
+    // B4, still true of the CATEGORY screen: it says what the category means, and "a long time" is a
+    // number the reader can read rather than one hidden in the code (B3). Inicio's carousels stopped
+    // stating it at the reader's request (L70); this screen kept it.
     for (const category of homeCategories) {
       expect(categoryDefinition(category, english).trim()).not.toBe("");
       expect(categoryDefinition(category, spanish)).not.toBe(
@@ -90,6 +91,7 @@ describe("the home categories", () => {
     expect(categoryDefinition("stale", english)).toContain(String(STALE_AFTER_DAYS));
     expect(categoryDefinition("stale", spanish)).toContain(String(STALE_AFTER_DAYS));
   });
+
 });
 
 describe("watched folders", () => {

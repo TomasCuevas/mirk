@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import HomeScreen from "./HomeScreen.svelte";
 import { translate } from "../lib/i18n";
 import { homeCategories, type LibraryEntry } from "../lib/library";
-import { categoryDefinition, categoryTitle } from "../lib/screens";
+import { categoryTitle } from "../lib/screens";
 
 const english = translate("en");
 
@@ -12,6 +12,7 @@ function homeProps(overrides: { entries?: LibraryEntry[]; inFlight?: boolean } =
     entries: [] as LibraryEntry[],
     inFlight: false,
     error: null as string | null,
+    locale: "en",
     t: english,
     onOpenFolder: () => {},
     onOpenDocument: () => {},
@@ -73,13 +74,18 @@ describe("Inicio", () => {
     expect(header).not.toContain("<p");
   });
 
-  it("shows all three carousels, each stating its own definition (B1, B4)", () => {
+  it("shows all three carousels, and no definition under their headings (B1, L70)", () => {
+    // The user asked for the definition sentences to go: a heading that already says "En curso" or
+    // "Terminados" does not need a line explaining the words, and three of them read like a manual.
+    // The guard is the absence itself, so the sentences cannot quietly come back.
     const { body } = render(HomeScreen, { props: homeProps() });
 
     for (const category of homeCategories) {
       expect(body).toContain(categoryTitle(category, english));
-      expect(body).toContain(categoryDefinition(category, english));
     }
+    expect(body).not.toContain('class="definition');
+    expect(body).not.toContain("Documents whose recorded position");
+    expect(body).not.toContain("Documentos cuya posición registrada");
   });
 
   it("explains an empty first run, and offers the one action that fills it (R34)", () => {

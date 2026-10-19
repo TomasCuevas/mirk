@@ -485,6 +485,7 @@
         {entries}
         inFlight={libraryInFlight}
         error={libraryError}
+        {locale}
         {t}
         onOpenFolder={openContainingFolder}
         onOpenDocument={openDocument}
@@ -535,6 +536,7 @@
         {entries}
         inFlight={libraryInFlight}
         error={libraryError}
+        {locale}
         {t}
         onOpenFolder={openContainingFolder}
         onOpenDocument={openDocument}

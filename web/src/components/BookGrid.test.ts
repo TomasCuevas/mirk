@@ -95,7 +95,7 @@ describe("the document editor", () => {
     expect(body).toContain(english("card.coverRemoveImage"));
   });
 
-  it("holds the author field and offers the library's authors as native suggestions", () => {
+  it("draws the author list as a real select, and no datalist", () => {
     const first = document({ id: 1, author: "Ursula K. Le Guin", userAuthor: null });
     const second = document({ id: 2, author: "Jorge Luis Borges", userAuthor: null });
     const body = render(BookGrid, {
@@ -103,12 +103,31 @@ describe("the document editor", () => {
     }).body;
 
     // The author lives in the same modal as the title and the cover, prefilled with the author on
-    // screen, and its suggestions are the authors the library already holds — so nobody retypes a name
-    // and ends up with two spellings of one person.
+    // screen, and its list is the authors the library already holds — so nobody retypes a name and
+    // ends up with two spellings of one person.
     expect(body).toContain(english("card.authorLabel"));
-    expect(body).toContain("oct-author-suggestions");
-    expect(body).toContain('value="Ursula K. Le Guin"');
-    expect(body).toContain('value="Jorge Luis Borges"');
+    // S2: WebKitGTK — the engine this window renders in — never implemented the `datalist` popup, so a
+    // complete list behind one would still open nothing. The control has to be a real `select`, with
+    // the catalogue's "choose an author" entry first and the authors after it.
+    expect(body).not.toContain("datalist");
+    expect(body).toContain("<select");
+    expect(body).toContain(english("card.authorChoose"));
+    expect(body).toContain('<option value="Ursula K. Le Guin">');
+    expect(body).toContain('<option value="Jorge Luis Borges">');
+  });
+
+  // S1, at the component's own boundary: the grid draws the list it is HANDED, because a screen that
+  // holds one page cannot compute the authors of the whole library. What the screens compute is pinned
+  // where the whole listing lives; this pins that the prop is what the control reads.
+  it("draws the authors it is handed, not only the ones on the page it shows", () => {
+    const onThisPage = document({ id: 1, author: "Page One Author", userAuthor: null });
+    const body = render(BookGrid, {
+      props: { ...props, entries: [onThisPage], authors: ["Only Elsewhere"], initialEditing: onThisPage },
+    }).body;
+    const select = body.slice(body.indexOf("<select"));
+
+    expect(select).toContain('<option value="Only Elsewhere">');
+    expect(select).not.toContain("Page One Author");
   });
 
   it("offers to remove the image only once the reader supplied one", () => {
