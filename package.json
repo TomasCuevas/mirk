@@ -14,6 +14,7 @@
   "//": "`svelte-check` is the interface's Svelte-aware type checker: `tsc --noEmit` runs over the logic files only and sees a `.svelte` import as an opaque value (`web/src/ambient.d.ts`), so component wiring — a missing required prop, a prop passed after removal, a forward to something gone — was never checked. It is now part of `typecheck` (and `build`, which reuses it) instead of a command someone has to remember. `typescript` is pinned to 6.x because svelte-check's language server supports TypeScript <= 6; TypeScript 7 is the native reimplementation of 6, and svelte-check cannot consume it as its compiler API, so this is the version whose semantics both passes share, not a weakened `tsc`.",
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "happy-dom": "^21.0.3",
     "svelte": "^5.57.2",
     "svelte-check": "^4.7.7",
     "typescript": "~6.0.3",
