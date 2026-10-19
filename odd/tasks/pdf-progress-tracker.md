@@ -3082,15 +3082,24 @@ verde dependiendo el porcentaje"*.
 - **S1 — the FILL changes colour; the bar does not.** The coloured element is the span that stands for what was
   read. The track keeps its neutral grey, so the empty part of the bar still says "nothing read here" without
   competing with the colour that means something.
-- **S2 — four bands, red orange yellow green, at the four quarters.** `[0, ¼)` red, `[¼, ½)` orange,
-  `[½, ¾)` yellow, `[¾, 1]` green. Each boundary belongs to the band ABOVE it, so a document that has crossed a
-  quarter reads as having crossed it — the alternative would make 25 % look like barely started.
-- **S3 — one number, two channels.** The band is derived from the same `fraction` the fill's width comes from,
+- **S2 — one continuous ramp, corrected by L67 (was: four bands at the four quarters).** The four colours the
+  user named are the ramp's **landmarks**, not four states: red at 0 %, orange at ⅓, yellow at ⅔, green at 100 %,
+  and every fraction in between gets its own colour, interpolated in **OKLab** so the intermediate tones keep
+  their chroma instead of turning into muddy olive the way sRGB blending does. The rendered output is plain
+  `rgb()`, so the perceptual work happens in code that can be tested rather than in the browser. The user's
+  correction, verbatim: *"no quiero que sean colores fijos, quiero que se vayan transformando poco a poco a
+  medida que el porcentaje avanza, no que cambie bruscamente de un rojo a naranja y despues de naranja a
+  amarrillo y asi"*.
+- **S3 — one number, two channels.** The colour is derived from the same `fraction` the fill's width comes from,
   so colour and width cannot disagree; and the number on the bar still states the percentage, so the colour is
-  redundant information rather than the only one. A reader who cannot tell the hues apart loses nothing.
+  redundant information rather than the only one. A reader who cannot tell the hues apart loses nothing. The
+  ramp is monotonic — green only ever rises from red to green — so it measures rather than decorates.
 - **S4 — a fraction that cannot be read is the floor, not a colour invented from it.** `NaN` is treated as
   "nothing read"; values outside `0..1` are clamped, because a viewer can report page 90 of 80 and the fraction
   is already clamped upstream.
+- **S5b — the ramp stays dark enough to read.** Every colour on it is checked against a luminance ceiling, so a
+  future palette edit that lightens the middle (the classic "halfway yellow") cannot make the bar disappear over
+  the pale track.
 - **S5 — nothing changes about what is stated.** The percentage, the page marker, the provenance sentence and
   the "no record means 0 %" decision (L23) are exactly as they were. This unit is a colour, not a new claim.
 
@@ -3098,7 +3107,12 @@ verde dependiendo el porcentaje"*.
 
 - **U22** R38 — `progressBand` and the band on `ProgressView`, the four classes on the fill (and nothing on the
   track), and the tests: the quarters from both sides of every edge, the clamps, the `NaN` floor, the band and
-  the width read from one fraction, and a rendered card per band.
+  the width read from one fraction, and a rendered card per band. **Superseded by U23** (the bands are gone;
+  the four colours survive as the ramp's stops).
+- **U23** R38/S2 corrected by L67 — `progressColor(fraction)` replacing `progressBand`, the OKLab interpolation,
+  the colour on `ProgressView` and inline on the fill, and the tests: the four landmarks, the measured maximum
+  step between neighbouring hundredths, monotonicity, the luminance ceiling, the clamps, and two neighbouring
+  readings drawn in two different colours.
 
 **L45 — the carousels' order: the most recently read document first (U13/R29).** The user asked that
 *"el ultimo elemento que se haya leido siempre aparezca primero … de mas reciente a más antiguo"*. The order
@@ -3460,3 +3474,47 @@ nohup` y se verifica por pid.
 RESIDUAL: que los cuatro tonos se vean bien en la pantalla del usuario es suyo confirmarlo. Los valores son
 #b3261e, #c2410c, #a16207 y #2e7d32, elegidos oscuros para leerse contra la pista clara y contra la tarjeta
 blanca; un ajuste de tono es una línea en el CSS de la tarjeta y ninguna prueba de la regla cambia.
+
+**L67 — el color no salta: es una rampa, y el usuario tuvo razón en corregirlo.**
+Su corrección, textual: *"No quiero que sean colores fijos, quiero que se vayan transformando poco a poco a
+medida que el porcentaje avanza, no que cambie bruscamente de un rojo a naranja y despues de naranja a
+amarillo y asi"*. Es una spec mejor que la mía, y la prueba está en el número que ahora mide la diferencia:
+con las cuatro bandas, caminar la fracción en centésimos producía tres saltos de 60 a 115 unidades por canal en
+los bordes (25, 50 y 75 %); con la rampa, el salto máximo medido es **menor que 10**. Lo que el usuario nombraba
+como "colores" eran los hitos del camino, no estados.
+
+LO QUE SE FUE Y LO QUE QUEDÓ. `progressBand` y las cuatro clases CSS desaparecieron; en su lugar hay
+`progressColor(fraction)`, que devuelve un `rgb()` calculado. Los cuatro colores que el usuario nombró siguen
+existiendo como las **paradas** de la rampa —rojo en 0, naranja en ⅓, amarillo en ⅔, verde en 1—, que es
+exactamente lo que su primer pedido describía y lo que su corrección precisó.
+
+INTERPOLACIÓN EN OKLAB, NO EN sRGB, y es una decisión con consecuencia visible. Mezclar rojo y verde canal por
+canal en sRGB pasa por un oliva sucio, y el punto medio de amarillo y verde también; OKLab está lo bastante cerca
+de cómo ve el ojo como para que la rampa conserve croma y luminosidad. Las matrices de Ottosson están en el
+módulo, la conversión de ida y vuelta se prueba por sus paradas (que vuelven exactas a los cuatro hex), y la
+salida es `rgb()` puro: el trabajo perceptual vive donde se puede testear, no en el motor de render. El
+`background` del `.fill` queda como respaldo — un relleno sin color sería una barra invisible, y una barra
+invisible dice "no se leyó nada" sobre un documento que sí se leyó.
+
+TRES GUARDAS QUE LA RAMPA NECESITA Y LAS BANDAS NO. Que el paso máximo sea chico (la corrección, medida), que la
+curva sea **monótona** —el verde sólo sube de rojo a verde, así que la rampa mide y no decora— y que **ninguna
+parada ni ningún intermedio** se aclare tanto como para desaparecer sobre la pista (#e8ebef): la luminancia
+relativa se afirma bajo 0.30 en los 101 puntos muestreados, porque el "amarillo de la mitad" es justo el color
+que se elige por gusto y arruina la lectura.
+
+UN DEFECTO MÍO, ENCONTRADO POR CONTEO Y NO POR COLOR: al reemplazar el bloque de tests con un script dejé un
+`/**` sin cerrar, y en JavaScript eso comenta **el resto del archivo**. La suite quedó verde con **13 tests
+menos** (194 en vez de 207) y nada se quejó: un archivo que termina dentro de un comentario es sintácticamente
+válido. Se detectó comparando el total contra el commit anterior, no leyendo el archivo. Queda escrito porque es
+una clase de falla que ninguna aserción cubre: cuando se recorta un bloque con una herramienta, el conteo de
+tests es la única señal de que no se llevó puesto el resto.
+
+VERIFICACIÓN. Interfaz en **209** pruebas (las 207 anteriores, menos siete de bandas, más nueve de rampa y
+tarjeta), chequeo de tipos en 0 y 0, paquete reconstruido antes que el binario, y la aplicación relanzada
+(pid 1348627). Falsificaciones, las dos con rojo observado y archivos restaurados idénticos (`library.ts`
+62838d6e…, `BookCard.svelte` 53c86a1f…): volver a discretizar la rampa (tres rojos —`expected 115 to be less
+than 10`, la monotonía empatada en 38, y dos lecturas vecinas con el mismo color—) y quitar el `background`
+inline del relleno (dos rojos, `expected null to be 'rgb(90, 120, 42)'`).
+
+RESIDUAL: que la rampa se vea bien en la pantalla del usuario sigue siendo suyo confirmarlo. Un ajuste de tono
+son cuatro hex en `PROGRESS_STOPS`, y las guardas de luminancia y monotonía avisan si el ajuste rompe algo.
