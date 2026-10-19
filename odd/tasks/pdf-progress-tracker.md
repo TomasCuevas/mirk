@@ -3037,6 +3037,42 @@ that makes the tray's settings entry work at all — the original defect was exa
 file, and nothing anywhere said so", and `cargo build` validates the file's SHAPE rather than its contents. A
 test now reads it and asserts both grants are present.
 
+### Specs — round 10: the card opens the document (R37, L65)
+
+The user's request, verbatim: *"quiero que exista la posibilidad de abrir el PDF directamente desde esta
+application, pudiendo hacer click en la card y se abra el PDF en Evince o la aplicacion predeterminada del
+usuario para abrir sus PDF"*. Two decisions were theirs and were asked before any code was written: the zone
+that opens the document (**the cover and the title**, not the whole card) and how it opens (**resume where you
+left off**, falling back to the default application).
+
+- **S1 — the card opens the document, from the cover and from the title.** Those two, and only those two. The
+  folder action and the editor pencil keep doing what they already did and never open the file. The cover and
+  the title are both controls — a real `<button>` each — so the pointer and the keyboard reach the same action;
+  the cover names the document through `aria-label` (it holds no text of its own) and the title needs no second
+  name because its own text is the name. On a screen holding dozens of cards, a control that says only "open"
+  says nothing about which one it opens.
+- **S2 — it opens in the system's own application for PDFs, resumed at the page the reader reached.** The page
+  is the **newest recorded position**, the very row the listing shows, so a card that says "page 12" opens at
+  page 12 and the two can never disagree. A document no source has ever reported a position for is opened at
+  its beginning: there is no page to resume, and `null` is a different answer from page zero.
+- **S3 — a viewer that cannot be asked for a page still opens the document.** Landing on page one is a degraded
+  success, not an error; the answer names the program that actually ran, so the two cases stay distinguishable
+  without pretending the page request was honoured.
+- **S4 — a document whose file is gone is an honest error, and nothing is launched.** The library keeps
+  documents whose files were moved or deleted since the last scan; handing such a path to a viewer that will
+  complain in a window nobody is looking at is the failure this project refuses everywhere else.
+- **S5 — an id that names no document is an invalid argument, not a storage failure (R35).** The error says
+  which field, which value, and what the build accepts instead.
+- **S6 — no new dependency and no new capability.** The existing `Launcher` axis and `xdg-open`/viewer CLI do
+  the work; the webview invokes one application command like every other screen action, so the capability file
+  needs no change.
+
+### Tasks — round 10
+
+- **U21** R37 — the command (`Store::document_by_id`, `commands::open_document`, the Tauri wrapper), the card's
+  two controls, the catalogue strings in both languages, and the tests: the store's single-document lookup, the
+  five backend rules, the card's markup, the pure outcome rule, and a real click on both controls.
+
 **L45 — the carousels' order: the most recently read document first (U13/R29).** The user asked that
 *"el ultimo elemento que se haya leido siempre aparezca primero … de mas reciente a más antiguo"*. The order
 lives in the same pure selector that decides which documents a category holds, so the carousel, a category's
@@ -3287,3 +3323,66 @@ App.svelte:69-71) y R4-transient-capability-cache (resiliencia, App.svelte:188-1
 identificadores, severidad y ubicación, pero no el texto del hallazgo, así que actuar sobre ellos sería adivinar;
 se registran como trabajo posterior y no como razón para repetir la revisión. El tray quedó verificado por el
 usuario: cerró desde el ícono y el chequeo no devolvió ningún proceso vivo.
+
+**L65 — la tarjeta abre el documento, y abre donde lo dejaste (U21/R37).**
+El pedido del usuario, textual: *"quiero que exista la posibilidad de abrir el PDF directamente desde esta
+aplicacion, pudiendo hacer click en la card y se abra el PDF en Evince o la aplicacion predeterminada del
+usuario para abrir sus PDF"*. Dos decisiones eran suyas y se preguntaron ANTES de escribir una línea: la zona
+que abre (eligió **la portada y el título**, no la tarjeta entera) y cómo abre (eligió **retomar donde quedaste**,
+con caída a la aplicación predeterminada). Lo demás ya estaba en el proyecto: el eje C (`Launcher`) existe desde
+T7 con `xdg-open` y el CLI de visor, y la conversión cero-a-uno-based vive en un solo lugar desde T9. Lo que
+faltaba era el camino: la tarjeta no tenía forma de abrir un documento, sólo su carpeta y su editor.
+
+LA MITAD DE ATRÁS, en tres piezas y ninguna nueva de infraestructura. `Store::document_by_id` lee UNA fila en
+vez de obligar a traer la biblioteca entera para encontrar un documento; su decodificación se extrajo a
+`decode_document`, que es ahora la única que arma un `Document` desde columnas, así que un documento buscado
+por id y el mismo documento en el listado no pueden discrepar sobre un campo. `commands::open_document` toma el
+id, no una ruta: la ruta canónica la tiene el almacén, y la página es la **posición registrada más nueva**, la
+misma fila que el listado muestra — una tarjeta que dice "página 12" abre en la 12, por construcción.
+
+TRES REGLAS QUE NO SON OBVIAS Y QUEDARON PROBADAS. Un visor que no acepta página **igual abre el documento**
+(el contrato del eje C de T7: aterrizar en la página uno es un éxito degradado, no un error), y la respuesta
+nombra el programa que realmente corrió, así que "abrió" y "abrió donde lo dejé" siguen siendo distinguibles.
+Un documento cuyo archivo ya no está es un error honesto y **no se lanza**: la biblioteca guarda documentos
+cuyos archivos se movieron o borraron después del último escaneo, y entregarle esa ruta a un visor que va a
+quejarse en una ventana que nadie mira es exactamente la falla que este proyecto rechaza en todos lados. Y un
+id que no nombra ningún documento es un argumento inválido (`InvalidInput`), no un fallo de almacenamiento —
+la misma lección de R35, aplicada a un caso nuevo.
+
+LA MITAD DE ADELANTE, y la decisión de diseño que vale anotar. La portada y el título son botones de verdad, no
+`div` con `onclick`: el puntero y el teclado llegan a la misma acción, y no hizo falta ni un `tabindex` ni un
+manejador de Enter. La portada lleva `aria-label` que nombra el DOCUMENTO ("Abrir Cosmos") porque no tiene texto
+propio; el título no lleva segundo nombre porque su texto ES el nombre. Los dos pills de las esquinas quedaron
+**fuera** del botón de la portada, que es la razón por la que la portada no puede ser la tarjeta entera: un
+botón dentro de un botón no existe, y la zona elegida por el usuario es justo la que no tiene controles encima.
+El clamp de dos líneas del título se movió del botón a un `span` interno, porque un control de formulario es un
+elemento reemplazado en algunos motores y ahí `-webkit-line-clamp` no se honra; el span es un elemento común y
+el clamp es el mismo de antes.
+
+LA VERIFICACIÓN, con números. `oct-store` en 71 pruebas (64 de integración, antes 62: las dos del documento por
+id), `oct-desktop` en **91** (antes 86: las cinco del comando nuevo), `oct-platform` 72, `oct-scan` y el resto en
+verde, clippy `--all-targets -D warnings` limpio, interfaz en **200** pruebas (antes 193: la tarjeta 4, la regla
+pura 3, y **tres de clic real** en el archivo `dom` nuevo), chequeo de tipos en 0 y 0, paquete reconstruido antes
+que el binario, y la aplicación relanzada. Se eliminaron además las props que mentían: tres guardas de la tarjeta
+contaban `<button>` y afirmaban que eran dos, y ahora son cuatro — el número quedó acompañado del nombre de cada
+control, que es lo que el test quería decir desde el principio y que un conteo no puede expresar.
+
+DIFERENCIAL CONTRA EL COMMIT BASE, corrido de verdad y no supuesto: un worktree de `HEAD` en un directorio
+temporal, con `web/dist` y `vendor/pdfium/lib` copiados porque los dos están gitignoreados — sin ellos el
+worktree no compila `oct-desktop` ni puede renderizar, y las cinco fallas que aparecen son del entorno, no del
+código. Con eso en su lugar: base `oct-desktop` **86/86 en verde**, el mismo conjunto exacto de pruebas que hoy
+pasa en la rama, más las cinco nuevas. Ninguna prueba existente cambió de resultado, que es lo que el refactor de
+`decode_document` y el comando nuevo tenían que demostrar.
+
+FALSIFICACIONES, las tres con rojo observado y archivos restaurados idénticos (`commands.rs` 76e9b2f3…,
+`BookCard.svelte` 2e7b6e69…): el comando lanzando sin página (rojo: `left: None, right: Some(11)`), el chequeo
+de existencia del archivo borrado (rojo: `expected an InvalidPath error, got Ok(OpenedDocumentView { … })`), y
+el `onclick` del título suprimido (rojo: `expected "vi.fn()" to be called 1 times, but got 0 times`).
+
+RESIDUAL, dicho en vez de escondido. Que el clic abra Evince en la máquina del usuario es suyo confirmarlo: la
+evidencia es que el comando está registrado y probado, que el launcher real está probado por separado
+(`launching_at_a_page_uses_the_viewer_cli_with_the_one_based_index`), y que en esta máquina `evince` existe y es
+el manejador predeterminado de `application/pdf`. Lo que **no** se hizo, a propósito: correr el comando contra la
+base real, porque abrir un documento de verdad escribe la posición en el estado de Evince y T1 ya documentó que
+una prueba así pisó la página de un libro real ("Cosmos - Carl Sagan", página 72). Nadie prueba sobre datos del
+lector.
