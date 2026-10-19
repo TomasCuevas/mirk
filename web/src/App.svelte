@@ -63,6 +63,15 @@
   // checking" and "nothing is waiting for a decision" are different facts, and the section says which.
   let suggestions = $state<Suggestion[] | null>(null);
   let suggestionError = $state<string | null>(null);
+  /**
+   * Whether this machine can say which documents are open, or null while that is unknown (L61).
+   *
+   * Asked once. The answer cannot change while the application runs and asking walks the process
+   * table, so a poll that asked every three seconds would pay repeatedly for the same answer. null is
+   * not false: an answer that has not arrived is not a missing capability.
+   */
+  let detectorOk = $state<boolean | null>(null);
+  let detectorAsked = false;
   // True while a decision is being recorded, so neither button can be pressed twice — the backend
   // refuses a second decision on the same row, and the interface must not be the one to offer it.
   let deciding = $state(false);
@@ -172,7 +181,26 @@
     }
   }
 
+  /** Asks the platform whether it can report open documents, once for the whole run (L61). */
+  async function loadSuggestionCapability(): Promise<void> {
+    if (detectorAsked) {
+      return;
+    }
+    detectorAsked = true;
+    try {
+      const view = await invoke<{ id: string; availability: string }>(
+        "suggestion_detector",
+      );
+      detectorOk = view.availability === "installed";
+    } catch {
+      // A capability that could not be asked about is not a capability that is missing: it stays
+      // unknown, and the queue keeps its own words rather than claiming either.
+      detectorOk = null;
+    }
+  }
+
   async function loadSuggestions(): Promise<void> {
+    void loadSuggestionCapability();
     suggestionError = null;
     try {
       suggestions = await invoke<Suggestion[]>("list_suggestions");
@@ -469,6 +497,7 @@
         {scanError}
         {suggestions}
         {suggestionError}
+        {detectorOk}
         {deciding}
         onOpenDocument={openSuggestionFolder}
         onDecide={decideSuggestion}

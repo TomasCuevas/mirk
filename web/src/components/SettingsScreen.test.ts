@@ -12,6 +12,7 @@ interface Overrides {
   removal?: FolderRemoval | null;
   refusal?: FolderRefusal | null;
   suggestions?: Suggestion[] | null;
+  detectorOk?: boolean | null;
   suggestionError?: string | null;
   deciding?: boolean;
 }
@@ -39,6 +40,7 @@ function screenProps(overrides: Overrides = {}) {
     onCloseRefusal: () => {},
     inTauri: overrides.inTauri ?? true,
     suggestions: overrides.suggestions === undefined ? [] : overrides.suggestions,
+    detectorOk: overrides.detectorOk === undefined ? null : overrides.detectorOk,
     suggestionError: overrides.suggestionError ?? null,
     deciding: overrides.deciding ?? false,
     onDecide: async () => {},

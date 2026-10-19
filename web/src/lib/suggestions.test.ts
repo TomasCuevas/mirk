@@ -42,6 +42,23 @@ describe("the suggestion queue's own state", () => {
     expect(describeSuggestions([suggestion()], en)).toBeNull();
     expect(describeSuggestions([suggestion()], es)).toBeNull();
   });
+
+  it("says the machine cannot tell, instead of saying nothing is waiting", () => {
+    expect(describeSuggestions([], en, false)).toBe(en("suggestion.noDetector"));
+    expect(describeSuggestions([], es, false)).not.toBe(en("suggestion.noDetector"));
+  });
+
+  it("still shows the items it has, whatever the capability says", () => {
+    // A capability report is context; an item in the queue is a fact, and facts win.
+    expect(describeSuggestions([suggestion()], en, false)).toBeNull();
+  });
+
+  it("keeps the queue's own words while the capability is unknown or present", () => {
+    // unknown is not missing: only an answer that says the detector does not work here changes the
+    // sentence. Anything else would invent a defect out of a request that has not come back.
+    expect(describeSuggestions([], en, null)).toBe(en("suggestion.none"));
+    expect(describeSuggestions([], en, true)).toBe(en("suggestion.none"));
+  });
 });
 
 /**
@@ -101,6 +118,7 @@ describe("the section's words in both catalogues", () => {
     "suggestion.loading",
     "suggestion.openFolder",
     "suggestion.none",
+    "suggestion.noDetector",
     "suggestion.acceptLabel",
     "suggestion.discardLabel",
     "suggestion.error",

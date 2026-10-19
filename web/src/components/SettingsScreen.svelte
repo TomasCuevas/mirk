@@ -30,6 +30,7 @@
     folders,
     foldersError,
     suggestions,
+    detectorOk,
     suggestionError,
     deciding,
     locale,
@@ -55,6 +56,7 @@
     folders: WatchedFolder[] | null;
     foldersError: string | null;
     suggestions: Suggestion[] | null;
+    detectorOk: boolean | null;
     suggestionError: string | null;
     deciding: boolean;
     locale: Locale;
@@ -78,7 +80,9 @@
 
   const providerMessage = $derived(describeProviderRegistry(providers, t));
   const folderMessage = $derived(describeWatchedFolders(folders, t));
-  const suggestionMessage = $derived(describeSuggestions(suggestions, t));
+  const suggestionMessage = $derived(
+    describeSuggestions(suggestions, t, detectorOk),
+  );
 
   let folder = $state("");
 

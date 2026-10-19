@@ -93,9 +93,17 @@ export function suggestionTitle(path: string): string {
 export function describeSuggestions(
   suggestions: readonly Suggestion[] | null,
   t: Translate,
+  detectorOk: boolean | null = true,
 ): string | null {
   if (suggestions === null) {
     return t("suggestion.loading");
+  }
+  // L61: a machine that cannot say which documents are open has an empty queue for a reason, and
+  // calling it empty would present a missing capability as good news. The list still wins when there
+  // is one, because items are facts and a capability report is only context. unknown and installed
+  // are deliberately the same here: neither licenses a claim that something is missing.
+  if (suggestions.length === 0 && detectorOk === false) {
+    return t("suggestion.noDetector");
   }
   return suggestions.length === 0 ? t("suggestion.none") : null;
 }
