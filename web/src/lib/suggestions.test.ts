@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { catalogues, translate } from "./i18n";
 import {
   describeSuggestions,
+  detectorAfterFailure,
+  detectorBelief,
+  detectorSettled,
   suggestionCover,
   suggestionOutcome,
   suggestionTitle,
@@ -43,21 +46,35 @@ describe("the suggestion queue's own state", () => {
     expect(describeSuggestions([suggestion()], es)).toBeNull();
   });
 
-  it("says the machine cannot tell, instead of saying nothing is waiting", () => {
-    expect(describeSuggestions([], en, false)).toBe(en("suggestion.noDetector"));
-    expect(describeSuggestions([], es, false)).not.toBe(en("suggestion.noDetector"));
+  it("names the machine only when the platform does not implement the detector", () => {
+    expect(describeSuggestions([], en, "unsupported")).toBe(en("suggestion.noDetector"));
+    expect(describeSuggestions([], es, "unsupported")).not.toBe(en("suggestion.noDetector"));
   });
 
   it("still shows the items it has, whatever the capability says", () => {
-    // A capability report is context; an item in the queue is a fact, and facts win.
-    expect(describeSuggestions([suggestion()], en, false)).toBeNull();
+    expect(describeSuggestions([suggestion()], en, "unsupported")).toBeNull();
   });
 
-  it("keeps the queue's own words while the capability is unknown or present", () => {
-    // unknown is not missing: only an answer that says the detector does not work here changes the
-    // sentence. Anything else would invent a defect out of a request that has not come back.
-    expect(describeSuggestions([], en, null)).toBe(en("suggestion.none"));
-    expect(describeSuggestions([], en, true)).toBe(en("suggestion.none"));
+  it("a temporary failure is not the permanent claim", () => {
+    expect(describeSuggestions([], en, "unavailable")).toBe(en("suggestion.none"));
+    expect(describeSuggestions([], en, "unknown")).toBe(en("suggestion.none"));
+  });
+
+  it("recovers: a failed probe is retried and never sticks", () => {
+    let belief = detectorAfterFailure(detectorBelief(null));
+    expect(belief).toBe("unknown");
+    expect(detectorSettled(belief)).toBe(false);
+    expect(describeSuggestions([], en, belief)).toBe(en("suggestion.none"));
+
+    belief = detectorBelief("installed");
+    expect(detectorSettled(belief)).toBe(true);
+    expect(describeSuggestions([], en, belief)).toBe(en("suggestion.none"));
+
+    expect(detectorSettled("unavailable")).toBe(false);
+    expect(detectorSettled("unsupported")).toBe(true);
+    expect(detectorBelief("something-new")).toBe("unknown");
+    // A definitive answer is never downgraded by a later failure.
+    expect(detectorAfterFailure("unsupported")).toBe("unsupported");
   });
 });
 

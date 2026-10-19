@@ -19,6 +19,7 @@
   import {
     describeSuggestions,
     suggestionTitle,
+    type DetectorBelief,
     type Suggestion,
   } from "../lib/suggestions";
   import { invoke } from "../lib/tauri";
@@ -30,7 +31,7 @@
     folders,
     foldersError,
     suggestions,
-    detectorOk,
+    detector,
     suggestionError,
     deciding,
     locale,
@@ -56,7 +57,7 @@
     folders: WatchedFolder[] | null;
     foldersError: string | null;
     suggestions: Suggestion[] | null;
-    detectorOk: boolean | null;
+    detector: DetectorBelief;
     suggestionError: string | null;
     deciding: boolean;
     locale: Locale;
@@ -81,7 +82,7 @@
   const providerMessage = $derived(describeProviderRegistry(providers, t));
   const folderMessage = $derived(describeWatchedFolders(folders, t));
   const suggestionMessage = $derived(
-    describeSuggestions(suggestions, t, detectorOk),
+    describeSuggestions(suggestions, t, detector),
   );
 
   let folder = $state("");

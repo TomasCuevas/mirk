@@ -44,6 +44,27 @@ export type SuggestionCover =
   | { kind: "shown"; src: string }
   | { kind: "none" };
 
+/** What the queue believes about this machine's ability to report open documents (L61, L63). */
+export type DetectorBelief = "unknown" | "installed" | "unsupported" | "unavailable";
+
+/** Reads the command's answer; anything unrecognised is unknown, never a claim (L63). */
+export function detectorBelief(answer: string | null | undefined): DetectorBelief {
+  return answer === "installed" ||
+    answer === "unsupported" ||
+    answer === "unavailable"
+    ? answer
+    : "unknown";
+}
+
+/** Only a definitive answer ends the asking: unknown and unavailable are worth another try (L63). */
+export function detectorSettled(belief: DetectorBelief): boolean {
+  return belief === "installed" || belief === "unsupported";
+}
+
+/** A failed ask never downgrades a definitive answer, and never upgrades a failure into one (L63). */
+export const detectorAfterFailure = (previous: DetectorBelief): DetectorBelief =>
+  detectorSettled(previous) ? previous : "unknown";
+
 /**
  * Reads the answer to the only question the cover asks: what is this document's first page?
  *
@@ -93,16 +114,13 @@ export function suggestionTitle(path: string): string {
 export function describeSuggestions(
   suggestions: readonly Suggestion[] | null,
   t: Translate,
-  detectorOk: boolean | null = true,
+  detector: DetectorBelief = "installed",
 ): string | null {
   if (suggestions === null) {
     return t("suggestion.loading");
   }
-  // L61: a machine that cannot say which documents are open has an empty queue for a reason, and
-  // calling it empty would present a missing capability as good news. The list still wins when there
-  // is one, because items are facts and a capability report is only context. unknown and installed
-  // are deliberately the same here: neither licenses a claim that something is missing.
-  if (suggestions.length === 0 && detectorOk === false) {
+  // L63: only "unsupported" licenses a claim about the machine, and items always win over context.
+  if (suggestions.length === 0 && detector === "unsupported") {
     return t("suggestion.noDetector");
   }
   return suggestions.length === 0 ? t("suggestion.none") : null;

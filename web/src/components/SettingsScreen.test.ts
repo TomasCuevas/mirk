@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import SettingsScreen from "./SettingsScreen.svelte";
 import { translate } from "../lib/i18n";
 import type { FolderRefusal, FolderRemoval, WatchedFolder } from "../lib/screens";
-import type { Suggestion } from "../lib/suggestions";
+import type { DetectorBelief, Suggestion } from "../lib/suggestions";
 
 interface Overrides {
   inTauri?: boolean;
@@ -12,7 +12,7 @@ interface Overrides {
   removal?: FolderRemoval | null;
   refusal?: FolderRefusal | null;
   suggestions?: Suggestion[] | null;
-  detectorOk?: boolean | null;
+  detector?: DetectorBelief;
   suggestionError?: string | null;
   deciding?: boolean;
 }
@@ -40,7 +40,7 @@ function screenProps(overrides: Overrides = {}) {
     onCloseRefusal: () => {},
     inTauri: overrides.inTauri ?? true,
     suggestions: overrides.suggestions === undefined ? [] : overrides.suggestions,
-    detectorOk: overrides.detectorOk === undefined ? null : overrides.detectorOk,
+    detector: overrides.detector ?? "installed",
     suggestionError: overrides.suggestionError ?? null,
     deciding: overrides.deciding ?? false,
     onDecide: async () => {},

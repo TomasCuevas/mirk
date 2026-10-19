@@ -27,7 +27,15 @@
   import { loadLanguage, saveLanguage } from "./lib/settings";
   // L56. The suggestion queue's pure decisions live in their own module: what the section says in
   // each of its three states, what a decision does to the list, and what to do when one fails.
-  import { suggestionOutcome, withoutSuggestion, type Suggestion } from "./lib/suggestions";
+  import {
+    detectorAfterFailure,
+    detectorBelief,
+    detectorSettled,
+    suggestionOutcome,
+    withoutSuggestion,
+    type DetectorBelief,
+    type Suggestion,
+  } from "./lib/suggestions";
   import { type WindowControl } from "./lib/window";
   import CategoryScreen from "./components/CategoryScreen.svelte";
   import HomeScreen from "./components/HomeScreen.svelte";
@@ -63,15 +71,8 @@
   // checking" and "nothing is waiting for a decision" are different facts, and the section says which.
   let suggestions = $state<Suggestion[] | null>(null);
   let suggestionError = $state<string | null>(null);
-  /**
-   * Whether this machine can say which documents are open, or null while that is unknown (L61).
-   *
-   * Asked once. The answer cannot change while the application runs and asking walks the process
-   * table, so a poll that asked every three seconds would pay repeatedly for the same answer. null is
-   * not false: an answer that has not arrived is not a missing capability.
-   */
-  let detectorOk = $state<boolean | null>(null);
-  let detectorAsked = false;
+  /** Four beliefs, not a flag: only "unsupported" is a permanent fact about the machine (L63). */
+  let detector = $state<DetectorBelief>("unknown");
   // True while a decision is being recorded, so neither button can be pressed twice — the backend
   // refuses a second decision on the same row, and the interface must not be the one to offer it.
   let deciding = $state(false);
@@ -181,21 +182,18 @@
     }
   }
 
-  /** Asks the platform whether it can report open documents, once for the whole run (L61). */
+  /** Asks until the answer is definitive; asking once turned a failure into a permanent claim (L63). */
   async function loadSuggestionCapability(): Promise<void> {
-    if (detectorAsked) {
+    if (detectorSettled(detector)) {
       return;
     }
-    detectorAsked = true;
     try {
       const view = await invoke<{ id: string; availability: string }>(
         "suggestion_detector",
       );
-      detectorOk = view.availability === "installed";
+      detector = detectorBelief(view.availability);
     } catch {
-      // A capability that could not be asked about is not a capability that is missing: it stays
-      // unknown, and the queue keeps its own words rather than claiming either.
-      detectorOk = null;
+      detector = detectorAfterFailure(detector);
     }
   }
 
@@ -497,7 +495,7 @@
         {scanError}
         {suggestions}
         {suggestionError}
-        {detectorOk}
+        {detector}
         {deciding}
         onOpenDocument={openSuggestionFolder}
         onDecide={decideSuggestion}
