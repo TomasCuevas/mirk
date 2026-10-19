@@ -28,6 +28,7 @@ import {
   libraryView,
   libraryAuthors,
   paginate,
+  progressBand,
   progressFraction,
   sortEntries,
   startCategoryRefresh,
@@ -114,6 +115,63 @@ describe("the card's progress view", () => {
 
     expect(describeProgressView(malformed, english).fraction).toBe(progressFraction(malformed));
     expect(describeProgressView(malformed, english).marker).toBe("100%");
+  });
+});
+
+/**
+ * R38: the fill is coloured by how far along the reading is, at the four quarters.
+ *
+ * The user asked for red, orange, yellow and green depending on the percentage, and for the PROGRESS
+ * to change colour while the bar keeps its own. The boundaries are pinned from both sides, because a
+ * band rule that is only tested in the middle of a band passes against an off-by-one at every edge.
+ */
+describe("the band the progress fill is coloured by", () => {
+  it("puts each quarter in its own band", () => {
+    expect(progressBand(0)).toBe("started");
+    expect(progressBand(0.1)).toBe("started");
+    expect(progressBand(0.2499)).toBe("started");
+    expect(progressBand(0.25)).toBe("some");
+    expect(progressBand(0.4)).toBe("some");
+    expect(progressBand(0.4999)).toBe("some");
+    expect(progressBand(0.5)).toBe("most");
+    expect(progressBand(0.6)).toBe("most");
+    expect(progressBand(0.7499)).toBe("most");
+    expect(progressBand(0.75)).toBe("nearly");
+    expect(progressBand(0.99)).toBe("nearly");
+    expect(progressBand(1)).toBe("nearly");
+  });
+
+  it("clamps a stale total instead of falling off the scale", () => {
+    // A viewer can report page 90 of 80. The fraction is clamped upstream, and the band clamps too,
+    // so a broken total cannot produce a fifth colour nobody designed.
+    expect(progressBand(1.2)).toBe("nearly");
+    expect(progressBand(-0.3)).toBe("started");
+  });
+
+  it("treats a fraction it cannot read as nothing read", () => {
+    // `NaN` is not a fraction. A band invented from it would be a colour claiming a fact.
+    expect(progressBand(Number.NaN)).toBe("started");
+  });
+
+  it("derives the band from the same fraction the bar draws with", () => {
+    // The colour and the width must not be able to disagree: one number, one rule, two channels.
+    // Page 50 of 100 is the fiftieth page, and the card counts pages from one — the fraction is
+    // (page + 1) / total, which is `progressFraction`'s own rule and the reason this reads 0.5 here.
+    const half = entry({
+      progress: progress({ page: 49, total: 100, source: "native", confidence: "exact" }),
+    });
+    const view = describeProgressView(half, english);
+
+    expect(view.fraction).toBe(0.5);
+    expect(view.band).toBe(progressBand(view.fraction));
+    expect(view.band).toBe("most");
+  });
+
+  it("gives a document with no record the floor band, which draws nothing", () => {
+    const view = describeProgressView(entry({ progress: null }), english);
+
+    expect(view.band).toBe("started");
+    expect(view.fraction).toBe(0);
   });
 });
 

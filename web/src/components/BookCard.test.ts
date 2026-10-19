@@ -274,3 +274,65 @@ describe("the card opens the document", () => {
     expect(title).not.toContain("aria-label");
   });
 });
+
+/**
+ * R38: the fill is coloured by how far along the reading is, and the bar is not.
+ *
+ * The user asked for the PROGRESS to change colour — red, orange, yellow, green — and for the bar to
+ * keep its own. So the band lives on the fill's class, the track keeps its neutral background, and the
+ * number on the bar still states the percentage: the colour is a second channel, never the only one.
+ */
+describe("the progress fill's colour", () => {
+  const props = {
+    t: english,
+    onOpenFolder: () => {},
+    onOpenDocument: () => {},
+    onEditDocument: () => {},
+  };
+
+  function cardAt(page: number, total: number): string {
+    const { body } = render(BookCard, {
+      props: {
+        ...props,
+        entry: entry({
+          progress: {
+            page,
+            total,
+            source: "native",
+            confidence: "exact",
+            recordedAt: null,
+            readAt: null,
+          },
+        }),
+      },
+    });
+    return body.slice(body.indexOf("<article"), body.indexOf("</article>"));
+  }
+
+  it("colours the fill, not the track, and keeps the number as the statement", () => {
+    const card = cardAt(90, 100);
+
+    // The band is a class on the FILL — the element that stands for what was read. It is found by its
+    // class and not by the word `fill`: the pencil's drawing carries `fill="none"` and would be hit
+    // first, which is exactly how the first version of this test passed a string it never meant.
+    const fillStart = card.indexOf('class="fill');
+    expect(fillStart).toBeGreaterThan(-1);
+    const fill = card.slice(fillStart, card.indexOf("</span>", fillStart));
+    expect(fill).toContain("band-nearly");
+
+    // The track's own element carries no band: the user asked for the progress to change colour.
+    const bar = card.slice(card.indexOf('class="bar'), card.indexOf("</div>"));
+    expect(bar).not.toContain("band-");
+
+    // And the number is still there, so the colour is redundant information rather than the only one.
+    // Page 90 of 100 reads 91 %: the card counts pages from one, so the fraction is (page + 1) / total.
+    expect(card).toContain("91%");
+  });
+
+  it("moves through the four bands as the reading advances", () => {
+    expect(cardAt(10, 100)).toContain("band-started");
+    expect(cardAt(30, 100)).toContain("band-some");
+    expect(cardAt(60, 100)).toContain("band-most");
+    expect(cardAt(80, 100)).toContain("band-nearly");
+  });
+});

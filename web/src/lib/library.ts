@@ -214,6 +214,47 @@ export interface ScanReport {
   failures: ScanFailure[];
 }
 
+/**
+ * How far along a reading is, as one of four bands (R38).
+ *
+ * The bands are what the bar's colour stands for, and they are deliberately a value of their own rather
+ * than a colour name: a band is a fact about the reading ("less than a quarter read"), and the colour is
+ * one way of drawing it. A card, a future legend or a screen reader could each draw the same band
+ * differently without the rule moving.
+ *
+ * The names are the fraction, not the hue, because the hue is taste and the fraction is not.
+ */
+export type ProgressBand = "started" | "some" | "most" | "nearly";
+
+/**
+ * The band a fraction read falls in, at the four quarters (R38).
+ *
+ * `fraction` is `0..1` and is clamped, so a viewer that reports a stale total (page 90 of 80) lands in
+ * the top band instead of falling off the scale. `NaN` — which no real fraction produces, but which a
+ * future caller could — is treated as "nothing read", the honest floor: a band invented from a broken
+ * number would be a colour claiming a fact.
+ *
+ * **The boundaries are the quarters, and they are the whole rule**: `[0, ¼)` started, `[¼, ½)` some,
+ * `[½, ¾)` most, `[¾, 1]` nearly. A document at exactly 25 % is "some", not "started": the boundary
+ * belongs to the band above it, so a document that has crossed a quarter reads as having crossed it.
+ */
+export function progressBand(fraction: number): ProgressBand {
+  if (Number.isNaN(fraction)) {
+    return "started";
+  }
+  const clamped = Math.min(1, Math.max(0, fraction));
+  if (clamped < 0.25) {
+    return "started";
+  }
+  if (clamped < 0.5) {
+    return "some";
+  }
+  if (clamped < 0.75) {
+    return "most";
+  }
+  return "nearly";
+}
+
 /** What the card draws and says about reading progress (R7). */
 export interface ProgressView {
   /** The bar's fill, `0..1`. `0` when nothing is recorded, which is what the card was asked to show. */
@@ -223,6 +264,8 @@ export interface ProgressView {
   /** Where the marker sits along the bar, `0..1` — the fraction itself, so the number states the
    *  fraction rather than merely sitting next to it. */
   readonly markerAt: number;
+  /** The band the fill is coloured by (R38), derived from the same fraction the width comes from. */
+  readonly band: ProgressBand;
   /** The provenance in words, or `null` when nothing is recorded — the one case with no sentence. */
   readonly provenance: string | null;
 }
@@ -248,6 +291,7 @@ export function describeProgressView(entry: LibraryEntry, t: Translate): Progres
       fraction: 0,
       marker: t("card.progressPercent", { percent: 0 }),
       markerAt: 0,
+      band: progressBand(0),
       provenance: null,
     };
   }
@@ -260,6 +304,7 @@ export function describeProgressView(entry: LibraryEntry, t: Translate): Progres
       fraction: 0,
       marker: t("progress.position", { page: progress.page + 1 }),
       markerAt: 0,
+      band: progressBand(0),
       provenance,
     };
   }
@@ -268,6 +313,7 @@ export function describeProgressView(entry: LibraryEntry, t: Translate): Progres
     fraction,
     marker: t("card.progressPercent", { percent: Math.round(fraction * 100) }),
     markerAt: fraction,
+    band: progressBand(fraction),
     provenance,
   };
 }

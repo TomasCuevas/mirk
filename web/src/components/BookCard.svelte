@@ -216,10 +216,15 @@
     <!-- R7: the bar stands for the fraction read and the number sits over it, at the position that
          fraction corresponds to. The provenance stays in words underneath, because the rule that
          progress is never stated as a bare percentage was the user's as well, and only the sentence for
-         a document with no record at all was asked to go. -->
+         a document with no record at all was asked to go.
+
+         R38: the FILL is coloured by how far along the reading is — red, orange, yellow, green at the
+         four quarters — and the bar itself keeps the neutral track it always had. The colour is a
+         second channel, never the only one: the number on the bar states the percentage, so a reader
+         who cannot tell the hues apart loses nothing. -->
     <div class="progress">
       <div class="bar">
-        <span class="fill" style="width: {view.fraction * 100}%"></span>
+        <span class="fill band-{view.band}" style="width: {view.fraction * 100}%"></span>
         <span class="marker" style="--at: {view.markerAt * 100}%">{view.marker}</span>
       </div>
       {#if view.provenance !== null}
@@ -406,6 +411,27 @@
     inset: 0 auto 0 0;
     border-radius: inherit;
     background: #24506b;
+  }
+
+  /* R38: the fill's colour says how far along the reading is, at the four quarters. The hues are dark
+     enough to read against the track (#e8ebef) and against the white card, and they follow the same
+     intensity order as the fraction: red, orange, yellow, green. The track keeps its own neutral
+     grey — the user asked for the progress to change colour, not the bar — so the empty part of the
+     bar still says "nothing read here" without competing with the colour that means something. */
+  .band-started {
+    background: #b3261e;
+  }
+
+  .band-some {
+    background: #c2410c;
+  }
+
+  .band-most {
+    background: #a16207;
+  }
+
+  .band-nearly {
+    background: #2e7d32;
   }
 
   .marker {
