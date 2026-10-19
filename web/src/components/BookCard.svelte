@@ -218,7 +218,7 @@
          progress is never stated as a bare percentage was the user's as well, and only the sentence for
          a document with no record at all was asked to go.
 
-         R39: the FILL travels a continuous colour ramp as the reading advances — from red through
+         R38: the FILL travels a continuous colour ramp as the reading advances — from red through
          orange and yellow to green, slowly enough that two neighbouring documents differ by a shade
          rather than by a state — and the bar itself keeps the neutral track it always had. The colour
          is a second channel, never the only one: the number on the bar states the percentage, so a
@@ -414,7 +414,7 @@
     background: #24506b;
   }
 
-  /* R39: the fill's colour is computed from the fraction and arrives as an inline `background`, so it
+  /* R38: the fill's colour is computed from the fraction and arrives as an inline `background`, so it
      travels from red to green through orange and yellow in one continuous ramp instead of switching
      between four states. The `background` above in `.fill` stays as the fallback for a caller that
      builds a view without a colour: a fill that lost its background would be an invisible bar, and an

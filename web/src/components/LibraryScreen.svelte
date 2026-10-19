@@ -1,7 +1,12 @@
 <script lang="ts">
   import type { Translate } from "../lib/i18n";
   import {
+    ALL_AUTHORS,
+    authorFilter,
     describeLibraryMessage,
+    describeNoMatches,
+    filterAuthors,
+    filterByAuthor,
     filterEntries,
     libraryView,
     paginate,
@@ -38,6 +43,14 @@
   let sort = $state<SortKey>("title");
   let page = $state(1);
 
+  // R39. The author the reader picked, held as the selector's own value, where `ALL_AUTHORS` means
+  // "all". What the screen actually filters by is *derived* from the authors the cards show right now
+  // (`chosenAuthor`), which is how a chosen author who leaves the library falls back to "all" on the
+  // next render, silently and without an effect watching for it (S4).
+  let authorChoice = $state(ALL_AUTHORS);
+  const authors = $derived(filterAuthors(entries, locale));
+  const chosenAuthor = $derived(authorFilter(authors, authorChoice));
+
   // `null` means there is something to list, so the empty-library sentence and the grid are
   // mutually exclusive rather than layered.
   const emptyMessage = $derived(describeLibraryMessage(entries, t));
@@ -45,10 +58,17 @@
   // empty listing is only presented AS empty once nothing is in flight. The loader is the catalogue's
   // existing loading sentence, which is as true of a rescan as of the first read.
   const view = $derived(libraryView(entries, inFlight));
-  const visible = $derived(sortEntries(filterEntries(entries, query), sort, locale));
+  // R39/S3: text first, then author, then order — one pipeline over the whole listing, so no two of
+  // the three controls can disagree about what is on screen.
+  const visible = $derived(
+    sortEntries(filterByAuthor(filterEntries(entries, query), chosenAuthor), sort, locale),
+  );
   // R10: the page is cut from the whole filtered, sorted listing, and the helper clamps the page into
   // range when a filter shrinks the listing under the reader.
   const paged = $derived(paginate(visible, page));
+  // R39/S5: the sentence for a listing filtered into nothing names what was filtered — the query when
+  // there is text, the chosen author when there is not, and nothing at all when neither was set.
+  const noMatches = $derived(describeNoMatches(query, chosenAuthor, t));
 </script>
 
 <section class="screen">
@@ -66,6 +86,22 @@
         <span>{t("library.filterLabel")}</span>
         <input type="search" bind:value={query} placeholder={t("library.filterPlaceholder")} />
       </label>
+      <!-- R39/S1: a third control, beside the text filter and the sort — neither replaces the other two.
+           It lists the authors the cards show plus an "all" entry, and it is bound one way to the
+           RESOLVED choice so a value that left the library cannot stay in the box while the grid
+           behind it lists everybody (S4). -->
+      <label>
+        <span>{t("library.authorLabel")}</span>
+        <select
+          value={chosenAuthor}
+          onchange={(event) => (authorChoice = event.currentTarget.value)}
+        >
+          <option value={ALL_AUTHORS}>{t("library.authorAll")}</option>
+          {#each authors as author (author)}
+            <option value={author}>{author}</option>
+          {/each}
+        </select>
+      </label>
       <label>
         <span>{t("library.sortLabel")}</span>
         <select bind:value={sort}>
@@ -78,7 +114,9 @@
     </div>
 
     {#if visible.length === 0}
-      <p class="state">{t("library.noMatches", { query })}</p>
+      {#if noMatches !== null}
+        <p class="state">{noMatches}</p>
+      {/if}
     {:else}
       <!-- Responsive columns: two at phone width (the shell is 390 px) and more if the window ever grows.
    The later phone-shape request wins over the earlier three-column one here, deliberately (S2). Each card reserves its cover space without pretending to have one. -->

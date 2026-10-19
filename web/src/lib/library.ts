@@ -215,7 +215,7 @@ export interface ScanReport {
 }
 
 /**
- * The colours the progress fill travels through, at the fractions that anchor them (R39, L68).
+ * The colours the progress fill travels through, at the fractions that anchor them (R38, L68).
  *
  * The four colours the user named are the **landmarks** of one continuous ramp, and their positions are a
  * reading decision, not an even split: green is reached at **70 %**, because a document two thirds read
@@ -249,7 +249,7 @@ interface Oklab {
 }
 
 /**
- * The colour of the progress fill for a fraction read (R39).
+ * The colour of the progress fill for a fraction read (R38).
  *
  * **One continuous ramp, not four bands.** The user's own correction: *"no quiero que sean colores
  * fijos, quiero que se vayan transformando poco a poco a medida que el porcentaje avanza, no que
@@ -346,7 +346,7 @@ export interface ProgressView {
    *  fraction rather than merely sitting next to it. */
   readonly markerAt: number;
   /**
-   * The fill's colour, as a CSS `rgb()` (R39). It is a continuous ramp over the fraction the width
+   * The fill's colour, as a CSS `rgb()` (R38). It is a continuous ramp over the fraction the width
    * comes from, so a long bar's colour and its length always tell the same story.
    */
   readonly color: string;
@@ -796,6 +796,122 @@ export function filterEntries(
   query: string,
 ): LibraryEntry[] {
   return entries.filter((entry) => matchesQuery(entry, query));
+}
+
+/**
+ * The authors the library's author selector offers (R39 / S2).
+ *
+ * The list is the authors the **cards** show: `entry.author`, which the core already resolved to the
+ * reader's author when they set one and the document's own otherwise. It deliberately does **not**
+ * read `userAuthor`, which the editor's suggestions above do offer beside the resolved authors —
+ * there a half-set name is useful, while here the list is the set of documents the reader can choose
+ * from, and an entry no card stands for would be a choice that empties the shelf.
+ *
+ * **Deduplication is by the trimmed value**, exactly as `libraryAuthors` does it: two entries whose
+ * authors differ only by surrounding spaces are one person and must appear once, and a blank is not
+ * an author at all. The name offered is the trimmed one, because surrounding spaces are never part
+ * of a name.
+ *
+ * **Sorted with the reader's locale**, not by code unit: this is a list a person reads, so "Ávila"
+ * belongs before "Borges" for a Spanish reader, while a plain sort puts it after every ASCII name.
+ * `libraryAuthors`' first-seen order is right for suggestions, which follow the listing, and wrong
+ * for a list that has to read alphabetically.
+ */
+export function filterAuthors(entries: readonly LibraryEntry[], locale = "en"): string[] {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const trimmed = entry.author?.trim() ?? "";
+    if (trimmed !== "") {
+      seen.add(trimmed);
+    }
+  }
+  return [...seen].sort((left, right) => left.localeCompare(right, locale));
+}
+
+/**
+ * The selector's "all authors" choice (R39 / S1).
+ *
+ * It is the empty string because a blank already means "nothing chosen" everywhere else in this
+ * module — `matchesQuery` reads a blank query the same way — and because no author the selector
+ * offers can be blank, so this value cannot collide with a real one.
+ */
+export const ALL_AUTHORS = "";
+
+/**
+ * The documents whose card shows `author`, in the order they arrived (R39 / S3).
+ *
+ * `ALL_AUTHORS` — and any blank value — is the whole listing, so the state's starting value and a
+ * cleared selector need no branch at the call site.
+ *
+ * **The comparison is on the trimmed value.** The selector offers trimmed names (S2), so a document
+ * whose stored author carries surrounding spaces would otherwise be missing from the very list that
+ * offered it.
+ */
+export function filterByAuthor(
+  entries: readonly LibraryEntry[],
+  author: string,
+): LibraryEntry[] {
+  const chosen = author.trim();
+  if (chosen === "") {
+    return [...entries];
+  }
+  return entries.filter((entry) => (entry.author ?? "").trim() === chosen);
+}
+
+/**
+ * What the selector shows and the listing filters by, from the choice the screen holds (R39 / S4).
+ *
+ * A chosen author can leave the library while the screen is open: an edit or a rescan removes the
+ * only document by them. The choice then resolves to `ALL_AUTHORS` and **nothing else happens** — no
+ * message, no warning — because it is not an error, the shelf changed. The alternative is worse than
+ * it looks: keeping the stale value would show an empty library caused by a choice the reader cannot
+ * see, and would leave the selector claiming a value that is no longer among its options.
+ *
+ * It is a pure function over the authors the cards show *now*, so the fallback happens on every
+ * render instead of needing an effect to notice that the listing changed.
+ */
+export function authorFilter(authors: readonly string[], chosen: string): string {
+  const wanted = chosen.trim();
+  return authors.includes(wanted) ? wanted : ALL_AUTHORS;
+}
+
+/**
+ * The sentence for a listing that was filtered into nothing, or `null` when nothing was filtered
+ * (R39 / S5).
+ *
+ * The sentence has to name what the reader filtered by, or it says nothing they can act on. With text
+ * in the box it keeps naming the query, trimmed the same way `matchesQuery` trims its needle — that
+ * box is where they typed and the thing they are most likely to change. Only with an empty box does
+ * the chosen author get named. The shape a careless wiring produces, `No document matches ""`, comes
+ * from handing the query to the sentence regardless: a sentence nobody wrote, after a filter nobody
+ * set.
+ *
+ * `null` is the third case: no text and no author means nothing was filtered, so there is no sentence
+ * to say. The screen cannot reach it — "all authors" with an empty box is the whole listing — and it
+ * is `null` rather than a sentence about an empty query precisely so that if it ever were reached, the
+ * screen would say nothing instead of inventing a filter to blame.
+ *
+ * The author branch is a rule about the SENTENCE, not about today's selector: because the selector's
+ * list is derived from the same entries and a choice that leaves the library falls back to "all"
+ * (S4), the screen itself has no state that filters by an author with nothing left behind it. It is
+ * still answered correctly, because the alternative is a sentence about an empty query the moment any
+ * caller narrows by an author it derived elsewhere — and a rule that is only right where the current
+ * markup happens to reach it is a rule waiting to be wrong.
+ */
+export function describeNoMatches(
+  query: string,
+  author: string,
+  t: Translate,
+): string | null {
+  const typed = query.trim();
+  if (typed !== "") {
+    return t("library.noMatches", { query: typed });
+  }
+  const chosen = author.trim();
+  if (chosen !== "") {
+    return t("library.noMatchesAuthor", { author: chosen });
+  }
+  return null;
 }
 
 /** The orders the screen offers. */

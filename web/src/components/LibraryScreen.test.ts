@@ -20,7 +20,7 @@ function libraryProps(overrides: { entries?: LibraryEntry[]; inFlight?: boolean 
 }
 
 /** One document with a recorded reading, which is what puts a card in the grid. */
-function entry(): LibraryEntry {
+function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
   return {
     id: 1,
     path: "/library/a.pdf",
@@ -37,6 +37,7 @@ function entry(): LibraryEntry {
       recordedAt: null,
       readAt: null,
     },
+    ...overrides,
   };
 }
 
@@ -72,5 +73,53 @@ describe("Biblioteca without the folder-action outcome", () => {
 
     expect(body).toContain(english("library.loading"));
     expect(body).not.toContain(english("library.empty"));
+  });
+});
+
+/**
+ * S1 (R39): the screen gains an author selector beside the text filter and the sort.
+ *
+ * The render is server-side, so this cannot choose an author — the choices are pinned in
+ * `library.test.ts`, and the act of choosing in `LibraryScreen.dom.test.ts`. What is drawn here is the
+ * control itself: its label, an "all" entry, and one entry per author the cards show. Rendering it is
+ * the only thing that says the selector was added to the screen at all rather than only to the module
+ * behind it, and it is also what fails if the third control ever replaces one of the other two — the
+ * text box's placeholder and the sort's labels are asserted beside it.
+ */
+describe("Biblioteca's author selector (R39)", () => {
+  const entries = [
+    entry({ id: 1, title: "Cosmos", author: "Carl Sagan" }),
+    entry({ id: 2, title: "Ficciones", author: "Jorge Luis Borges" }),
+  ];
+
+  it("draws the selector with the authors the cards show and an 'all' entry", () => {
+    const { body } = render(LibraryScreen, { props: libraryProps({ entries }) });
+
+    expect(body).toContain(english("library.authorLabel"));
+    expect(body).toContain(english("library.authorAll"));
+    // S1: "all" is what it starts on, and the render says so by selecting that option.
+    expect(body).toContain(`<option value="" selected="">${english("library.authorAll")}</option>`);
+    expect(body).toContain('value="Carl Sagan"');
+    expect(body).toContain('value="Jorge Luis Borges"');
+  });
+
+  it("keeps the text filter and the sort beside it, so the three compose", () => {
+    const { body } = render(LibraryScreen, { props: libraryProps({ entries }) });
+
+    expect(body).toContain(english("library.filterLabel"));
+    expect(body).toContain(english("library.sortLabel"));
+    expect(body).toContain('type="search"');
+  });
+
+  it("offers no author when no card has one, and still offers 'all'", () => {
+    const { body } = render(LibraryScreen, {
+      props: libraryProps({ entries: [entry({ id: 3, author: null })] }),
+    });
+
+    expect(body).toContain(english("library.authorAll"));
+    expect(body.match(/<option/g)?.length).toBe(4); // three sorts and the one "all"
+    // A shelf where no card has an author is the boundary that would empty the selector if the
+    // "all" entry were not drawn unconditionally.
+    expect(body).toContain('value=""');
   });
 });

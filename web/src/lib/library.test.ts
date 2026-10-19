@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { translate } from "./i18n";
 import {
+  ALL_AUTHORS,
   CATEGORY_REFRESH_MS,
   LIBRARY_REFRESH_MS,
   STALE_AFTER_SECONDS,
   authorEditor,
+  authorFilter,
   categoryEntries,
   coverEditor,
   coverPageFromInput,
@@ -17,12 +19,15 @@ import {
   documentActionOutcome,
   describeProvider,
   describeProviderRegistry,
+  describeNoMatches,
   describeScanSummary,
   displayTitle,
   editorClosesAfterCommit,
   editorEntry,
   editorRefreshesLibrary,
   fetchCover,
+  filterAuthors,
+  filterByAuthor,
   filterEntries,
   folderActionOutcome,
   libraryView,
@@ -497,6 +502,174 @@ describe("the author suggestions", () => {
   it("offers nothing when no document in the library has an author", () => {
     expect(libraryAuthors([entry({ author: null, userAuthor: null }), entry({ id: 2 })])).toEqual(
       [],
+    );
+  });
+});
+
+describe("the authors the selector offers (R39)", () => {
+  // S2. The list is the authors the CARDS show: `entry.author`, which the core already resolved to
+  // the reader's author when they set one and the document's own otherwise. Offering `userAuthor`
+  // beside it — which is what the editor's suggestions do, for a different purpose — would list a
+  // name no card on the screen stands for, and the reader would pick it and see an empty shelf.
+  it("offers the author each card shows, never the reader's own field", () => {
+    const entries = [
+      entry({ id: 1, title: "A", author: "Ursula K. Le Guin", userAuthor: "Le Guin" }),
+      entry({ id: 2, title: "B", author: null, userAuthor: "Only The Reader's" }),
+    ];
+
+    expect(filterAuthors(entries)).toEqual(["Ursula K. Le Guin"]);
+  });
+
+  // Uniqueness, trimming and blanks are one rule: an author is one person whatever the surrounding
+  // spaces say, and a blank is not an author at all. The list the reader chooses from must not offer
+  // the same person twice, or offer an unnamed entry they cannot recognise.
+  it("offers each author once, trimmed, and never a blank", () => {
+    const entries = [
+      entry({ id: 1, author: "  Jorge Luis Borges  " }),
+      entry({ id: 2, author: "Jorge Luis Borges" }),
+      entry({ id: 3, author: null }),
+      entry({ id: 4, author: "   " }),
+    ];
+
+    expect(filterAuthors(entries)).toEqual(["Jorge Luis Borges"]);
+    expect(filterAuthors([entry({ author: null }), entry({ id: 2, author: " " })])).toEqual([]);
+  });
+
+  // S2's ordering clause: the list reads alphabetically to the PERSON, so it is sorted with their
+  // locale rather than by code unit. The second assertion is the same two names in code-unit order —
+  // "Á" is U+00C1, so a plain sort puts the accented name after every ASCII one, which is not where
+  // a Spanish reader looks for it.
+  it("orders the list the way the reader's locale reads it, not by code unit", () => {
+    const entries = [entry({ id: 1, author: "Borges" }), entry({ id: 2, author: "Ávila" })];
+
+    expect(filterAuthors(entries, "es")).toEqual(["Ávila", "Borges"]);
+    expect(["Borges", "Ávila"].sort()).toEqual(["Borges", "Ávila"]);
+  });
+});
+
+describe("filtering the listing by author (R39)", () => {
+  const entries = [
+    entry({ id: 1, title: "Cosmos", author: "Carl Sagan" }),
+    entry({ id: 2, title: "Contact", author: "Carl Sagan" }),
+    entry({ id: 3, title: "Ficciones", author: "Jorge Luis Borges" }),
+    entry({ id: 4, title: "Anónimo", author: null }),
+  ];
+
+  // S1: the selector starts on "all", so "all" has to mean the whole listing — the same thing a
+  // blank query means to the text box. A document with no author at all belongs to it, because there
+  // is no other list it could belong to.
+  it("returns the whole listing for 'all', which is where the selector starts", () => {
+    expect(filterByAuthor(entries, ALL_AUTHORS)).toEqual(entries);
+    expect(filterByAuthor(entries, "")).toEqual(entries);
+  });
+
+  it("narrows to the documents whose card shows that author", () => {
+    expect(filterByAuthor(entries, "Jorge Luis Borges").map((e) => e.title)).toEqual([
+      "Ficciones",
+    ]);
+    expect(filterByAuthor(entries, "Carl Sagan").map((e) => e.title)).toEqual([
+      "Cosmos",
+      "Contact",
+    ]);
+  });
+
+  // The list's values are trimmed, so the filter has to compare trimmed values too: otherwise a
+  // document whose stored author carries spaces would be missing from the very list that offered it.
+  it("matches the trimmed name, so a stored value with spaces still answers to it", () => {
+    const spaced = [entry({ id: 9, author: "  Jorge Luis Borges  " })];
+
+    expect(filterByAuthor(spaced, "Jorge Luis Borges").map((e) => e.id)).toEqual([9]);
+  });
+
+  // S3: text first, then author, then order — ONE pipeline over the whole listing, so no two controls
+  // can disagree about what is on screen. Sorting after filtering is what keeps a narrowed listing in
+  // the order the reader chose instead of in the order the rows happened to arrive.
+  it("composes with the text filter and the sort, in that order", () => {
+    const visible = sortEntries(
+      filterByAuthor(filterEntries(entries, "co"), "Carl Sagan"),
+      "title",
+    );
+
+    expect(visible.map((e) => e.title)).toEqual(["Contact", "Cosmos"]);
+    // The two filters intersect rather than overriding each other.
+    expect(filterByAuthor(filterEntries(entries, "ficciones"), "Carl Sagan")).toEqual([]);
+  });
+
+  // S3's paging clause. The reader is three pages into the library, narrowing to an author with two
+  // documents leaves one page, and the window has to come back with it — otherwise the screen shows an
+  // empty page and claims the reader is somewhere the listing no longer reaches.
+  it("clamps the page when the narrowing shrinks the listing under the reader", () => {
+    const docs = [
+      ...Array.from({ length: 22 }, (_, index) =>
+        entry({ id: index + 1, title: `Sagan ${index}`, author: "Carl Sagan" }),
+      ),
+      entry({ id: 90, title: "Ficciones", author: "Jorge Luis Borges" }),
+      entry({ id: 91, title: "El Aleph", author: "Jorge Luis Borges" }),
+    ];
+    const whole = paginate(sortEntries(docs, "title"), 3);
+    expect(whole.page).toBe(3);
+
+    const narrowed = paginate(sortEntries(filterByAuthor(docs, "Jorge Luis Borges"), "title"), 3);
+
+    expect(narrowed.page).toBe(1);
+    expect(narrowed.items.map((e) => e.title)).toEqual(["El Aleph", "Ficciones"]);
+  });
+});
+
+describe("a chosen author who has left the library (R39)", () => {
+  // S4. An edit or a rescan can remove the only document by the author the reader had chosen. The
+  // choice then falls back to "all" and the screen says nothing about it: the shelf changed, which is
+  // not an error. What must never happen is the alternative — a stale choice keeping the library
+  // empty, which looks like a defect and is caused by something the reader cannot see.
+  const authors = ["Carl Sagan", "Jorge Luis Borges"];
+
+  it("keeps a choice the listing still names, and keeps 'all' as 'all'", () => {
+    expect(authorFilter(authors, "Jorge Luis Borges")).toBe("Jorge Luis Borges");
+    expect(authorFilter(authors, ALL_AUTHORS)).toBe(ALL_AUTHORS);
+  });
+
+  it("falls back to 'all' when the listing no longer names it", () => {
+    expect(authorFilter(["Carl Sagan"], "Jorge Luis Borges")).toBe(ALL_AUTHORS);
+    expect(authorFilter([], "Carl Sagan")).toBe(ALL_AUTHORS);
+  });
+
+  it("does it silently: the whole library comes back and no sentence mentions a filter", () => {
+    const entries = [
+      entry({ id: 1, title: "Cosmos", author: "Carl Sagan" }),
+      entry({ id: 2, title: "Ficciones", author: "Jorge Luis Borges" }),
+    ];
+    const chosen = authorFilter(["Carl Sagan"], "Jorge Luis Borges");
+
+    expect(filterByAuthor(entries, chosen)).toEqual(entries);
+    expect(describeNoMatches("", chosen, english)).toBeNull();
+  });
+});
+
+describe("the 'nothing matches' sentence (R39)", () => {
+  // S5. With an author and no text it says no document by that author; with text it keeps the sentence
+  // that names the query. The shape a careless wiring produces — `No document matches ""` — is a
+  // sentence nobody wrote, and it tells the reader nothing about what they filtered by.
+  it("names the author when an author is what was filtered", () => {
+    const sentence = describeNoMatches("", "Jorge Luis Borges", english);
+
+    expect(sentence).toBe(english("library.noMatchesAuthor", { author: "Jorge Luis Borges" }));
+    expect(sentence).toContain("Jorge Luis Borges");
+  });
+
+  it("keeps naming the query when there is text, even with an author chosen", () => {
+    expect(describeNoMatches("cosmos", "Jorge Luis Borges", english)).toBe(
+      english("library.noMatches", { query: "cosmos" }),
+    );
+  });
+
+  it("says nothing at all when nothing was filtered, instead of naming an empty query", () => {
+    expect(describeNoMatches("", ALL_AUTHORS, english)).toBeNull();
+    expect(describeNoMatches("   ", ALL_AUTHORS, english)).toBeNull();
+  });
+
+  it("says it in Spanish too", () => {
+    expect(describeNoMatches("", "Jorge Luis Borges", spanish)).toBe(
+      "Ningún documento de Jorge Luis Borges.",
     );
   });
 });
