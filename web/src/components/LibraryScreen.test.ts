@@ -14,6 +14,7 @@ function libraryProps(overrides: { entries?: LibraryEntry[]; inFlight?: boolean 
     locale: "en",
     t: english,
     onOpenFolder: () => {},
+    onOpenDocument: () => {},
     ...overrides,
   };
 }

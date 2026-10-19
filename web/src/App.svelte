@@ -3,10 +3,12 @@
   import { translate, type Locale } from "./lib/i18n";
   import {
     LIBRARY_CHANGED_EVENT,
+    documentActionOutcome,
     folderActionOutcome,
     startLibraryRefresh,
     type HomeCategory,
     type LibraryEntry,
+    type OpenedDocument,
     type OpenedFolder,
     type Provider,
     type ScanReport,
@@ -290,6 +292,21 @@
     }
   }
 
+  // The card's open action (R37): the document goes to the system's own application for it, at the
+  // page the reader last reached. The card renders no outcome — the folder action's two sentences
+  // were removed at the user's request (L27, L30) and this one is the same kind of action — so a
+  // failure is reported to the console, which is where the window actions report the failures that
+  // have no user state to carry them.
+  async function openDocument(entry: LibraryEntry): Promise<void> {
+    const [settled] = await Promise.allSettled([
+      invoke<OpenedDocument>("open_document", { id: entry.id }),
+    ]);
+    const outcome = documentActionOutcome(settled);
+    if (outcome.kind === "failed") {
+      console.error("the document could not be opened", outcome.message);
+    }
+  }
+
   // R27: removing a watch now takes that folder's documents out of the library with it, so the click no
   // longer removes anything — it asks the store what the removal would do, and the modal says so. A plan
   // that comes back empty means the folder is already gone (another window, an edited database): there is
@@ -470,6 +487,7 @@
         error={libraryError}
         {t}
         onOpenFolder={openContainingFolder}
+        onOpenDocument={openDocument}
         onOpenCategory={selectCategory}
         onNavigate={selectScreen}
       />
@@ -481,6 +499,7 @@
         locale={locale}
         {t}
         onOpenFolder={openContainingFolder}
+        onOpenDocument={openDocument}
       />
     {:else if view.kind === "screen"}
       <SettingsScreen
@@ -518,6 +537,7 @@
         error={libraryError}
         {t}
         onOpenFolder={openContainingFolder}
+        onOpenDocument={openDocument}
         onBack={() => selectScreen("home")}
       />
     {/if}

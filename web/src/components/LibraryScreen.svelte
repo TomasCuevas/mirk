@@ -19,6 +19,7 @@
     locale,
     t,
     onOpenFolder,
+    onOpenDocument,
   }: {
     entries: LibraryEntry[];
     inFlight: boolean;
@@ -26,6 +27,8 @@
     locale: string;
     t: Translate;
     onOpenFolder: (entry: LibraryEntry) => void;
+    /** Opens the document itself, in the system's own application for it (R37). */
+    onOpenDocument: (entry: LibraryEntry) => void;
   } = $props();
 
   // Filter, sort and page state is local to the screen, because it is a view of the listing and not a
@@ -84,7 +87,7 @@
            snippet rendered twice, so the two copies cannot drift apart. -->
       {@render pager()}
 
-      <BookGrid entries={paged.items} {t} {onOpenFolder} />
+      <BookGrid entries={paged.items} {t} {onOpenFolder} {onOpenDocument} />
 
       {@render pager()}
     {/if}

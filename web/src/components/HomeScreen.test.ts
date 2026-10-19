@@ -14,6 +14,7 @@ function homeProps(overrides: { entries?: LibraryEntry[]; inFlight?: boolean } =
     error: null as string | null,
     t: english,
     onOpenFolder: () => {},
+    onOpenDocument: () => {},
     onOpenCategory: () => {},
     onNavigate: () => {},
     ...overrides,

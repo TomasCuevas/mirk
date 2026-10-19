@@ -22,8 +22,8 @@
 use std::path::{Path, PathBuf};
 
 use commands::{
-    FolderRemovalView, LibraryEntryView, OpenedFolderView, ProviderView, ScanReportView,
-    SuggestionView, WatchedFolderView,
+    FolderRemovalView, LibraryEntryView, OpenedDocumentView, OpenedFolderView, ProviderView,
+    ScanReportView, SuggestionView, WatchedFolderView,
 };
 use oct_core::OctError;
 use oct_store::{database_path, AuthorEdit, Store};
@@ -374,6 +374,21 @@ fn set_language(locale: String, app: AppHandle) -> Result<(), String> {
     // as every other refresh does; there is no second path that could word it differently. Nothing
     // about the window changed here, so the visibility is read from the window as usual.
     rebuild_tray(&app, None)
+}
+
+/// Opens the document the card names, in the system's own application for it.
+///
+/// The document is identified by its row id, not by a path the interface hands over: the store
+/// holds the canonical path, and the page the document resumes at is the newest recorded position
+/// — the very number the card shows, so the card and the document cannot disagree.
+///
+/// The viewer's page capability is the platform's business: a viewer that cannot be asked for a
+/// page still opens the document, and the answer names the program that actually ran.
+#[tauri::command]
+fn open_document(id: i64) -> Result<OpenedDocumentView, String> {
+    let store = open_store()?;
+    let launcher = oct_platform::backends().launcher;
+    commands::open_document(&store, launcher.as_ref(), id).map_err(error_message)
 }
 
 /// Opens the folder that contains the document at `path`, reporting an honest error when the
@@ -835,6 +850,7 @@ fn main() {
             set_language,
             open_containing_folder,
             open_folder,
+            open_document,
             pick_folder
         ])
         .run(tauri::generate_context!())

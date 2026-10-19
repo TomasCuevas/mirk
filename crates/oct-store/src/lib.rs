@@ -1289,19 +1289,6 @@ impl Store {
                 progress,
             ) = row.map_err(storage_error)?;
 
-            let identity = decode_identity(
-                kind.as_deref(),
-                volume.as_deref(),
-                index.as_deref(),
-                hash.as_deref(),
-            )?;
-            let pages = pages.map(u32::try_from).transpose().map_err(|_| {
-                OctError::Storage("stored page count is not a valid page number".into())
-            })?;
-            let cover_page = cover_page.map(u32::try_from).transpose().map_err(|_| {
-                OctError::Storage("stored cover page is not a valid page number".into())
-            })?;
-
             let (progress, progress_recorded_at) = match progress {
                 Some((page, total, source, confidence, read_at, updated_at)) => {
                     let page = u32::try_from(page).map_err(|_| {
@@ -1329,9 +1316,12 @@ impl Store {
             entries.push(LibraryEntry {
                 document: DocumentRecord {
                     id,
-                    document: Document {
-                        path: PathBuf::from(path),
-                        identity,
+                    document: decode_document(
+                        path,
+                        kind,
+                        volume,
+                        index,
+                        hash,
                         pages,
                         title,
                         author,
@@ -1339,13 +1329,85 @@ impl Store {
                         user_author,
                         cover_page,
                         cover_image,
-                    },
+                    )?,
                 },
                 progress,
                 progress_recorded_at,
             });
         }
         Ok(entries)
+    }
+
+    /// One document, by its row id, or `None` when no row carries that id.
+    ///
+    /// The document columns are read exactly as [`Store::library`] reads them, through the same
+    /// [`decode_document`] helper, so a document fetched by id and the same document fetched in the
+    /// listing can never disagree about a field. A caller that needs one document therefore does
+    /// not have to pull the whole library to find it.
+    pub fn document_by_id(&self, id: i64) -> Result<Option<DocumentRecord>, OctError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, path, file_id_kind, volume_id, file_index, content_hash, \
+                        pages, title, author, user_title, user_author, cover_page, cover_image \
+                 FROM documents WHERE id = ?1",
+            )
+            .map_err(storage_error)?;
+
+        let mut rows = statement
+            .query_map(params![id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                ))
+            })
+            .map_err(storage_error)?;
+
+        let Some(row) = rows.next() else {
+            return Ok(None);
+        };
+        let (
+            id,
+            path,
+            kind,
+            volume,
+            index,
+            hash,
+            pages,
+            title,
+            author,
+            user_title,
+            user_author,
+            cover_page,
+            cover_image,
+        ) = row.map_err(storage_error)?;
+
+        let document = decode_document(
+            path,
+            kind,
+            volume,
+            index,
+            hash,
+            pages,
+            title,
+            author,
+            user_title,
+            user_author,
+            cover_page,
+            cover_image,
+        )?;
+        Ok(Some(DocumentRecord { id, document }))
     }
 
     /// Every watched folder, oldest first.
@@ -1781,6 +1843,51 @@ fn decode_identity(
             "unknown file identity kind `{other}`"
         ))),
     }
+}
+
+/// The document columns of a row, decoded into a [`Document`].
+///
+/// Shared by the listing and the single-document lookup, so a document fetched by id and the same
+/// document fetched in the listing are decoded by the same code and cannot disagree about a field.
+#[allow(clippy::too_many_arguments)]
+fn decode_document(
+    path: String,
+    kind: Option<String>,
+    volume: Option<String>,
+    index: Option<String>,
+    hash: Option<String>,
+    pages: Option<i64>,
+    title: Option<String>,
+    author: Option<String>,
+    user_title: Option<String>,
+    user_author: Option<String>,
+    cover_page: Option<i64>,
+    cover_image: Option<String>,
+) -> Result<Document, OctError> {
+    let identity = decode_identity(
+        kind.as_deref(),
+        volume.as_deref(),
+        index.as_deref(),
+        hash.as_deref(),
+    )?;
+    let pages = pages.map(u32::try_from).transpose().map_err(|_| {
+        OctError::Storage("stored page count is not a valid page number".into())
+    })?;
+    let cover_page = cover_page.map(u32::try_from).transpose().map_err(|_| {
+        OctError::Storage("stored cover page is not a valid page number".into())
+    })?;
+
+    Ok(Document {
+        path: PathBuf::from(path),
+        identity,
+        pages,
+        title,
+        author,
+        user_title,
+        user_author,
+        cover_page,
+        cover_image,
+    })
 }
 
 fn parse_u64(value: Option<&str>, column: &str) -> Result<u64, OctError> {

@@ -106,6 +106,32 @@ export interface OpenedFolder {
   viewer: string;
 }
 
+/** What the `open_document` command returns when the document is opened. */
+export interface OpenedDocument {
+  /** The document that was opened, by path. */
+  path: string;
+  /** The program that opened it: the desktop's default handler, or a page-capable viewer. */
+  viewer: string;
+  /**
+   * The zero-based page the document was resumed at, or `null` when it was opened at its beginning.
+   *
+   * `null` is not "page zero": it is "no source ever reported a position for this document", which
+   * is why the two cases are different answers rather than the same number.
+   */
+  page: number | null;
+}
+
+/**
+ * What a card's "open the document" action produced.
+ *
+ * The same shape the folder action has, and for the same reason: the card renders no outcome — the
+ * two sentences that used to draw it were removed at the user's request (L27, L30) — so the decision
+ * is kept in a plain value that both branches can be pinned on without a webview.
+ */
+export type DocumentActionOutcome =
+  | { kind: "opened"; path: string; viewer: string; page: number | null }
+  | { kind: "failed"; message: string };
+
 /**
  * What a card's "open containing folder" action produced.
  *
@@ -132,6 +158,28 @@ export function folderActionOutcome(
 ): FolderActionOutcome {
   if (settled.status === "fulfilled") {
     return { kind: "opened", folder: settled.value.folder, viewer: settled.value.viewer };
+  }
+  return { kind: "failed", message: String(settled.reason) };
+}
+
+/**
+ * Decides the open-document action's outcome from the command's settled answer, and nothing else.
+ *
+ * A fulfilled `open_document` is the document that was opened, the program that opened it and the
+ * page it was resumed at; a rejection is a failure whose message the caller reports to the console —
+ * the same place the folder action reports a failure that has no user state to carry it. A `null` or
+ * an error is never dressed up as an opened document.
+ */
+export function documentActionOutcome(
+  settled: PromiseSettledResult<OpenedDocument>,
+): DocumentActionOutcome {
+  if (settled.status === "fulfilled") {
+    return {
+      kind: "opened",
+      path: settled.value.path,
+      viewer: settled.value.viewer,
+      page: settled.value.page,
+    };
   }
   return { kind: "failed", message: String(settled.reason) };
 }

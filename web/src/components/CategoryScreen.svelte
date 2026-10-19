@@ -19,6 +19,7 @@
     error,
     t,
     onOpenFolder,
+    onOpenDocument,
     onBack,
   }: {
     category: HomeCategory;
@@ -27,6 +28,8 @@
     error: string | null;
     t: Translate;
     onOpenFolder: (entry: LibraryEntry) => void;
+    /** Opens the document itself, in the system's own application for it (R37). */
+    onOpenDocument: (entry: LibraryEntry) => void;
     onBack: () => void;
   } = $props();
 
@@ -67,7 +70,7 @@
   {:else if view === "empty"}
     <p class="state">{t("home.categoryEmpty")}</p>
   {:else}
-    <BookGrid entries={items} {t} {onOpenFolder} />
+    <BookGrid entries={items} {t} {onOpenFolder} {onOpenDocument} />
   {/if}
 </section>
 

@@ -2564,6 +2564,46 @@ fn the_tightest_covering_folder_is_the_one_that_gets_named() {
 // --- UI slice: the library listing (S1) ------------------------------------------------------
 
 #[test]
+fn a_document_can_be_fetched_by_its_id_without_pulling_the_whole_library() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+
+    let wanted = store
+        .upsert_document(&document(
+            "/library/wanted.pdf",
+            FileId::Posix { dev: 1, ino: 21 },
+        ))
+        .expect("insert");
+    store
+        .upsert_document(&document(
+            "/library/other.pdf",
+            FileId::Posix { dev: 1, ino: 22 },
+        ))
+        .expect("insert");
+
+    let found = store.document_by_id(wanted).expect("read");
+    let found = found.expect("the document is in the library");
+    assert_eq!(found.id, wanted);
+    assert_eq!(found.document.path, PathBuf::from("/library/wanted.pdf"));
+    assert_eq!(
+        found.document.identity,
+        Some(FileId::Posix { dev: 1, ino: 21 }),
+        "the identity must be decoded exactly as the listing decodes it"
+    );
+}
+
+#[test]
+fn a_document_id_that_names_nothing_is_an_absence_and_not_a_failure() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+
+    // `None` and an error are different answers: the first says "no such document", the second says
+    // "the store could not be read". A caller that cannot tell them apart would report a missing
+    // document as a broken database.
+    assert_eq!(store.document_by_id(404).expect("read"), None);
+}
+
+#[test]
 fn the_library_returns_the_latest_progress_with_its_provenance() {
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");

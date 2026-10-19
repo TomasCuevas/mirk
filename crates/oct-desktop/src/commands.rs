@@ -237,6 +237,19 @@ pub struct OpenedFolderView {
     pub viewer: String,
 }
 
+/// The document a card action opened, the program that opened it, and the page it was opened at.
+///
+/// `page` is the zero-based page the document was resumed at, or `None` when the document was
+/// opened at its beginning — which is what happens for a document no source has ever reported a
+/// position for. It travels back so a caller can tell the two apart: "opened" and "opened where I
+/// left it" are different promises, and only the second one is a promise about the page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpenedDocumentView {
+    pub path: String,
+    pub viewer: String,
+    pub page: Option<u32>,
+}
+
 /// One document awaiting the reader's accept-or-discard decision (R4).
 ///
 /// Only the **undecided** queue travels here: a decision is history, read back by id when it needs
@@ -947,6 +960,86 @@ pub fn set_language(store: &Store, locale: &str) -> Result<(), OctError> {
         });
     }
     store.set_setting(LANGUAGE_SETTING, locale)
+}
+
+/// Opens a document with the platform launcher, at the page the reader last reached.
+///
+/// This is the card's own action: the reader asks for a document and the document goes to the
+/// system's application for it — Evince or Papers on Linux when one of them is installed, the
+/// desktop's default handler otherwise. `oct` does not render it: the first-party reader is a
+/// later task, and until it exists this is the honest way to open a PDF.
+///
+/// # The page
+///
+/// The page is the **newest recorded position**, the very same row the listing shows, so the card
+/// and the document can never disagree: a card that says "page 12" opens at page 12. A document no
+/// source has ever reported a position for is opened at its beginning, which is the honest answer
+/// — there is no page to resume.
+///
+/// The viewer's own capability is the platform's business, not this function's: the launcher's
+/// contract says a viewer that cannot be asked for a page still opens the document, and the
+/// returned `viewer` names the program that actually ran. That is why the fallback is a degraded
+/// success rather than an error, and why the `viewer` field is worth having.
+///
+/// The stored position is used rather than a live read of the viewer's state on purpose: the live
+/// state belongs to the viewer, and the page the card shows is the stored one. A reader who sees
+/// "page 12" on the card and lands on page 12 has been told the truth.
+pub fn open_document(
+    store: &Store,
+    launcher: &dyn Launcher,
+    id: i64,
+) -> Result<OpenedDocumentView, OctError> {
+    let Some(record) = store.document_by_id(id)? else {
+        // An id that names no document is an invalid argument, not a storage failure: the caller
+        // asked for something the library does not hold, and a log that says otherwise sends
+        // whoever reads it looking in the wrong place (R35).
+        return Err(OctError::InvalidInput {
+            field: "id",
+            value: id.to_string(),
+            expected: "a document in the library".to_string(),
+        });
+    };
+    let path = record.document.path.clone();
+
+    // The file has to still be there. A document whose file was moved or deleted since the last
+    // scan is an honest error, not a silent no-op: handing a path to a viewer that will complain
+    // in a window the reader is not looking at is the failure this project refuses everywhere else.
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => {
+            return Err(OctError::InvalidPath(format!(
+                "the path is not a file: {}",
+                display_path(&path)
+            )))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(OctError::InvalidPath(format!(
+                "the document no longer exists: {}",
+                display_path(&path)
+            )))
+        }
+        Err(error) => return Err(OctError::Io(error)),
+    }
+
+    // The newest recorded position, the same row the listing shows. `progress_for_document` returns
+    // the rows oldest first, so the last one is the newest — the same rule the listing's join
+    // applies, which is what keeps the card and the document in agreement.
+    let page = store
+        .progress_for_document(id)?
+        .last()
+        .map(|progress| progress.page);
+
+    let viewer = match launcher.launch(&path, page)? {
+        LaunchOutcome::Delegated { viewer } => viewer,
+        // `oct`'s own reader is a legitimate answer rather than a failure, once it exists.
+        LaunchOutcome::OpenedInternally => "oct".to_string(),
+    };
+
+    Ok(OpenedDocumentView {
+        path: display_path(&path),
+        viewer,
+        page,
+    })
 }
 
 /// Opens the folder that contains `path` with the platform launcher.
@@ -1662,6 +1755,160 @@ mod tests {
         std::fs::write(&file, b"not really a pdf").expect("write the file");
 
         let result = open_containing_folder(&FailingLauncher, &file);
+        match result {
+            Err(OctError::Io(error)) => assert!(error.to_string().contains("no xdg-open")),
+            other => panic!("expected an io error, got {other:?}"),
+        }
+    }
+
+    // --- the card opens the document (R37) ------------------------------------------------------
+
+    /// A store holding one document whose file is really on disk, so the open action can be
+    /// exercised the way the interface exercises it.
+    fn stored_document(label: &str) -> (Store, i64, PathBuf, TempDir) {
+        let store = in_memory_store();
+        let dir = TempDir::new(label);
+        let file = dir.path.join("Cosmos.pdf");
+        std::fs::write(&file, b"not really a pdf").expect("write the file");
+        let id = store
+            .upsert_document(&document(&display_path(&file), 3, 1))
+            .expect("insert");
+        (store, id, file, dir)
+    }
+
+    #[test]
+    fn opening_a_document_resumes_it_at_the_page_the_reader_reached() {
+        let (store, id, file, _dir) = stored_document("open-document");
+
+        // Two rows, deliberately out of page order, so "the newest" cannot be confused with "the
+        // furthest": the card shows the newest one, and the document has to open there too.
+        store
+            .record_progress(
+                id,
+                &StoredProgress::new(
+                    40,
+                    Some(300),
+                    ProgressSource::External("evince-gvfs"),
+                    Confidence::Exact,
+                ),
+            )
+            .expect("record");
+        store
+            .record_progress(
+                id,
+                &StoredProgress::new(
+                    11,
+                    Some(300),
+                    ProgressSource::External("evince-gvfs"),
+                    Confidence::Exact,
+                ),
+            )
+            .expect("record");
+
+        let launcher = RecordingLauncher::new();
+        let opened = open_document(&store, &launcher, id).expect("open the document");
+
+        assert_eq!(opened.path, display_path(&file));
+        assert_eq!(opened.viewer, "test-file-manager");
+        assert_eq!(
+            opened.page,
+            Some(11),
+            "the page reported is the one the document was opened at"
+        );
+
+        let calls = launcher.calls.lock().expect("the recording lock");
+        assert_eq!(calls.len(), 1, "exactly one launch");
+        assert_eq!(calls[0].0, file, "the document itself, not its folder");
+        assert_eq!(
+            calls[0].1,
+            Some(11),
+            "the newest recorded position, the same one the card shows"
+        );
+    }
+
+    #[test]
+    fn a_document_nobody_has_read_opens_at_its_beginning() {
+        let (store, id, _file, _dir) = stored_document("open-unread");
+
+        let launcher = RecordingLauncher::new();
+        let opened = open_document(&store, &launcher, id).expect("open the document");
+
+        assert_eq!(
+            opened.page, None,
+            "a document with no recorded position has no page to resume at"
+        );
+        let calls = launcher.calls.lock().expect("the recording lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].1, None,
+            "no page is asked for, so the viewer is free to open it at the beginning"
+        );
+    }
+
+    #[test]
+    fn a_document_whose_file_is_gone_is_an_honest_error_and_is_not_launched() {
+        let (store, id, file, dir) = stored_document("open-gone");
+        // The library keeps a document whose file was deleted after the last scan.
+        std::fs::remove_dir_all(&dir.path).expect("remove the file");
+
+        let launcher = RecordingLauncher::new();
+        let result = open_document(&store, &launcher, id);
+
+        match result {
+            Err(OctError::InvalidPath(message)) => {
+                assert!(message.contains("Cosmos.pdf"), "names the document: {message}");
+            }
+            other => panic!("expected an InvalidPath error, got {other:?}"),
+        }
+        assert!(
+            launcher.calls.lock().expect("the recording lock").is_empty(),
+            "a document that is gone must not be launched"
+        );
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn an_id_that_names_no_document_is_an_invalid_argument_and_is_not_launched() {
+        let store = in_memory_store();
+        let launcher = RecordingLauncher::new();
+
+        let result = open_document(&store, &launcher, 404);
+
+        match result {
+            Err(OctError::InvalidInput { field, value, expected }) => {
+                assert_eq!(field, "id");
+                assert_eq!(value, "404");
+                assert!(!expected.is_empty(), "the error says what is accepted instead");
+            }
+            other => panic!("expected an InvalidInput error, got {other:?}"),
+        }
+        assert!(launcher.calls.lock().expect("the recording lock").is_empty());
+    }
+
+    #[test]
+    fn a_launcher_failure_travels_back_unchanged_when_opening_a_document() {
+        struct FailingLauncher;
+
+        impl Launcher for FailingLauncher {
+            fn id(&self) -> &'static str {
+                "test-failing"
+            }
+
+            fn platform(&self) -> Platform {
+                Platform::current()
+            }
+
+            fn launch(&self, _path: &Path, _page: Option<u32>) -> Result<LaunchOutcome, OctError> {
+                Err(OctError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no xdg-open",
+                )))
+            }
+        }
+
+        let (store, id, _file, _dir) = stored_document("open-failure");
+        let result = open_document(&store, &FailingLauncher, id);
+
         match result {
             Err(OctError::Io(error)) => assert!(error.to_string().contains("no xdg-open")),
             other => panic!("expected an io error, got {other:?}"),

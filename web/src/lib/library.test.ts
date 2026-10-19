@@ -14,6 +14,7 @@ import {
   describeProgressView,
   describeProvenance,
   describeLibraryMessage,
+  documentActionOutcome,
   describeProvider,
   describeProviderRegistry,
   describeScanSummary,
@@ -942,6 +943,53 @@ describe("the containing-folder action's outcome", () => {
     expect(
       folderActionOutcome({ status: "rejected", reason: new Error("no such folder") }),
     ).toEqual({ kind: "failed", message: "Error: no such folder" });
+  });
+});
+
+/**
+ * The open-document action's outcome, decided by a pure rule (R37).
+ *
+ * The same shape as the folder action's, and for the same reason: the card renders no outcome, so
+ * the decision the command's answer forces is kept in a value both branches can be pinned on without
+ * a webview. The page is part of it, because "opened" and "opened where I left it" are different
+ * promises and only the second one is a promise about the page.
+ */
+describe("the open-document action's outcome", () => {
+  it("names the document, the viewer and the page when the command opened it", () => {
+    expect(
+      documentActionOutcome({
+        status: "fulfilled",
+        value: { path: "/library/cosmos.pdf", viewer: "evince", page: 11 },
+      }),
+    ).toEqual({
+      kind: "opened",
+      path: "/library/cosmos.pdf",
+      viewer: "evince",
+      page: 11,
+    });
+  });
+
+  it("keeps a document opened at its beginning distinct from one resumed at a page", () => {
+    // `null` is "no source ever said where this document was", not "page zero": a document opened
+    // at its beginning and a document nobody has read are the same answer, and both are different
+    // from a document resumed at page 12.
+    expect(
+      documentActionOutcome({
+        status: "fulfilled",
+        value: { path: "/library/cosmos.pdf", viewer: "xdg-open", page: null },
+      }),
+    ).toEqual({
+      kind: "opened",
+      path: "/library/cosmos.pdf",
+      viewer: "xdg-open",
+      page: null,
+    });
+  });
+
+  it("reports a failure rather than inventing an opened document", () => {
+    expect(
+      documentActionOutcome({ status: "rejected", reason: new Error("the file is gone") }),
+    ).toEqual({ kind: "failed", message: "Error: the file is gone" });
   });
 });
 

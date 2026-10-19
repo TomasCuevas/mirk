@@ -62,6 +62,7 @@ function mountEditor(document_: LibraryEntry): ReturnType<typeof mount> {
       entries: [document_],
       t: english,
       onOpenFolder: () => {},
+      onOpenDocument: () => {},
       initialEditing: document_,
     },
   });

@@ -14,12 +14,22 @@
     entry,
     t,
     onOpenFolder,
+    onOpenDocument,
     onEditDocument,
     cover,
   }: {
     entry: LibraryEntry;
     t: Translate;
     onOpenFolder: (entry: LibraryEntry) => void;
+    /**
+     * Opens the document itself, in the system's own application for it (R37).
+     *
+     * The cover and the title are the two ways in: the cover is the document's body and the title
+     * is its name, and both say the same thing — "this is the document, open it". The card's other
+     * two actions (the folder and the editor) are about the document's surroundings and its
+     * metadata, and they keep saying so.
+     */
+    onOpenDocument: (entry: LibraryEntry) => void;
     /** Opens the document editor for this entry: its title and its cover, in the one modal (R32). */
     onEditDocument: (entry: LibraryEntry) => void;
     /**
@@ -72,16 +82,29 @@
        nothing to belong to (L27); anchored here it reads as an action on the document's own body, and
        it will still read that way once real covers replace the placeholder. -->
   <div class="cover-wrap">
-    {#if imageSource !== null}
-      <!-- The document's real cover (R32). Its shape matches the placeholder's (`aspect-ratio` is
-           declared inline on both), so a card does not change height when the image arrives; and
-           `object-fit: contain` shows the whole page rather than cropping the part of it that
-           carries a title. The `alt` is empty because the heading below already names the
-           document: a second copy of the same name would be read out twice. -->
-      <img class="cover-image" src={imageSource} alt="" style="aspect-ratio: 9 / 11" />
-    {:else}
-      <div class="cover" style="aspect-ratio: 9 / 11" aria-hidden="true">{t("card.cover")}</div>
-    {/if}
+    <!-- The cover is the document's own body, and clicking it opens the document (R37).
+         It is a real button, so the pointer and the keyboard reach the same action, and the
+         accessible name names the DOCUMENT: on a screen that holds dozens of cards, a control that
+         only says "open" says nothing about which one it opens.
+         The two corner pills stay outside it — they are their own actions, and a button inside a
+         button is not a thing. -->
+    <button
+      type="button"
+      class="cover-open"
+      aria-label={t("card.openDocument", { title: displayTitle(entry) })}
+      onclick={() => onOpenDocument(entry)}
+    >
+      {#if imageSource !== null}
+        <!-- The document's real cover (R32). Its shape matches the placeholder's (`aspect-ratio` is
+             declared inline on both), so a card does not change height when the image arrives; and
+             `object-fit: contain` shows the whole page rather than cropping the part of it that
+             carries a title. The `alt` is empty because the heading below already names the
+             document: a second copy of the same name would be read out twice. -->
+        <img class="cover-image" src={imageSource} alt="" style="aspect-ratio: 9 / 11" />
+      {:else}
+        <div class="cover" style="aspect-ratio: 9 / 11" aria-hidden="true">{t("card.cover")}</div>
+      {/if}
+    </button>
 
     <!-- R31, corrected in R32: the document-editor pencil sits on the cover's TOP-LEFT, mirroring the
          containing-folder action at its top-right, because they are the same kind of thing: an action
@@ -163,7 +186,22 @@
        block — a card pushed past its own height, whose overflow then made the carousel strip scroll
        vertically (R17). A fixed height its own content overflows is not fixed. -->
   <div class="body">
-    <h2 class="title" title={displayTitle(entry)}>{displayTitle(entry)}</h2>
+    <!-- The title opens the document as well (R37): it is the document's name, and a name a reader
+         recognises is the thing they reach for. The clamp lives on the SPAN inside the button and
+         not on the button itself, because a form control is a replaced element in some engines and
+         a line clamp on one is not honoured; on a plain span it is. The heading still holds the
+         title for a screen reader, and the button's own `title` offers the full name to the
+         pointer. -->
+    <h2 class="title">
+      <button
+        type="button"
+        class="title-open"
+        title={displayTitle(entry)}
+        onclick={() => onOpenDocument(entry)}
+      >
+        <span class="title-text">{displayTitle(entry)}</span>
+      </button>
+    </h2>
 
     <!-- The card used to print "your title" here when the reader had named the document, and the user
          asked for it to go: on a title they had just typed themselves it was noise, not information.
@@ -284,17 +322,52 @@
     gap: 0.35rem;
   }
 
+  /* The cover's own control (R37). The button owns no shape of its own: it is the cover's
+     rectangle, so the cover keeps exactly the geometry it had before the click target arrived —
+     the same 9/11 rectangle, the same border, the same stand-in. Everything that would draw a
+     button is removed, because a visible button frame around the cover would say "control" where
+     the cover says "document". */
+  .cover-open {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+  }
+
   .title {
     margin: 0;
     font-size: 0.98rem;
     overflow-wrap: anywhere;
-    /* Clamped to two lines so a long title cannot run the card's height away: it holds the difference
-       between a one-line and a two-line title to a single line. It no longer makes every card the same
-       height — the fixed text block that did that was removed at the user's request, because reserving
-       it made the card read as stretched and left the text floating in the space it created (L31). The
-       text is only clipped visually: the element
-       still holds the whole title for a screen reader, and the full title is offered to the pointer
-       through `title=`. */
+    /* The title does not make every card the same height — the fixed text block that did that was
+       removed at the user's request, because reserving it made the card read as stretched and left
+       the text floating in the space it created (L31). The text is only clipped visually: the
+       element still holds the whole title for a screen reader, and the full title is offered to
+       the pointer through `title=`. */
+  }
+
+  /* The title as a control (R37). It looks like the title it always was — no frame, no underline
+     on its own, the same colour and size — and the pointer says so with the cursor alone, which is
+     the one signal that costs nothing on a screen full of cards. */
+  .title-open {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  /* The two-line clamp, on the span and not on the button: a form control is a replaced element
+     in some engines, and `-webkit-line-clamp` on one is not honoured the way it is on a plain
+     element. The span inside the button is a plain element, so the clamp is the same clamp the
+     title had before it became a control. */
+  .title-text {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;

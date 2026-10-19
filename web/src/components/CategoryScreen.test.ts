@@ -17,6 +17,7 @@ function categoryProps(
     error: null as string | null,
     t: english,
     onOpenFolder: () => {},
+    onOpenDocument: () => {},
     onBack: () => {},
     ...overrides,
   };

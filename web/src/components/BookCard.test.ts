@@ -21,6 +21,17 @@ function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
 }
 
 /**
+ * How many controls the card carries with a given class.
+ *
+ * The class attribute also carries Svelte's scoping class, so a plain `class="cover-open"` never
+ * matches: the name is looked for INSIDE the attribute, the way the markup really spells it.
+ */
+function controlsWith(card: string, className: string): number {
+  const matches = card.match(new RegExp(`class="[^"]*\\b${className}\\b[^"]*"`, "g"));
+  return matches === null ? 0 : matches.length;
+}
+
+/**
  * R9 (L22): the containing-folder action is an icon at the top of the card, with an accessible name
  * instead of a visible label.
  *
@@ -36,15 +47,20 @@ describe("the containing-folder action", () => {
         entry: entry(),
         t: english,
         onOpenFolder: () => {},
+        onOpenDocument: () => {},
         onEditDocument: () => {},
       },
     });
 
     const card = body.slice(body.indexOf("<article"), body.indexOf("</article>"));
-    // R31 added the document-editor pill on the cover's other corner. The cover's own control is gone
-    // (the user rejected a third control over a small cover), so the folder action is one of two
-    // controls; its own shape and name are what this test pins.
-    expect(card.match(/<button/g)).toHaveLength(2);
+    // R31 added the document-editor pill on the cover's other corner, and R37 added the two ways to
+    // OPEN the document — the cover and the title. The corner controls are still the folder action
+    // and the pencil: a third pill over a small cover was the user's complaint (R32) and it has not
+    // come back. The cover and the title are not pills on the cover; they are the cover and the
+    // title themselves.
+    expect(card.match(/<button/g)).toHaveLength(4);
+    expect(controlsWith(card, "open-folder")).toBe(1);
+    expect(controlsWith(card, "edit-document")).toBe(1);
 
     const start = card.indexOf("open-folder");
     const buttonStart = card.lastIndexOf("<button", start);
@@ -80,6 +96,7 @@ describe("the reader's title", () => {
         entry: entry({ title: "Cosmos" }),
         t: english,
         onOpenFolder: () => {},
+        onOpenDocument: () => {},
         onEditDocument: () => {},
       },
     });
@@ -109,6 +126,7 @@ describe("the reader's title", () => {
           entry: entry({ title: "Cosmos" }),
           t: translate(locale),
           onOpenFolder: () => {},
+          onOpenDocument: () => {},
           onEditDocument: () => {},
         },
       });
@@ -126,7 +144,12 @@ describe("the reader's title", () => {
     // replaces it is in the EDITOR — the field says whose title is being edited, and the restore control
     // exists only when there is one to restore — which `titleEditor` keeps in one place and
     // `library.test.ts` pins. This test is the inverse guard: the phrase must not come back onto a card.
-    const props = { t: english, onOpenFolder: () => {}, onEditDocument: () => {} };
+    const props = {
+      t: english,
+      onOpenFolder: () => {},
+      onOpenDocument: () => {},
+      onEditDocument: () => {},
+    };
 
     const named = render(BookCard, {
       props: { ...props, entry: entry({ title: "Mine", userTitle: "Mine" }) },
@@ -147,7 +170,12 @@ describe("the reader's title", () => {
  * that would otherwise become `src=""`.
  */
 describe("the card's cover", () => {
-  const props = { t: english, onOpenFolder: () => {}, onEditDocument: () => {} };
+  const props = {
+    t: english,
+    onOpenFolder: () => {},
+    onOpenDocument: () => {},
+    onEditDocument: () => {},
+  };
 
   it("shows its placeholder, and no image, until there is a cover", () => {
     const { body } = render(BookCard, { props: { ...props, entry: entry() } });
@@ -178,25 +206,71 @@ describe("the card's cover", () => {
 });
 
 /**
- * R32, corrected: the cover carries no control of its own.
+ * R32, corrected by R37: the cover's CORNER carries no control of its own.
  *
  * A third control over a small cover was the user's complaint — "another icon was added over the
  * cover" — and the pencil already means "edit this document". The cover's
  * page, its image and the removal of that image now live inside the modal the pencil opens, and what
  * is left on the cover states facts: the page count at the bottom-right, and nothing else. This test
  * is the inverse guard that keeps the control from coming back.
+ *
+ * R37 changed what the cover IS, not what its corner holds: the cover became the way to open the
+ * document, and it is the cover's own rectangle rather than a pill in one of its corners. The
+ * complaint this test guards against — a control laid OVER the cover — is still what it forbids.
  */
 describe("the cover's own corner", () => {
-  const props = { t: english, onOpenFolder: () => {}, onEditDocument: () => {} };
+  const props = {
+    t: english,
+    onOpenFolder: () => {},
+    onOpenDocument: () => {},
+    onEditDocument: () => {},
+  };
 
   it("carries no control, only the page badge", () => {
     const { body } = render(BookCard, { props: { ...props, entry: entry({ title: "Cosmos" }) } });
     const card = body.slice(body.indexOf("<article"), body.indexOf("</article>"));
 
     expect(card).not.toContain("edit-cover");
-    // The two controls that remain are the document-editor pencil and the folder action; the badge is
+    // The two corner controls are the document-editor pencil and the folder action; the badge is
     // a fact, not a third control.
-    expect(card.match(/<button/g)).toHaveLength(2);
+    expect(controlsWith(card, "open-folder")).toBe(1);
+    expect(controlsWith(card, "edit-document")).toBe(1);
     expect(card).toContain("cover-pages");
+    // R37: the cover itself is now a control — the document's own body, opened by clicking it.
+    // It is a different thing from a corner pill, and it carries no icon: it IS the cover.
+    expect(controlsWith(card, "cover-open")).toBe(1);
+  });
+});
+
+/**
+ * R37: the card opens the document, from the cover and from the title.
+ *
+ * The reader asked for it: clicking the card opens the PDF in the system's own application for it.
+ * The two ways in are the cover — the document's body — and the title — the document's name — and
+ * both say the same thing, so both name the document: a control that says only "open" says nothing
+ * about which of the dozens of cards on the screen it opens.
+ */
+describe("the card opens the document", () => {
+  const props = {
+    t: english,
+    onOpenFolder: () => {},
+    onOpenDocument: () => {},
+    onEditDocument: () => {},
+  };
+
+  it("offers the cover and the title as the two ways in, both naming the document", () => {
+    const { body } = render(BookCard, { props: { ...props, entry: entry({ title: "Cosmos" }) } });
+    const card = body.slice(body.indexOf("<article"), body.indexOf("</article>"));
+
+    // The cover carries the accessible name, because it holds no text of its own.
+    expect(controlsWith(card, "cover-open")).toBe(1);
+    expect(card).toContain('aria-label="Open Cosmos"');
+
+    // The title IS the name, so it needs no second one: the button's own text is its name.
+    const titleStart = card.indexOf("title-open");
+    expect(titleStart).toBeGreaterThan(-1);
+    const title = card.slice(titleStart, card.indexOf("</button>", titleStart));
+    expect(title).toContain("Cosmos");
+    expect(title).not.toContain("aria-label");
   });
 });

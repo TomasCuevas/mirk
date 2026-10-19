@@ -19,6 +19,7 @@
     error,
     t,
     onOpenFolder,
+    onOpenDocument,
     onOpenCategory,
     onNavigate,
   }: {
@@ -27,6 +28,8 @@
     error: string | null;
     t: Translate;
     onOpenFolder: (entry: LibraryEntry) => void;
+    /** Opens the document itself, in the system's own application for it (R37). */
+    onOpenDocument: (entry: LibraryEntry) => void;
     onOpenCategory: (category: HomeCategory) => void;
     onNavigate: (target: "library" | "settings") => void;
   } = $props();
@@ -127,7 +130,7 @@
             </div>
           </div>
         {:else}
-          <BookGrid entries={section.items} {t} {onOpenFolder} layout="strip" />
+          <BookGrid entries={section.items} {t} {onOpenFolder} {onOpenDocument} layout="strip" />
         {/if}
       </section>
     {/each}

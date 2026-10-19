@@ -34,6 +34,7 @@ function cardsDrawn(count: number, layout: "grid" | "strip"): number {
       entries: entries(count),
       t: english,
       onOpenFolder: () => {},
+      onOpenDocument: () => {},
       layout,
     },
   });
@@ -70,7 +71,7 @@ describe("how many tiles a grid draws", () => {
  * is what `initialEditing` is for: the same kind of render seam as BookCard's `cover`.
  */
 describe("the document editor", () => {
-  const props = { t: english, onOpenFolder: () => {} };
+  const props = { t: english, onOpenFolder: () => {}, onOpenDocument: () => {} };
 
   function document(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
     return { ...entries(1)[0], ...overrides };
@@ -136,7 +137,7 @@ describe("the document editor", () => {
  * listing has moved on from — the same state the refresh produces.
  */
 describe("the document editor and the listing it reads from", () => {
-  const props = { t: english, onOpenFolder: () => {} };
+  const props = { t: english, onOpenFolder: () => {}, onOpenDocument: () => {} };
 
   // The entry the editor was opened with, before the cover change reached the listing, and the same
   // document once the listing has been re-read: the reader's title is back and page 5 is the cover.

@@ -23,12 +23,20 @@
     entries,
     t,
     onOpenFolder,
+    onOpenDocument,
     layout = "grid",
     initialEditing = null,
   }: {
     entries: readonly LibraryEntry[];
     t: Translate;
     onOpenFolder: (entry: LibraryEntry) => void;
+    /**
+     * Opens a document in the system's own application for it (R37).
+     *
+     * The grid carries it the same way it carries the folder action, so a card in Inicio's carousel
+     * and the same card in the library open the document the same way.
+     */
+    onOpenDocument: (entry: LibraryEntry) => void;
     layout?: "grid" | "strip";
     /**
      * The document whose editor is already open when this grid is rendered, or `null`. The grid opens
@@ -301,6 +309,7 @@
         {entry}
         {t}
         {onOpenFolder}
+        {onOpenDocument}
         onEditDocument={openDocumentEditor}
         cover={coverOverrides[entry.id]}
       />
