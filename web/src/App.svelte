@@ -61,6 +61,10 @@
   // back/forward working. A view is either a navbar screen or one home category's own list (B2).
   let view = $state<View>({ kind: "screen", screen: "home" });
 
+  // The one scrolling container of the shell (only the screen between the top bar and the navbar
+  // scrolls). Bound so a navigation can put the reader back at the top of the screen they just chose.
+  let scroller = $state<HTMLElement | null>(null);
+
   let entries = $state<LibraryEntry[]>([]);
   let libraryLoading = $state(true);
   let libraryError = $state<string | null>(null);
@@ -409,6 +413,29 @@
     }
   }
 
+  // A new screen starts at its own top, never at the scroll position the previous one left behind.
+  //
+  // The user's report, and it is the whole rule: *"si se ha hecho scroll en una pantalla y luego se
+  // navega a otra, esta nueva pantalla no resetea el scroll, permanece con el scroll ya desplazado y
+  // esto es muy molesto"*. The shell has ONE scrolling container — the screen between the top bar and
+  // the navbar — so its `scrollTop` outlives the screen that filled it unless something resets it.
+  //
+  // It lives on `view` rather than on the three navigation functions because `view` is the single place
+  // every way of moving ends up: the navbar, a card that opens a category, a settings row, the tray's
+  // own request, and the hash listener that answers Back and Forward. An effect runs AFTER the DOM has
+  // been updated with the new screen, so the reset lands on the new content rather than on the old one.
+  function resetScroll(): void {
+    if (scroller !== null) {
+      scroller.scrollTop = 0;
+    }
+  }
+
+  $effect(() => {
+    // Reading `view` is what subscribes this effect to navigation; every navigation replaces it.
+    void view;
+    resetScroll();
+  });
+
   onMount(() => {
     view = viewFromHash(window.location.hash);
     const sync = (): void => {
@@ -488,7 +515,7 @@
 <div class="app">
   <WindowBar {t} {inTauri} onAction={runWindowAction} onDrag={startDrag} />
 
-  <main>
+  <main bind:this={scroller}>
     {#if !inTauri}
       <p class="state">{t("app.outsideTauri")}</p>
     {/if}
@@ -514,6 +541,7 @@
         {t}
         onOpenFolder={openContainingFolder}
         onOpenDocument={openDocument}
+        onResetScroll={resetScroll}
       />
     {:else if view.kind === "settings" && view.section === "library"}
       <SettingsLibraryScreen

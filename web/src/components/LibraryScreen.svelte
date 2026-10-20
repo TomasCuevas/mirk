@@ -26,6 +26,7 @@
     t,
     onOpenFolder,
     onOpenDocument,
+    onResetScroll,
   }: {
     entries: LibraryEntry[];
     inFlight: boolean;
@@ -35,6 +36,15 @@
     onOpenFolder: (entry: LibraryEntry) => void;
     /** Opens the document itself, in the system's own application for it (R37). */
     onOpenDocument: (entry: LibraryEntry) => void;
+    /**
+     * Puts the shell's scroll back at the top, which the screen asks for when it turns a page (L73).
+     *
+     * The shell owns the one scrolling container — the screen between the top bar and the navbar — so a
+     * screen cannot reset it itself, and turning a page is not a navigation: `view` does not change, so
+     * the reset that answers navigation never fires. Without this, page two of the library opens
+     * wherever page one was scrolled to, which is the report that opened this round.
+     */
+    onResetScroll: () => void;
   } = $props();
 
   // Filter, sort and page state is local to the screen, because it is a view of the listing and not a
@@ -71,6 +81,13 @@
   // R10: the page is cut from the whole filtered, sorted listing, and the helper clamps the page into
   // range when a filter shrinks the listing under the reader.
   const paged = $derived(paginate(visible, page));
+
+  // One way to turn a page, so the scroll reset cannot be forgotten on one of the two controls — the
+  // pager is rendered twice (above and below the grid) and both go through here.
+  function turnTo(next: number): void {
+    page = next;
+    onResetScroll();
+  }
   // R39/S5: the sentence for a listing filtered into nothing names what was filtered — the query when
   // there is text, the chosen author when there is not, and nothing at all when neither was set.
   const noMatches = $derived(describeNoMatches(query, chosenAuthor, t));
@@ -148,7 +165,7 @@
       <button
         type="button"
         disabled={paged.page <= 1}
-        onclick={() => (page = paged.page - 1)}
+        onclick={() => turnTo(paged.page - 1)}
       >
         {t("library.previousPage")}
       </button>
@@ -156,7 +173,7 @@
       <button
         type="button"
         disabled={paged.page >= paged.pageCount}
-        onclick={() => (page = paged.page + 1)}
+        onclick={() => turnTo(paged.page + 1)}
       >
         {t("library.nextPage")}
       </button>

@@ -1,5 +1,5 @@
 import { flushSync, mount, unmount } from "svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import LibraryScreen from "./LibraryScreen.svelte";
 import { translate } from "../lib/i18n";
 import type { LibraryEntry } from "../lib/library";
@@ -131,6 +131,7 @@ describe("choosing an author in Biblioteca", () => {
         t: english,
         onOpenFolder: () => {},
         onOpenDocument: () => {},
+    onResetScroll: () => {},
       },
     });
     flushSync();
@@ -252,6 +253,7 @@ describe("the editor's author list on a paged library", () => {
         t: english,
         onOpenFolder: () => {},
         onOpenDocument: () => {},
+    onResetScroll: () => {},
       },
     });
     flushSync();
@@ -339,6 +341,7 @@ describe("a co-authored document in Biblioteca (R42/S7)", () => {
         t: english,
         onOpenFolder: () => {},
         onOpenDocument: () => {},
+    onResetScroll: () => {},
       },
     });
     flushSync();
@@ -381,5 +384,94 @@ describe("a co-authored document in Biblioteca (R42/S7)", () => {
 
     type("druyan");
     expect(titles()).toEqual(["Cosmos"]);
+  });
+});
+
+/**
+ * Turning a page is new content, so it asks the shell to start at the top (L73).
+ *
+ * The user's report, after the navigation reset had already landed: *"cuando hago la paginacion en la
+ * seccion biblioteca, el scroll no se resetea al top"*. Pagination is not navigation — `view` does not
+ * change — so the reset that answers navigation never fires, and page two opened wherever page one was
+ * scrolled to. The screen cannot reach the shell's scrolling container, so it asks through the prop it
+ * is given; this file proves the ask happens, on both pager buttons, once per click.
+ */
+describe("a page turn asks the shell for the top", () => {
+  let component: ReturnType<typeof mount> | null = null;
+
+  afterEach(() => {
+    if (component !== null) {
+      unmount(component);
+      component = null;
+    }
+    window.document.body.innerHTML = "";
+  });
+
+  /** Twenty documents at ten per page: exactly two pages, so both buttons are reachable. */
+  function shelf(): LibraryEntry[] {
+    return Array.from({ length: 20 }, (_, index) =>
+      entry({ id: index + 1, title: `Document ${String(index + 1).padStart(2, "0")}` }),
+    );
+  }
+
+  function pagerButton(label: string): HTMLButtonElement {
+    const button = [...window.document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent?.trim() === label,
+    );
+    if (button === undefined) {
+      throw new Error(`the screen draws its "${label}" control`);
+    }
+    return button as HTMLButtonElement;
+  }
+
+  it("asks once when the reader goes to the next page", () => {
+    const onResetScroll = vi.fn();
+    component = mount(LibraryScreen, {
+      target: window.document.body,
+      props: {
+        entries: shelf(),
+        inFlight: false,
+        error: null,
+        locale: "en",
+        t: english,
+        onOpenFolder: () => {},
+        onOpenDocument: () => {},
+        onResetScroll,
+      },
+    });
+    flushSync();
+
+    expect(onResetScroll).not.toHaveBeenCalled();
+    pagerButton(english("library.nextPage")).click();
+    flushSync();
+
+    expect(onResetScroll).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks once when the reader goes back to the previous page", () => {
+    const onResetScroll = vi.fn();
+    component = mount(LibraryScreen, {
+      target: window.document.body,
+      props: {
+        entries: shelf(),
+        inFlight: false,
+        error: null,
+        locale: "en",
+        t: english,
+        onOpenFolder: () => {},
+        onOpenDocument: () => {},
+        onResetScroll,
+      },
+    });
+    flushSync();
+
+    pagerButton(english("library.nextPage")).click();
+    flushSync();
+    onResetScroll.mockClear();
+
+    pagerButton(english("library.previousPage")).click();
+    flushSync();
+
+    expect(onResetScroll).toHaveBeenCalledTimes(1);
   });
 });
