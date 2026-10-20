@@ -2396,6 +2396,7 @@ dependencies = [
  "oct-scan",
  "oct-store",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

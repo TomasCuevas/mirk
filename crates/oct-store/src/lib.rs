@@ -9,6 +9,8 @@
 //! | Table | Purpose |
 //! | --- | --- |
 //! | `documents` | One row per PDF: path, portable identity, size, mtime, page count, title, author, how it was discovered, when first and last seen. |
+//! | `authors` | One row per person the readers named, deduplicated by the trimmed, lowercased name (R42/S2). |
+//! | `document_authors` | A document's readers' authors, **ordered**: `position` is the reader's order (R42/S3). |
 //! | `progress` | Reading position **with its provenance**: page, total, `source`, `confidence`, when read, when recorded. |
 //! | `open_events` | Intervals during which a document was open: document, process, viewer, start, end. |
 //! | `viewers` | Known viewers and their declared capability, so it is not recomputed on every launch. |
@@ -24,6 +26,13 @@
 //! integer produces an interface that cannot say *"page 12 of 80, recorded when Evince closed"*
 //! and therefore silently presents stale data as current. Two rows with the same page but
 //! different provenance remain two rows.
+//!
+//! **A document's authors are rows, not a string.** `documents.author` is the PDF's own embedded
+//! author — one opaque string, read-only, never split (R42/S6) — while the authors a reader chose are
+//! their own ordered list across `authors` and `document_authors`, so "several authors per work" is
+//! stored as facts instead of as a delimiter somebody would have to guess at. The rule that turns the
+//! two into what a screen shows lives in one place, [`oct_core::Document::display_authors`], so the
+//! card, the filter and the search cannot disagree about who wrote a document (R42/S4).
 //!
 //! **`documents` stores portable identity, never only a path.** Paths change when a file is moved
 //! or renamed; identity is what lets the library follow a document instead of treating it as new
@@ -72,7 +81,7 @@
 //! - path normalisation: paths are stored as opaque UTF-8 and are **never** Unicode-normalised
 //!   (risk R7), so `path_normalized` deliberately holds the same bytes as `path`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -279,6 +288,11 @@ ALTER TABLE documents ADD COLUMN cover_image TEXT;
 /// leave that database without the column forever while claiming otherwise. The step is stamped in
 /// its own transaction, so a failure leaves the version behind and no half-added column (the V7
 /// atomicity test pins exactly that).
+///
+/// **This column does not survive the schema.** [`SCHEMA_V9`] moves every non-blank value here into
+/// `document_authors` and then drops it, because a reader's single author became the reader's ordered
+/// list (R42/S1) and one fact deserves one home. Kept here as written, because a migration is the
+/// history of the schema and not a description of it.
 const SCHEMA_V7: &str = "
 ALTER TABLE documents ADD COLUMN user_author TEXT;
 ";
@@ -308,6 +322,77 @@ const SCHEMA_V8: &str = "
 ALTER TABLE suggestions ADD COLUMN decision TEXT;
 CREATE UNIQUE INDEX idx_suggestions_path_unique ON suggestions (path);
 ";
+
+/// Version 9, first half: a document's authors are **facts in their own tables**, not a delimited
+/// string and not JSON (R42/S1).
+///
+/// `authors` holds one row per person and `document_authors` holds the reader's ordered list for a
+/// document: `position` is the reader's order (R42/S3), and the `(doc_id, author_id)` primary key says
+/// a document cannot name the same person twice. `ON DELETE CASCADE` on `doc_id` gives the list the
+/// same lifetime as the document it describes; deleting a document already cascades its progress and
+/// its open events, and a list that outlived its document would be an author nobody wrote.
+///
+/// **Deduplication is a normalised key column, and this is the decision S2 asked for.** `name` keeps
+/// the spelling that arrived first, so an existing card does not silently change; `name_key` holds the
+/// trimmed name lowercased, and `name_key` is `UNIQUE`, which makes "one row per person" a database
+/// invariant instead of a promise the write path makes and might break. It is not `COLLATE NOCASE`
+/// on `name`, because SQLite's `NOCASE` folds ASCII only: `"Émile Zola"` and `"ÉMILE ZOLA"` would be
+/// two people, and this library's authors are mostly not ASCII. It is not a lookup either, for the
+/// same class of reason — a comparison computed in Rust and a constraint that does not exist cannot
+/// both be true of every row the next writer inserts. The residual is written down rather than
+/// hidden: `str::to_lowercase` is Unicode lowercase and not full case folding, so a pair that
+/// lowercasing does not unify (German `ß` against `SS`, Greek final sigma against `σ`) is still two
+/// people. Nothing in this workspace can tell those apart without a dependency and without guessing
+/// at a person's name.
+///
+/// The uniqueness lives on `name_key` and **not** on `name` as well, deliberately: an exact duplicate
+/// name is already an equal key, so a second unique index would be redundant, and it would make every
+/// upsert ambiguous about which constraint it conflicted with — SQLite only applies the `ON CONFLICT`
+/// target to the constraint it actually detected.
+///
+/// The index is the read path: a document's list is always read *by document, ordered by position*,
+/// and the primary key orders by `author_id` instead.
+///
+/// Added as a migration rather than by editing [`SCHEMA_V1`], because V1 is **frozen**: a database an
+/// earlier build already created reports version 1, and editing the text would leave it without these
+/// tables forever while claiming otherwise.
+const SCHEMA_V9: &str = "
+CREATE TABLE authors (
+    id       INTEGER PRIMARY KEY,
+    name     TEXT NOT NULL,
+    name_key TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE document_authors (
+    doc_id    INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    author_id INTEGER NOT NULL REFERENCES authors(id),
+    position  INTEGER NOT NULL,
+    PRIMARY KEY (doc_id, author_id)
+);
+
+CREATE INDEX idx_document_authors_doc ON document_authors (doc_id, position);
+";
+
+/// Version 9, second half: the reader's single author column **retires**, and this is the decision the
+/// task asked for.
+///
+/// The alternative was to keep `documents.user_author` in place and document it as unread. It was
+/// rejected because "the reader's author must never be able to disagree with the new list" is a
+/// property of the schema or it is not a property at all: a column that still holds a name is a second
+/// home for one fact, and the next build that reads it — or an older build still running beside this
+/// one — resurrects a value the list has already replaced. V9 is the only version that can drop it
+/// while the value is provably in hand, so nothing is lost: the backfill ([`backfill_reader_authors`])
+/// reads every non-blank `user_author` into a one-entry `document_authors` row **first**, in the same
+/// transaction, and only then does this statement run.
+///
+/// `documents.author` is untouched by all of this: it is the PDF's embedded string, read-only, never
+/// split and never rewritten (R42/S6).
+///
+/// `ALTER TABLE ... DROP COLUMN` needs SQLite 3.35 or newer; this crate builds the bundled SQLite
+/// (3.46), and the workspace's `rusqlite` feature set is what makes that true. A database a person
+/// hand-edited into an index over `user_author` fails this statement honestly, and the transaction
+/// leaves the whole step unapplied (the V9 atomicity test pins exactly that).
+const SCHEMA_V9_RETIRE_USER_AUTHOR: &str = "ALTER TABLE documents DROP COLUMN user_author;";
 
 /// A document `oct` observed open outside the watched folders, awaiting the reader's decision (R4).
 ///
@@ -450,10 +535,10 @@ impl FolderRemovalPlan {
     }
 }
 
-/// What one action decided about the reader's author, in the write that saves the document editor.
+/// What one action decided about the reader's authors, in the write that saves the document editor.
 ///
 /// The editor has two controls and they do not decide the same facts. **Save** decides the title *and*
-/// the author. **Restore** decides the title and nothing else: restoring the document's own title is
+/// the authors. **Restore** decides the title and nothing else: restoring the document's own title is
 /// not a statement about who wrote the document. A two-valued parameter cannot say which, so "nothing"
 /// and "no author of my own" — which are different actions — would arrive looking the same.
 ///
@@ -461,10 +546,25 @@ impl FolderRemovalPlan {
 /// being inferred from which statements a caller happens to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorEdit<'a> {
-    /// The action decided the author: the reader's value, or none for *no author of my own*, which is
-    /// a legitimate action that falls back to the document's own author.
+    /// The action decided the author, as the one name the shipped interface can still write: the name,
+    /// or none for *no author of my own*, which is a legitimate action that falls back to the
+    /// document's own author.
+    ///
+    /// A blank name means the same as none, because an author field the reader emptied is them saying
+    /// they have no author of their own — not a person named by spaces. This is the one-author spelling
+    /// of [`AuthorEdit::DecidedList`] and it means exactly a zero- or one-entry list; it stays because
+    /// the IPC command and its web side still speak in one author (R42's interface half is a later
+    /// unit), and a one-element list has to behave exactly like the old single author.
     Decided(Option<&'a str>),
-    /// The action said nothing about the author, so the reader's author stays exactly as it is.
+    /// The action decided the authors, as the reader's ordered list (R42/S5).
+    ///
+    /// An **empty** list is *no author of my own*: it is a decision, and it falls back to the
+    /// document's own author rather than meaning "said nothing" — that is
+    /// [`AuthorEdit::Untouched`]. Entries are trimmed and deduplicated case-insensitively in the order
+    /// given; an entry that is only whitespace is refused rather than stored as `""` (R42/S2), because
+    /// a blank chip is a mistake and `NULL` already means "not set".
+    DecidedList(&'a [&'a str]),
+    /// The action said nothing about the authors, so the reader's list stays exactly as it is.
     Untouched,
 }
 
@@ -491,13 +591,61 @@ fn normalize_user_title(title: Option<&str>) -> Result<Option<&str>, OctError> {
     }
 }
 
-/// The reader's author as the column stores it: a blank value is no value at all.
+/// The reader's author as the one-author spelling stores it: a blank value is no value at all.
 ///
 /// **This is the deliberate difference from [`normalize_user_title`], which refuses a blank because a
 /// document must have a title.** Many documents have no author, so an empty field is exactly the
-/// reader's way of clearing their own author, and `NULL` stays the only stored spelling of "not set".
+/// reader's way of clearing their own author, and no author at all stays the only spelling of "not
+/// set". It is the single-value form of [`normalize_user_authors`], and it means a zero- or one-entry
+/// list: a blank here is the reader emptying one field, which is not the same act as inserting a
+/// blank chip into a list — that one is refused, below.
 fn normalize_user_author(author: Option<&str>) -> Option<&str> {
     author.map(str::trim).filter(|trimmed| !trimmed.is_empty())
+}
+
+/// The key one person is deduplicated by: the trimmed name, lowercased (R42/S2).
+///
+/// **One function, so the write and the migration cannot disagree about who is the same person.** It
+/// is also what `authors.name_key` is compared against by the database's own `UNIQUE` constraint, so
+/// the rule that decides "same person" is not a query in one place and a promise in another.
+///
+/// It is Unicode lowercase rather than SQLite's `COLLATE NOCASE`, because `NOCASE` folds ASCII only
+/// and `"Émile Zola"` / `"ÉMILE ZOLA"` would be two people. The residual is honest and small: this is
+/// lowercasing, not full case folding, so `ß` against `SS` and Greek final sigma against `σ` stay two
+/// people.
+fn author_key(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// The reader's authors as the tables store them: trimmed, blank-free, deduplicated in the order given.
+///
+/// **Order is the reader's and is never sorted** (R42/S3): "Carl Sagan, Ann Druyan" and "Ann Druyan,
+/// Carl Sagan" are different lists and both are legitimate, so this keeps the first occurrence of each
+/// person and drops only a repeat. Deduplication is by [`author_key`], case-insensitively, and **the
+/// spelling that arrives first wins** (R42/S2) — the same rule the `authors` upsert applies to a name
+/// the library already knows, so typing `"Carl Sagan"` and `"carl sagan"` in one save yields one row
+/// named "Carl Sagan".
+///
+/// An entry that is only whitespace is refused rather than dropped: a chip the reader left empty is a
+/// mistake to report, not a person to forget (R42/S2). An **empty list** is not a mistake — it is the
+/// reader saying they have no author of their own.
+fn normalize_user_authors<'a>(names: &[&'a str]) -> Result<Vec<&'a str>, OctError> {
+    let mut kept: Vec<&'a str> = Vec::with_capacity(names.len());
+    let mut seen: HashSet<String> = HashSet::with_capacity(names.len());
+    for name in names {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(OctError::InvalidInput {
+                field: "author",
+                value: (*name).to_string(),
+                expected: "a non-empty author name, or no entry at all".to_string(),
+            });
+        }
+        if seen.insert(author_key(trimmed)) {
+            kept.push(trimmed);
+        }
+    }
+    Ok(kept)
 }
 
 /// A SQLite connection to `oct`'s database.
@@ -535,7 +683,7 @@ pub fn covering_folder<'a>(folders: &'a [WatchedFolder], path: &Path) -> Option<
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 8;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 9;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -653,9 +801,11 @@ impl Store {
     /// retrying is deliberately deferred — `oct` currently opens one store per process, so the race
     /// requires a second process writing the same database, which no code does yet.
     ///
-    /// Only the columns the scanner can supply are written; the reader's title and the reader's author
-    /// are deliberately not among them, because they are separate facts with their own write path
-    /// ([`Store::set_user_naming`]).
+    /// Only the columns the scanner can supply are written; the reader's title and the reader's
+    /// authors are deliberately not among them, because they are separate facts with their own write
+    /// path ([`Store::set_user_naming`]). `documents.author` in particular is the file's own embedded
+    /// string and is written from the scanner's metadata only — never from anything a reader typed,
+    /// and never split into names.
     /// The scanner fills metadata such as `size`, `mtime` and `discovered_via` when it exists.
     pub fn upsert_document(&self, document: &Document) -> Result<i64, OctError> {
         let path = path_to_string(&document.path)?;
@@ -740,28 +890,35 @@ impl Store {
         }
     }
 
-    /// Saves the reader's naming of the document with `id`: its title, and its author when this action
-    /// decided one (R31, R37).
+    /// Saves the reader's naming of the document with `id`: its title, and its authors when this action
+    /// decided them (R31, R37, R42/S5).
     ///
     /// **It is one write, because the action that decides both facts is one action.** The editor's Save
-    /// stores the title and the author together, and an action that decides two facts must apply both
+    /// stores the title and the authors together, and an action that decides two facts must apply both
     /// or neither: writing them as two independent updates left a window where the title had landed,
     /// the author had not, and the interface reported an error that implied nothing was saved. A
-    /// half-applied save is not a save, so both statements run inside one transaction and a failure
-    /// anywhere rolls the whole thing back.
+    /// half-applied save is not a save, so every statement below runs inside one transaction and a
+    /// failure anywhere rolls the whole thing back — including the `document_authors` rows a refused
+    /// write had already deleted and re-inserted (the one-write test pins exactly that).
     ///
     /// `title` follows [`normalize_user_title`]'s rule — `None` restores the document's own title, a
     /// blank `Some` is refused — and it is validated **before** the transaction opens, so a refused
     /// title never reaches the database. `author` is an [`AuthorEdit`], not a plain value: Save decides
-    /// the author, while Restore decides the title and nothing else, and `AuthorEdit::Untouched` is how
-    /// this write is told to leave the reader's author alone instead of that decision being inferred
-    /// from a missing statement.
+    /// the authors, while Restore decides the title and nothing else, and `AuthorEdit::Untouched` is how
+    /// this write is told to leave the reader's list alone instead of that decision being inferred from
+    /// a missing statement. `AuthorEdit::DecidedList(&[])` is the reader saying *no author of my own*,
+    /// which is a decision and not a silence, so it clears the list rather than keeping it.
     ///
-    /// Nothing here touches the document's own title or author. Both reader's facts are separate from
-    /// the file's, and [`Store::upsert_document`] never writes them, so a rescan cannot rename a
-    /// document a person named.
+    /// The list is normalised once ([`normalize_user_authors`]) and then written as the reader's order:
+    /// `position` is the index in that list, and each name is upserted into `authors` **once**, so two
+    /// documents by the same person share one row and typing the same name twice in one save yields
+    /// one entry. A name the library already knows keeps the spelling it already had (R42/S2).
     ///
-    /// **What this cannot express**: an action that changed the author and said nothing about the
+    /// Nothing here touches the document's own title or `documents.author`. Both reader's facts are
+    /// separate from the file's, and [`Store::upsert_document`] never writes them, so a rescan cannot
+    /// rename a document a person named.
+    ///
+    /// **What this cannot express**: an action that changed the authors and said nothing about the
     /// title. Nothing in the application has one — Save decides both and Restore decides the title —
     /// and a title the caller wants to keep is simply passed as it is, which is also what makes the
     /// pair atomic.
@@ -772,14 +929,21 @@ impl Store {
         author: AuthorEdit<'_>,
     ) -> Result<(), OctError> {
         let title = normalize_user_title(title)?;
-        let author = match author {
-            AuthorEdit::Decided(author) => Some(normalize_user_author(author)),
+        // `None` is "this action said nothing about the authors"; `Some(list)` is a decision, and an
+        // empty list inside it is the legitimate *no author of my own*.
+        let authors: Option<Vec<&str>> = match author {
             AuthorEdit::Untouched => None,
+            AuthorEdit::Decided(single) => Some(
+                normalize_user_author(single)
+                    .into_iter()
+                    .collect::<Vec<&str>>(),
+            ),
+            AuthorEdit::DecidedList(list) => Some(normalize_user_authors(list)?),
         };
 
-        // One transaction around both statements, which is the whole point: the second write failing
-        // drops the transaction uncommitted, and the first write goes with it. Everything below is
-        // on the transaction handle rather than on the connection, so no statement can escape it.
+        // One transaction around every statement, which is the whole point: a later write failing drops
+        // the transaction uncommitted, and the title goes with it. Everything below is on the
+        // transaction handle rather than on the connection, so no statement can escape it.
         let transaction = self
             .connection
             .unchecked_transaction()
@@ -797,13 +961,25 @@ impl Store {
             )));
         }
 
-        if let Some(author) = author {
+        if let Some(authors) = authors {
+            // The list is replaced, not merged: the reader's list is what they said it is, and a name
+            // they removed must not survive as an orphan row nobody reads.
             transaction
                 .execute(
-                    "UPDATE documents SET user_author = ?1 WHERE id = ?2",
-                    params![author, id],
+                    "DELETE FROM document_authors WHERE doc_id = ?1",
+                    params![id],
                 )
                 .map_err(storage_error)?;
+            for (position, name) in authors.iter().enumerate() {
+                let author_id = upsert_author(&transaction, name)?;
+                transaction
+                    .execute(
+                        "INSERT INTO document_authors (doc_id, author_id, position) \
+                         VALUES (?1, ?2, ?3)",
+                        params![id, author_id, position as i64],
+                    )
+                    .map_err(storage_error)?;
+            }
         }
 
         transaction.commit().map_err(storage_error)?;
@@ -896,7 +1072,7 @@ impl Store {
         let row = self
             .connection
             .query_row(
-                "SELECT id, path, file_id_kind, volume_id, file_index, content_hash, pages, title, author, user_title, user_author, cover_page, cover_image \
+                "SELECT id, path, file_id_kind, volume_id, file_index, content_hash, pages, title, author, user_title, cover_page, cover_image \
                  FROM documents \
                  WHERE file_id_kind = ?1 AND volume_id IS ?2 AND file_index IS ?3 AND content_hash IS ?4 \
                  LIMIT 1",
@@ -913,9 +1089,8 @@ impl Store {
                         row.get::<_, Option<String>>(7)?,
                         row.get::<_, Option<String>>(8)?,
                         row.get::<_, Option<String>>(9)?,
-                        row.get::<_, Option<String>>(10)?,
-                        row.get::<_, Option<i64>>(11)?,
-                        row.get::<_, Option<String>>(12)?,
+                        row.get::<_, Option<i64>>(10)?,
+                        row.get::<_, Option<String>>(11)?,
                     ))
                 },
             )
@@ -933,7 +1108,6 @@ impl Store {
             title,
             author,
             user_title,
-            user_author,
             cover_page,
             cover_image,
         )) = row
@@ -965,11 +1139,47 @@ impl Store {
                 title,
                 author,
                 user_title,
-                user_author,
+                authors: self.reader_authors()?.remove(&id).unwrap_or_default(),
                 cover_page,
                 cover_image,
             },
         }))
+    }
+
+    /// The reader's ordered author list for **every** document that has one, keyed by
+    /// `documents.id` (R42/S1, R42/S3).
+    ///
+    /// One query and one code path, used by the listing and by both single-document lookups, for the
+    /// same reason [`decode_document`] is shared: a document fetched by id and the same document
+    /// fetched in the listing must not be able to disagree about who wrote it. Reading the whole table
+    /// for a single-document lookup is the price of that, and it is small — one row per (document,
+    /// author) pair in a personal library.
+    ///
+    /// A document with no reader's authors is simply absent from the map, and its caller uses the empty
+    /// list: *no author of my own*, never an invented one. The order is `position`, which is the
+    /// reader's order; `a.id` breaks a tie no write of ours can create, so two reads of the same
+    /// database cannot come back in different orders.
+    fn reader_authors(&self) -> Result<HashMap<i64, Vec<String>>, OctError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT da.doc_id, a.name FROM document_authors da \
+                 JOIN authors a ON a.id = da.author_id \
+                 ORDER BY da.doc_id ASC, da.position ASC, a.id ASC",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(storage_error)?;
+
+        let mut by_document: HashMap<i64, Vec<String>> = HashMap::new();
+        for row in rows {
+            let (doc_id, name) = row.map_err(storage_error)?;
+            by_document.entry(doc_id).or_default().push(name);
+        }
+        Ok(by_document)
     }
 
     /// Records a reading position with its provenance and returns the new row id.
@@ -1208,12 +1418,18 @@ impl Store {
     /// several progress rows is listed once, with the latest. Filtering and sorting are
     /// deliberately absent: the first screen needs the whole library in a stable order and
     /// nothing narrower.
+    ///
+    /// Every entry carries the reader's ordered authors **and** the displayed ones
+    /// ([`oct_core::Document::display_authors`], R42/S4). The precedence is not decided here: this
+    /// listing and [`Store::document_by_id`] both hand the same decoded [`Document`] to the one rule
+    /// that lives in the core, so the card, the author filter and the free-text search cannot disagree
+    /// about who wrote a document.
     pub fn library(&self) -> Result<Vec<LibraryEntry>, OctError> {
         let mut statement = self
             .connection
             .prepare(
                 "SELECT d.id, d.path, d.file_id_kind, d.volume_id, d.file_index, d.content_hash, \
-                        d.pages, d.title, d.author, d.user_title, d.user_author, d.cover_page, d.cover_image, \
+                        d.pages, d.title, d.author, d.user_title, d.cover_page, d.cover_image, \
                         p.page, p.total, p.source, p.confidence, p.read_at, p.updated_at \
                  FROM documents d \
                  LEFT JOIN progress p ON p.id = (\
@@ -1234,20 +1450,19 @@ impl Store {
                 let title: Option<String> = row.get(7)?;
                 let author: Option<String> = row.get(8)?;
                 let user_title: Option<String> = row.get(9)?;
-                let user_author: Option<String> = row.get(10)?;
-                let cover_page: Option<i64> = row.get(11)?;
-                let cover_image: Option<String> = row.get(12)?;
+                let cover_page: Option<i64> = row.get(10)?;
+                let cover_image: Option<String> = row.get(11)?;
                 // The LEFT JOIN leaves every `progress` column NULL for a document with none, so
                 // `p.page` is the presence check: it is NOT NULL whenever the row exists.
                 let progress: Option<LatestProgressColumns> =
-                    match row.get::<_, Option<i64>>(13)? {
+                    match row.get::<_, Option<i64>>(12)? {
                         Some(page) => Some((
                             page,
+                            row.get(13)?,
                             row.get(14)?,
                             row.get(15)?,
                             row.get(16)?,
                             row.get(17)?,
-                            row.get(18)?,
                         )),
                         None => None,
                     };
@@ -1262,13 +1477,16 @@ impl Store {
                     title,
                     author,
                     user_title,
-                    user_author,
                     cover_page,
                     cover_image,
                     progress,
                 ))
             })
             .map_err(storage_error)?;
+
+        // One read for every document's list, shared with `document_by_id` and
+        // `find_document_by_identity` so all three cannot disagree about who wrote a document.
+        let mut reader_authors = self.reader_authors()?;
 
         let mut entries = Vec::new();
         for row in rows {
@@ -1283,7 +1501,6 @@ impl Store {
                 title,
                 author,
                 user_title,
-                user_author,
                 cover_page,
                 cover_image,
                 progress,
@@ -1326,7 +1543,7 @@ impl Store {
                         title,
                         author,
                         user_title,
-                        user_author,
+                        reader_authors.remove(&id).unwrap_or_default(),
                         cover_page,
                         cover_image,
                     )?,
@@ -1349,7 +1566,7 @@ impl Store {
             .connection
             .prepare(
                 "SELECT id, path, file_id_kind, volume_id, file_index, content_hash, \
-                        pages, title, author, user_title, user_author, cover_page, cover_image \
+                        pages, title, author, user_title, cover_page, cover_image \
                  FROM documents WHERE id = ?1",
             )
             .map_err(storage_error)?;
@@ -1367,9 +1584,8 @@ impl Store {
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
                     row.get::<_, Option<String>>(9)?,
-                    row.get::<_, Option<String>>(10)?,
-                    row.get::<_, Option<i64>>(11)?,
-                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
                 ))
             })
             .map_err(storage_error)?;
@@ -1388,7 +1604,6 @@ impl Store {
             title,
             author,
             user_title,
-            user_author,
             cover_page,
             cover_image,
         ) = row.map_err(storage_error)?;
@@ -1403,7 +1618,7 @@ impl Store {
             title,
             author,
             user_title,
-            user_author,
+            self.reader_authors()?.remove(&id).unwrap_or_default(),
             cover_page,
             cover_image,
         )?;
@@ -1779,9 +1994,91 @@ fn migrate(connection: &mut Connection) -> Result<(), OctError> {
             .pragma_update(None, "user_version", 8i64)
             .map_err(storage_error)?;
         transaction.commit().map_err(storage_error)?;
+        version = 8;
+    }
+
+    if version < 9 {
+        // The three parts of this step are deliberately ONE transaction: the two tables, the backfill
+        // that moves the reader's existing author into them, and the retirement of the column it came
+        // from. A failure anywhere — including in the `DROP COLUMN` at the end, after the tables exist
+        // and the rows are written — leaves the version at 8 with every row where it was, so the next
+        // open retries the whole step instead of finding half a schema (the V9 atomicity test pins it).
+        let transaction = connection.transaction().map_err(storage_error)?;
+        transaction.execute_batch(SCHEMA_V9).map_err(storage_error)?;
+        backfill_reader_authors(&transaction)?;
+        transaction
+            .execute_batch(SCHEMA_V9_RETIRE_USER_AUTHOR)
+            .map_err(storage_error)?;
+        transaction
+            .pragma_update(None, "user_version", 9i64)
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
     }
 
     Ok(())
+}
+
+/// Moves every non-blank `documents.user_author` into a one-entry `document_authors` row (R42/S1).
+///
+/// This is the migration's promise that **no reader's author is lost**: the value the V7 column held
+/// becomes the reader's list, at `position = 0`, before [`SCHEMA_V9_RETIRE_USER_AUTHOR`] drops the
+/// column it came from. A blank or absent value becomes no row at all, because it never was an author
+/// — `NULL` meant "the reader has not set one", and a blank string was already normalised to "not
+/// set" on the way in.
+///
+/// It runs in Rust rather than as `INSERT ... SELECT` because the `name_key` that makes "one row per
+/// person" a database invariant is [`author_key`] — trimmed, Unicode-lowercased — and SQLite's own
+/// `lower()` folds ASCII only. Two documents written by the same person in different cases therefore
+/// share one `authors` row after the migration, exactly as they would after a save.
+fn backfill_reader_authors(transaction: &rusqlite::Transaction<'_>) -> Result<(), OctError> {
+    let mut statement = transaction
+        .prepare("SELECT id, user_author FROM documents WHERE user_author IS NOT NULL ORDER BY id")
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(storage_error)?;
+
+    let mut moved: Vec<(i64, String)> = Vec::new();
+    for row in rows {
+        let (doc_id, author) = row.map_err(storage_error)?;
+        if let Some(name) = normalize_user_author(Some(&author)) {
+            moved.push((doc_id, name.to_string()));
+        }
+    }
+    // The statement borrows the transaction, so it is dropped before anything is written.
+    drop(statement);
+
+    for (doc_id, name) in moved {
+        let author_id = upsert_author(transaction, &name)?;
+        transaction
+            .execute(
+                "INSERT INTO document_authors (doc_id, author_id, position) VALUES (?1, ?2, 0)",
+                params![doc_id, author_id],
+            )
+            .map_err(storage_error)?;
+    }
+    Ok(())
+}
+
+/// The `authors.id` of `name`, inserting the person the first time the library meets them (R42/S2).
+///
+/// **The spelling that arrives first wins.** The statement is an upsert whose update branch assigns the
+/// existing name to itself: it writes nothing, and exists only so that one statement returns the row id
+/// whether the person was already known or is being inserted now. That is also why it cannot be a
+/// read-then-insert — a second writer racing this one would fork the person into two rows, and the
+/// database's `UNIQUE(name_key)` is what stops it.
+fn upsert_author(connection: &Connection, name: &str) -> Result<i64, OctError> {
+    connection
+        .query_row(
+            "INSERT INTO authors (name, name_key) VALUES (?1, ?2) \
+             ON CONFLICT(name_key) DO UPDATE SET name = authors.name \
+             RETURNING id",
+            params![name, author_key(name)],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage_error)
 }
 
 fn read_schema_version(connection: &Connection) -> Result<u32, OctError> {
@@ -1849,6 +2146,8 @@ fn decode_identity(
 ///
 /// Shared by the listing and the single-document lookup, so a document fetched by id and the same
 /// document fetched in the listing are decoded by the same code and cannot disagree about a field.
+/// `authors` is the reader's ordered list, read by [`Store::reader_authors`] rather than by a join
+/// here, because a joined list would have to be re-grouped at every call site.
 #[allow(clippy::too_many_arguments)]
 fn decode_document(
     path: String,
@@ -1860,7 +2159,7 @@ fn decode_document(
     title: Option<String>,
     author: Option<String>,
     user_title: Option<String>,
-    user_author: Option<String>,
+    authors: Vec<String>,
     cover_page: Option<i64>,
     cover_image: Option<String>,
 ) -> Result<Document, OctError> {
@@ -1884,7 +2183,7 @@ fn decode_document(
         title,
         author,
         user_title,
-        user_author,
+        authors,
         cover_page,
         cover_image,
     })

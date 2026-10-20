@@ -75,11 +75,36 @@ pub struct LibraryEntryView {
     pub title: String,
     /// The reader's own title, or `null` when they have not set one (`userTitle` over IPC).
     pub user_title: Option<String>,
-    /// The author to show, resolved by the core: the reader's when set, otherwise the document's own
-    /// (`author` over IPC). `null` when neither the document nor the reader has an author.
+    /// The authors to show, resolved by the core (R42/S4): the reader's ordered list when it has any
+    /// entry, otherwise the document's embedded author as a single entry, otherwise empty (`authors`
+    /// over IPC).
+    ///
+    /// The precedence is **not** decided here: [`Document::display_authors`] is the one place it
+    /// lives, so the card, the filter and the search cannot disagree about who wrote a document. The
+    /// embedded string is never split on commas, semicolons or "and" (R42/S6) — an author the file's
+    /// metadata happened to hold is one entry, and a reader who wants a real list writes one.
+    ///
+    /// This replaces the single `author` field the card used to read: it is the same value, whole.
+    pub authors: Vec<String>,
+    /// **Temporary**: the single author the card reads until the web app moves to [`Self::authors`].
+    ///
+    /// It exists so this commit can land without breaking the interface that is still reading it — the
+    /// list is the fact and this is a projection of its first entry. It is removed in the commit that
+    /// moves the web app to the list, and nothing may start reading it in the meantime. It is
+    /// serialized as an explicit `null` when absent, exactly as the field it stands in for always was:
+    /// omitting the key would be an output change a reader of the old shape could not distinguish from
+    /// "the property was never there".
     pub author: Option<String>,
-    /// The reader's own author, or `null` when they have not set one (`userAuthor` over IPC).
+    /// **Temporary**: the reader's single author, for the same reason, and `null` for the same reason.
     pub user_author: Option<String>,
+    /// The reader's own authors, in their order, or empty when they have set none
+    /// (`readerAuthors` over IPC).
+    ///
+    /// A separate fact from [`Self::authors`], exactly as `user_title` is separate from `title`: it
+    /// is what tells the editor whether the names on screen are the reader's, and what the editor's
+    /// suggestion list draws on beside the displayed ones. It is read from the same rows in the same
+    /// order, so it cannot disagree with what `authors` resolved.
+    pub reader_authors: Vec<String>,
     pub pages: Option<u32>,
     pub progress: Option<ProgressView>,
     /// The page the reader chose for the cover, zero-based, or `null` for the first page (R32).
@@ -101,8 +126,11 @@ impl From<LibraryEntry> for LibraryEntryView {
             path: display_path(&document.document.path),
             title: document.document.display_title(),
             user_title: document.document.user_title.clone(),
+            authors: document.document.display_authors(),
+            // The temporary single-author projection, from the same list so the two cannot disagree.
             author: document.document.display_author(),
-            user_author: document.document.user_author.clone(),
+            user_author: document.document.authors.first().cloned(),
+            reader_authors: document.document.authors.clone(),
             pages: document.document.pages,
             cover_page: document.document.cover_page,
             cover_image: document.document.cover_image.clone(),
@@ -300,20 +328,34 @@ pub fn library_entries(store: &Store) -> Result<Vec<LibraryEntryView>, OctError>
 /// the field and the words — is decided in [`Store::set_user_naming`], so this command and any future
 /// caller cannot disagree about what a blank title means.
 ///
-/// `author` is an [`AuthorEdit`], not a plain value, because the editor's two controls decide different
-/// things. Save decides the author — a value, or `Decided(None)` for *no author of my own*, which falls
-/// back to the document's own author and is a legitimate action rather than an error. Restore decides
-/// the title and nothing else, and says so with `Untouched`; that is how "leave the reader's author
-/// exactly as it was" survives into the one write instead of being a missing second call.
+/// `authors` is the reader's ordered **list** (R42/S5), and the shape carries the same distinction the
+/// store keeps: `None` means this action said nothing about the authors — Restore decides the title and
+/// nothing else — while `Some(vec![])` is *no author of my own*, a decision that clears the reader's
+/// list so the document's own author shows again. `Some(vec![..])` is the reader's list, trimmed,
+/// blank-free and deduplicated in the order given by the store, in one write with the title. The
+/// one-author spelling ([`AuthorEdit::Decided`]) stays available in the store, but the IPC shape this
+/// build speaks is a list, because the interface must be able to send several names.
 ///
 /// Nothing here touches the document's own title or author: both reader's facts are separate, and a
-/// document can always be restored to what the file itself carries.
+/// document can always be restored to what the file itself carries. `documents.author` is never split
+/// on commas, semicolons or "and" (R42/S6): a reader who wants a real list types one.
 pub fn set_document_naming(
     store: &Store,
     id: i64,
     title: Option<&str>,
-    author: AuthorEdit<'_>,
+    authors: Option<Vec<String>>,
 ) -> Result<(), OctError> {
+    // The store speaks in `AuthorEdit`, whose two spellings are "a decision" and "a silence". The
+    // `Option` here is exactly that distinction, so the conversion is a match and nothing else — the
+    // decisions about trimming, blanks and duplicates stay in the store, where every caller gets them.
+    let borrowed: Vec<&str> = authors
+        .as_ref()
+        .map(|list| list.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let author = match &authors {
+        Some(_) => AuthorEdit::DecidedList(&borrowed),
+        None => AuthorEdit::Untouched,
+    };
     store.set_user_naming(id, title, author)
 }
 
@@ -1295,13 +1337,7 @@ mod tests {
         assert_eq!(entries[0].title, "The document's own title");
         assert_eq!(entries[0].user_title, None);
 
-        set_document_naming(
-            &store,
-            id,
-            Some("What the reader called it"),
-            AuthorEdit::Untouched,
-        )
-        .expect("name it");
+        set_document_naming(&store, id, Some("What the reader called it"), None).expect("name it");
 
         let entries = library_entries(&store).expect("list again");
         // `title` is the displayed value, and `userTitle` marks it as the reader's.
@@ -1312,36 +1348,71 @@ mod tests {
         );
     }
 
-    // --- the reader's author travels beside the document's own -----------------------------------
+    // --- the reader's authors travel beside the document's own -----------------------------------
 
     #[test]
-    fn the_library_view_displays_the_readers_author_and_marks_it_as_theirs() {
+    fn the_library_view_displays_the_readers_authors_and_marks_them_as_theirs() {
         let store = in_memory_store();
         let mut doc = document("/library/authored.pdf", 5, 9);
         doc.author = Some("The document's own author".to_string());
         let id = store.upsert_document(&doc).expect("insert");
 
-        // Before anyone names it, the view shows the document's own author and no reader's author.
+        // Before anyone names it, the displayed list is the document's own author as a single entry,
+        // and the reader has none of their own.
         let entries = library_entries(&store).expect("list");
-        assert_eq!(entries[0].author.as_deref(), Some("The document's own author"));
-        assert_eq!(entries[0].user_author, None);
+        assert_eq!(entries[0].authors, vec!["The document's own author"]);
+        assert!(entries[0].reader_authors.is_empty());
 
         set_document_naming(
             &store,
             id,
             None,
-            AuthorEdit::Decided(Some("What the reader called them")),
+            Some(vec!["What the reader called them".to_string()]),
         )
         .expect("name it");
 
         let entries = library_entries(&store).expect("list again");
-        // `author` is the displayed value, and `userAuthor` marks it as the reader's.
-        assert_eq!(entries[0].author.as_deref(), Some("What the reader called them"));
-        assert_eq!(entries[0].user_author.as_deref(), Some("What the reader called them"));
+        // `authors` is the displayed list, and `readerAuthors` marks it as the reader's.
+        assert_eq!(entries[0].authors, vec!["What the reader called them"]);
+        assert_eq!(entries[0].reader_authors, vec!["What the reader called them"]);
     }
 
     #[test]
-    fn clearing_the_readers_author_restores_the_documents_own() {
+    fn the_view_carries_both_the_displayed_and_the_readers_own_list() {
+        // R42/S4 and S7 reaching the interface: the view carries the whole displayed list — resolved
+        // by the core, in the reader's order — and the reader's own list beside it, so the card can
+        // state several authors and the filter can offer them. Neither field is a first-element
+        // narrowing any more: the narrowing was what the packed single author used to be.
+        let store = in_memory_store();
+        let mut doc = document("/library/coauthored.pdf", 5, 14);
+        doc.author = Some("The document's own author".to_string());
+        let id = store.upsert_document(&doc).expect("insert");
+
+        set_document_naming(
+            &store,
+            id,
+            None,
+            Some(vec!["Carl Sagan".to_string(), "Ann Druyan".to_string()]),
+        )
+        .expect("save the reader's authors");
+
+        let entries = library_entries(&store).expect("list");
+        assert_eq!(
+            entries[0].authors,
+            vec!["Carl Sagan", "Ann Druyan"],
+            "the document's own author is not displayed while the reader has a list of their own"
+        );
+        assert_eq!(entries[0].reader_authors, vec!["Carl Sagan", "Ann Druyan"]);
+
+        // The whole list is what the store kept, in the reader's order, and the view is that list
+        // rather than a copy with an opinion of its own.
+        let stored = store.document_by_id(id).expect("read").expect("present");
+        assert_eq!(stored.document.authors, entries[0].reader_authors);
+        assert_eq!(stored.document.display_authors(), entries[0].authors);
+    }
+
+    #[test]
+    fn clearing_the_readers_authors_restores_the_documents_own() {
         let store = in_memory_store();
         let mut doc = document("/library/authored.pdf", 5, 10);
         doc.author = Some("The document's own author".to_string());
@@ -1351,16 +1422,17 @@ mod tests {
             &store,
             id,
             None,
-            AuthorEdit::Decided(Some("The reader's author")),
+            Some(vec!["The reader's author".to_string()]),
         )
         .expect("name it");
-        // An empty author — `None` here, a blank field in the interface — is the legitimate "no author
-        // of my own" action, not an error, and restores the document's own author.
-        set_document_naming(&store, id, None, AuthorEdit::Decided(None))
-            .expect("clear the reader's author");
+        // An empty list — `[]` here, a blank field in the interface — is the legitimate "no author of
+        // my own" action, not an error, and restores the document's own author. An absent value is a
+        // different thing: it says nothing about the authors at all.
+        set_document_naming(&store, id, None, Some(Vec::new()))
+            .expect("clear the reader's authors");
         let entries = library_entries(&store).expect("list again");
-        assert_eq!(entries[0].author.as_deref(), Some("The document's own author"));
-        assert_eq!(entries[0].user_author, None);
+        assert_eq!(entries[0].authors, vec!["The document's own author"]);
+        assert!(entries[0].reader_authors.is_empty());
     }
 
     #[test]
@@ -1385,22 +1457,15 @@ mod tests {
         doc.title = Some("The document's own title".to_string());
         let id = store.upsert_document(&doc).expect("insert");
 
-        set_document_naming(
-            &store,
-            id,
-            Some("The reader's title"),
-            AuthorEdit::Untouched,
-        )
-        .expect("name it");
+        set_document_naming(&store, id, Some("The reader's title"), None).expect("name it");
         assert_eq!(
             library_entries(&store).expect("list")[0].title,
             "The reader's title"
         );
 
         // `None` is the legitimate "restore" action, not an error, and it says nothing about the
-        // reader's author.
-        set_document_naming(&store, id, None, AuthorEdit::Untouched)
-            .expect("restore the document's own title");
+        // reader's authors.
+        set_document_naming(&store, id, None, None).expect("restore the document's own title");
         let entries = library_entries(&store).expect("list again");
         assert_eq!(entries[0].title, "The document's own title");
         assert_eq!(entries[0].user_title, None);
@@ -1422,24 +1487,24 @@ mod tests {
             &store,
             id,
             Some("What the reader called it"),
-            AuthorEdit::Decided(Some("What the reader called them")),
+            Some(vec!["What the reader called them".to_string()]),
         )
-        .expect("save the title and the author in one command");
+        .expect("save the title and the authors in one command");
 
         let saved = library_entries(&store).expect("list");
         assert_eq!(saved[0].title, "What the reader called it");
-        assert_eq!(saved[0].author.as_deref(), Some("What the reader called them"));
+        assert_eq!(saved[0].authors, vec!["What the reader called them"]);
 
-        set_document_naming(&store, id, None, AuthorEdit::Untouched)
+        set_document_naming(&store, id, None, None)
             .expect("restore the document's own title");
 
         let restored = library_entries(&store).expect("list again");
         assert_eq!(restored[0].title, "The document's own title");
         assert_eq!(restored[0].user_title, None);
         assert_eq!(
-            restored[0].user_author.as_deref(),
-            Some("What the reader called them"),
-            "restoring the title must leave the reader's author exactly as it was"
+            restored[0].reader_authors,
+            vec!["What the reader called them"],
+            "restoring the title must leave the reader's authors exactly as they were"
         );
     }
 
@@ -1454,9 +1519,9 @@ mod tests {
             &store,
             id,
             Some("   "),
-            // The author is decided by the same call, and must not land while the title is refused:
+            // The authors are decided by the same call, and must not land while the title is refused:
             // the refusal happens before the write opens, so there is nothing to roll back.
-            AuthorEdit::Decided(Some("An author that must not be written")),
+            Some(vec!["An author that must not be written".to_string()]),
         ) {
             Err(OctError::InvalidInput {
                 field,
@@ -1474,7 +1539,7 @@ mod tests {
         let entries = library_entries(&store).expect("list");
         assert_eq!(entries[0].title, "The document's own title");
         assert_eq!(entries[0].user_title, None);
-        assert_eq!(entries[0].user_author, None);
+        assert!(entries[0].reader_authors.is_empty());
     }
 
     #[test]

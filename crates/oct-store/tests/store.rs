@@ -43,6 +43,8 @@ fn schema_contains_exactly_the_documented_tables() {
     assert_eq!(
         tables,
         vec![
+            "authors",
+            "document_authors",
             "documents",
             "folders",
             "open_events",
@@ -661,6 +663,8 @@ fn a_step_that_fails_on_the_way_to_v4_leaves_the_database_at_v3_untouched() {
     assert_eq!(
         tables,
         vec![
+            "authors",
+            "document_authors",
             "documents",
             "folders",
             "open_events",
@@ -820,7 +824,6 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
         "last_opened_at",
         "status",
         "user_title",
-        "user_author",
         "cover_page",
         "cover_image",
     ] {
@@ -831,8 +834,8 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
     }
     assert_eq!(
         columns.len(),
-        23,
-        "the documents table must keep its twenty-three columns, found {columns:?}"
+        22,
+        "the documents table must keep its twenty-two columns, found {columns:?}"
     );
 
     let tables: Vec<String> = raw
@@ -848,6 +851,8 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
     assert_eq!(
         tables,
         vec![
+            "authors",
+            "document_authors",
             "documents",
             "folders",
             "open_events",
@@ -1010,8 +1015,8 @@ fn a_step_that_fails_on_the_way_to_v6_leaves_the_database_at_v5_untouched() {
     );
     assert_eq!(
         columns.len(),
-        23,
-        "the documents table must keep its twenty-three columns, found {columns:?}"
+        22,
+        "the documents table must keep its twenty-two columns, found {columns:?}"
     );
 
     let tables: Vec<String> = raw
@@ -1027,6 +1032,8 @@ fn a_step_that_fails_on_the_way_to_v6_leaves_the_database_at_v5_untouched() {
     assert_eq!(
         tables,
         vec![
+            "authors",
+            "document_authors",
             "documents",
             "folders",
             "open_events",
@@ -1054,12 +1061,13 @@ fn a_step_that_fails_on_the_way_to_v6_leaves_the_database_at_v5_untouched() {
 #[test]
 fn a_step_that_fails_on_the_way_to_v7_leaves_the_database_at_v6_untouched() {
     // The same shape as the V4, V5 and V6 atomicity tests, one version later. A database is built with
-    // the store's own current schema — so `documents` already has `user_author` — and then only its
-    // version stamp is rewound to 6. Reopening it runs the V7 step, `ALTER TABLE documents ADD COLUMN
-    // user_author TEXT`, against a table that already has that column, which SQLite refuses with
-    // "duplicate column name". A step stamped before its work would leave the database claiming version
-    // 7 with work that did not happen; the transaction must leave the version at 6 and every row
-    // untouched.
+    // the store's own current schema, its version stamp is rewound to 6, and `documents.user_author` is
+    // put back **by hand** — V9 retires that column, so it is no longer part of a current schema, and
+    // the V6 shape this test needs has to be rebuilt rather than inherited. With the column present,
+    // reopening runs the V7 step, `ALTER TABLE documents ADD COLUMN user_author TEXT`, against a table
+    // that already has it, which SQLite refuses with "duplicate column name". A step stamped before its
+    // work would leave the database claiming version 7 with work that did not happen; the transaction
+    // must leave the version at 6 and every row untouched.
     let (_dir, path) = temp_db();
 
     let document_id;
@@ -1101,6 +1109,10 @@ fn a_step_that_fails_on_the_way_to_v7_leaves_the_database_at_v6_untouched() {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
         raw.pragma_update(None, "user_version", 6i64)
             .expect("rewind the version stamp to the pre-V7 database shape");
+        raw.execute_batch(
+            "ALTER TABLE documents ADD COLUMN user_author TEXT;\n             UPDATE documents SET user_author = 'The reader''s author';",
+        )
+        .expect("rebuild the V6 documents table, which already has the reader's author column");
     }
 
     // 1. The failing step reaches the caller rather than being swallowed or papered over.
@@ -1210,6 +1222,8 @@ fn a_step_that_fails_on_the_way_to_v7_leaves_the_database_at_v6_untouched() {
     assert_eq!(
         tables,
         vec![
+            "authors",
+            "document_authors",
             "documents",
             "folders",
             "open_events",
@@ -1231,6 +1245,328 @@ fn a_step_that_fails_on_the_way_to_v7_leaves_the_database_at_v6_untouched() {
         (document_count, progress_count),
         (1, 1),
         "no row may be lost or duplicated by a failed migration"
+    );
+}
+
+// --- R42/S1: the V9 migration, and what it must never lose ---------------------------------------
+
+#[test]
+fn a_v8_database_keeps_every_readers_author_when_the_migration_gives_it_a_list() {
+    // R42/S1: the migration preserves every existing reader's author. "A database written by the
+    // previous code path" cannot be produced by this build any more — V9 retires the column V7 wrote —
+    // so it is reconstructed exactly: the store's own current schema, its version stamp rewound to 8,
+    // and `documents.user_author` put back with the values the old editor used to save. That column is
+    // the previous code path's only trace, and putting it back is the only way to prove the backfill
+    // reads the real thing rather than an imitation of it.
+    let (_dir, path) = temp_db();
+
+    let named;
+    let lowercase;
+    let blank;
+    let absent;
+    {
+        let store = Store::open(&path).expect("build a current database");
+
+        let mut cosmos = document("/library/cosmos.pdf", FileId::Posix { dev: 9, ino: 1 });
+        cosmos.author = Some("Sagan, Carl; Druyan, Ann".to_string());
+        named = store.upsert_document(&cosmos).expect("insert the named document");
+        store
+            .set_user_naming(named, Some("Cosmos"), AuthorEdit::Untouched)
+            .expect("the reader's title, which must survive too");
+
+        let mut lowercase_doc = document("/library/contact.pdf", FileId::Posix { dev: 9, ino: 2 });
+        lowercase_doc.author = Some("The document's own author".to_string());
+        lowercase = store
+            .upsert_document(&lowercase_doc)
+            .expect("insert a second document by the same person");
+
+        let mut blanked = document("/library/blanked.pdf", FileId::Posix { dev: 9, ino: 3 });
+        blanked.author = Some("The document's own author".to_string());
+        blank = store
+            .upsert_document(&blanked)
+            .expect("insert the document whose old author value was blank");
+
+        absent = store
+            .upsert_document(&document(
+                "/library/absent.pdf",
+                FileId::Posix { dev: 9, ino: 4 },
+            ))
+            .expect("insert the document whose old author value was NULL");
+    }
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.pragma_update(None, "user_version", 8i64)
+            .expect("rewind the version stamp to the V8 shape");
+        raw.execute_batch(
+            "DROP TABLE document_authors;
+             DROP TABLE authors;
+             ALTER TABLE documents ADD COLUMN user_author TEXT;",
+        )
+        .expect("rebuild the column V7 wrote, which V9 retires, and remove the tables V9 creates");
+        // Two spellings of ONE person, a blank that was never an author, and a row that never had one.
+        for (id, value) in [
+            (named, "Carl Sagan"),
+            (lowercase, "carl sagan"),
+            (blank, "   "),
+        ] {
+            raw.execute(
+                "UPDATE documents SET user_author = ?1 WHERE id = ?2",
+                rusqlite::params![value, id],
+            )
+            .expect("write the reader's author the old build stored");
+        }
+    }
+
+    let store = Store::open(&path).expect("a V8 database migrates");
+    assert_eq!(
+        store.schema_version().expect("version"),
+        Store::CURRENT_SCHEMA_VERSION
+    );
+
+    // The reader's author survives, as a one-entry list at the start of the order, and the rest of the
+    // naming survives with it.
+    let found = store.document_by_id(named).expect("read").expect("present");
+    assert_eq!(found.document.authors, vec!["Carl Sagan"]);
+    assert_eq!(
+        found.document.user_title.as_deref(),
+        Some("Cosmos"),
+        "the reader's title must survive the migration too"
+    );
+    assert_eq!(
+        found.document.author.as_deref(),
+        Some("Sagan, Carl; Druyan, Ann"),
+        "the document's own author is untouched, and still ONE string"
+    );
+    assert_eq!(
+        found.document.display_authors(),
+        vec!["Carl Sagan"],
+        "and the reader's list is what is displayed"
+    );
+
+    // The other spelling of the same person is the SAME person, and the spelling that arrived first
+    // wins — the migration deduplicates through the same key the write path uses.
+    let second = store.document_by_id(lowercase).expect("read").expect("present");
+    assert_eq!(second.document.authors, vec!["Carl Sagan"]);
+
+    // A blank was never an author: no row, and the document falls back to its embedded string.
+    let blanked = store.document_by_id(blank).expect("read").expect("present");
+    assert!(blanked.document.authors.is_empty());
+    assert_eq!(
+        blanked.document.display_authors(),
+        vec!["The document's own author"]
+    );
+    let absent = store.document_by_id(absent).expect("read").expect("present");
+    assert!(absent.document.authors.is_empty());
+    assert!(absent.document.display_authors().is_empty());
+
+    // One `authors` row for one person, and one list row per document that actually had an author.
+    let raw = rusqlite::Connection::open(&path).expect("open raw");
+    let mut statement = raw
+        .prepare("SELECT name FROM authors ORDER BY id")
+        .expect("prepare");
+    let names: Vec<String> = statement
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        names,
+        vec!["Carl Sagan"],
+        "one row per person, deduplicated case-insensitively, first spelling wins"
+    );
+    let list_rows: i64 = raw
+        .query_row("SELECT COUNT(*) FROM document_authors", [], |row| row.get(0))
+        .expect("count the list rows");
+    assert_eq!(
+        list_rows, 2,
+        "one row per document that had a non-blank author, and none for a blank or an absent one"
+    );
+    let positions: Vec<i64> = raw
+        .prepare("SELECT position FROM document_authors ORDER BY doc_id")
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(positions, vec![0, 0], "a backfilled list is one entry, at position 0");
+
+    // And the retired column is really gone: there is no second home for this fact to disagree from.
+    let mut statement = raw
+        .prepare("SELECT name FROM pragma_table_info('documents')")
+        .expect("prepare");
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert!(
+        !columns.iter().any(|name| name == "user_author"),
+        "V9 retires `documents.user_author` once its values have moved; columns: {columns:?}"
+    );
+}
+
+#[test]
+fn a_step_that_fails_on_the_way_to_v9_leaves_the_database_at_v8_untouched() {
+    // The same shape as the V4–V8 atomicity tests, with one deliberate difference that makes it a
+    // stronger test. The failure is arranged to happen at the **end** of the step: both tables are
+    // created and every author is backfilled before `DROP COLUMN` refuses, so what is proven is that
+    // the transaction takes the new tables and their rows back out again — not merely that the first
+    // statement stopped before doing anything.
+    //
+    // The V8 shape has to be rebuilt rather than inherited, because a current database already has the
+    // tables V9 creates and no longer has the column V9 retires: the stamp is rewound, the two tables
+    // are dropped, `documents.user_author` is put back with a value, and an index over that column
+    // makes the final `DROP COLUMN` fail the way a hand-edited database would.
+    let (_dir, path) = temp_db();
+
+    let document_id;
+    {
+        let store = Store::open(&path).expect("build a current database");
+        let mut doc = document("/library/at-risk.pdf", FileId::Posix { dev: 3, ino: 21 });
+        doc.pages = Some(120);
+        doc.title = Some("The document's own title".to_string());
+        doc.author = Some("The document's own author".to_string());
+        document_id = store.upsert_document(&doc).expect("insert the document");
+        store
+            .set_user_naming(
+                document_id,
+                Some("The reader's title"),
+                AuthorEdit::Decided(Some("The reader's author")),
+            )
+            .expect("name the document");
+        store
+            .record_progress(
+                document_id,
+                &StoredProgress::new(
+                    12,
+                    Some(120),
+                    ProgressSource::External("evince-gvfs"),
+                    Confidence::Exact,
+                )
+                .with_read_at(Some(1_700_000_000)),
+            )
+            .expect("record the position");
+        store.set_setting("language", "es").expect("write a setting");
+    }
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.pragma_update(None, "user_version", 8i64)
+            .expect("rewind the version stamp to the V8 shape");
+        raw.execute_batch(
+            "DROP TABLE document_authors;
+             DROP TABLE authors;
+             ALTER TABLE documents ADD COLUMN user_author TEXT;
+             UPDATE documents SET user_author = 'The reader''s author';
+             CREATE INDEX idx_at_risk_user_author ON documents (user_author);",
+        )
+        .expect("rebuild the V8 shape, with an index over the column V9 retires");
+    }
+
+    // 1. The failing step reaches the caller rather than being swallowed or papered over.
+    let error = Store::open(&path)
+        .expect_err("the V9 step must fail when the retired column cannot be dropped");
+    assert!(
+        matches!(error, OctError::Storage(_)),
+        "a failed migration must surface as a storage error, got {error:?}"
+    );
+
+    // 2. The version was not stamped ahead of work that did not happen.
+    let raw = rusqlite::Connection::open(&path).expect("open raw");
+    let version: i64 = raw
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("read the version");
+    assert_eq!(
+        version, 8,
+        "a failed V9 step must leave the database at version 8, not claim version 9"
+    );
+
+    // 3. Every pre-existing value is still readable — including the reader's author the step had
+    //    already moved into the new tables by the time it failed.
+    let (path_value, own_author, user_author, user_title, pages): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+    ) = raw
+        .query_row(
+            "SELECT path, author, user_author, user_title, pages FROM documents WHERE id = ?1",
+            rusqlite::params![document_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("the document must survive the failed migration");
+    assert_eq!(path_value, "/library/at-risk.pdf");
+    assert_eq!(own_author.as_deref(), Some("The document's own author"));
+    assert_eq!(
+        user_author.as_deref(),
+        Some("The reader's author"),
+        "the column the step was moving must be exactly where it was"
+    );
+    assert_eq!(user_title.as_deref(), Some("The reader's title"));
+    assert_eq!(pages, Some(120));
+
+    let progress_count: i64 = raw
+        .query_row("SELECT COUNT(*) FROM progress", [], |row| row.get(0))
+        .expect("count the positions");
+    assert_eq!(progress_count, 1, "no position may be lost");
+    let language: String = raw
+        .query_row("SELECT value FROM settings WHERE key = 'language'", [], |row| {
+            row.get(0)
+        })
+        .expect("the setting must survive the failed migration");
+    assert_eq!(language, "es");
+
+    // 4. Nothing the step created survived it. The backfill had already run, so these tables existed
+    //    and held rows; a step that was not one transaction would leave them behind.
+    let tables: Vec<String> = raw
+        .prepare(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        tables,
+        vec![
+            "documents",
+            "folders",
+            "open_events",
+            "progress",
+            "settings",
+            "suggestions",
+            "viewers",
+        ],
+        "the failed step must leave neither new table behind, though it had already written to them"
+    );
+
+    let mut statement = raw
+        .prepare("SELECT name FROM pragma_table_info('documents')")
+        .expect("prepare");
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        columns.iter().filter(|name| name.as_str() == "user_author").count(),
+        1,
+        "the retired column must still be there exactly once; columns: {columns:?}"
+    );
+    assert_eq!(
+        columns.len(),
+        23,
+        "the documents table must be back to its V8 shape, found {columns:?}"
     );
 }
 
@@ -1409,7 +1745,7 @@ fn the_schema_has_the_documented_columns_of_every_table() {
     // Read through SQLite's public catalog, so this asserts the *spec's* column list rather than
     // whatever the implementation happens to define.
     let connection = rusqlite::Connection::open(&path).expect("open raw");
-    let expected: [(&str, &[&str]); 7] = [
+    let expected: [(&str, &[&str]); 9] = [
         (
             "documents",
             &[
@@ -1433,8 +1769,13 @@ fn the_schema_has_the_documented_columns_of_every_table() {
                 "last_opened_at",
                 "status",
                 "user_title",
-                "user_author",
             ],
+        ),
+        // R42/S1-S3: the readers' authors are facts in their own tables, and the order is a column.
+        ("authors", &["id", "name", "name_key"]),
+        (
+            "document_authors",
+            &["doc_id", "author_id", "position"],
         ),
         (
             "progress",
@@ -1768,12 +2109,12 @@ fn the_readers_author_is_a_separate_fact_and_is_the_one_displayed() {
     doc.author = Some("The document's own author".to_string());
     let id = store.upsert_document(&doc).expect("insert the document");
 
-    // Before anyone names it, there is only the document's own author and `user_author` is `None`.
+    // Before anyone names it, there is only the document's own author and the reader's list is empty.
     let found = store
         .find_document_by_identity(&identity)
         .expect("lookup")
         .expect("present");
-    assert_eq!(found.document.user_author, None);
+    assert!(found.document.authors.is_empty());
     assert_eq!(found.document.display_author().as_deref(), Some("The document's own author"));
 
     store
@@ -1794,24 +2135,26 @@ fn the_readers_author_is_a_separate_fact_and_is_the_one_displayed() {
         Some("The document's own author"),
         "the reader's author must not overwrite the document's own"
     );
-    assert_eq!(
-        found.document.user_author.as_deref(),
-        Some("What the reader called them")
-    );
+    assert_eq!(found.document.authors, vec!["What the reader called them"]);
     assert_eq!(found.document.display_author().as_deref(), Some("What the reader called them"));
 }
 
 #[test]
-fn the_readers_naming_is_one_write_so_a_refused_author_leaves_the_title_unchanged_too() {
-    // R37's fix round. Save decides two facts in ONE action — the reader's title and the reader's
-    // author — so it must apply both or neither. The defect this pins is precise: written as two
-    // independent updates, the title landed even when the author's write failed, and the editor then
-    // showed an error implying nothing had been saved. The error message was a lie about a
-    // half-applied save.
+fn the_readers_naming_is_one_write_so_a_refused_write_leaves_both_facts_alone() {
+    // R37's fix round, and R42/S5's rule that the naming write still carries everything. Save decides
+    // two facts in ONE action — the reader's title and the reader's authors — so it must apply both or
+    // neither. The defect this pins is precise: written as independent updates, the title landed even
+    // when the author's write failed, and the editor then showed an error implying nothing had been
+    // saved. The error message was a lie about a half-applied save.
     //
-    // The failure is made real from OUTSIDE the store: a trigger that refuses the author column is
-    // the same shape as a disk error or a constraint arriving between the two statements, and it
-    // fails nothing that the store's own write does not already do.
+    // The V9 write makes that harder in one respect and easier to see in another: the list is
+    // **replaced**, so a refused save has already deleted the reader's old rows by the time it fails.
+    // The rollback is what brings them back, and this test starts from a naming that already exists so
+    // that a dropped transaction and a surviving one read differently.
+    //
+    // The failure is made real from OUTSIDE the store: a trigger that refuses the authors' own table is
+    // the same shape as a disk error or a constraint arriving mid-save, and it fails nothing that the
+    // store's own write does not already do.
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");
     let identity = FileId::Posix { dev: 7, ino: 31 };
@@ -1820,12 +2163,21 @@ fn the_readers_naming_is_one_write_so_a_refused_author_leaves_the_title_unchange
     doc.author = Some("The document's own author".to_string());
     let id = store.upsert_document(&doc).expect("insert the document");
 
+    // A naming that already exists: the save below must leave BOTH of these exactly as they are.
+    store
+        .set_user_naming(
+            id,
+            Some("The title the reader kept"),
+            AuthorEdit::Decided(Some("The author the reader kept")),
+        )
+        .expect("save a naming the refused write must not disturb");
+
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
         raw.execute_batch(
-            "CREATE TRIGGER refuse_the_readers_author\n             BEFORE UPDATE OF user_author ON documents\n             BEGIN\n                 SELECT RAISE(ABORT, 'the second write of one save is refused');\n             END;",
+            "CREATE TRIGGER refuse_the_readers_authors\n             BEFORE INSERT ON document_authors\n             BEGIN\n                 SELECT RAISE(ABORT, 'the last write of one save is refused');\n             END;",
         )
-        .expect("install the trigger that refuses the author column");
+        .expect("install the trigger that refuses the reader's authors table");
     }
 
     let result = store.set_user_naming(
@@ -1835,26 +2187,33 @@ fn the_readers_naming_is_one_write_so_a_refused_author_leaves_the_title_unchange
     );
     assert!(
         matches!(result, Err(OctError::Storage(_))),
-        "a refused author write must be reported as a storage error, got {result:?}"
+        "a refused write must be reported as a storage error, got {result:?}"
     );
 
-    // NEITHER fact changed. The title surviving here is the defect itself.
+    // NEITHER fact changed — and neither did the list the refused save had already deleted.
     let found = store
         .find_document_by_identity(&identity)
         .expect("lookup")
         .expect("present");
     assert_eq!(
-        found.document.user_title, None,
-        "a save whose author write was refused must not leave the title behind"
+        found.document.user_title.as_deref(),
+        Some("The title the reader kept"),
+        "a save whose author write was refused must not leave the new title behind"
     );
     assert_eq!(
-        found.document.user_author, None,
-        "the refused author must not have been written"
+        found.document.authors,
+        vec!["The author the reader kept"],
+        "the refused list must not have replaced the stored one, not even its delete"
     );
     assert_eq!(
         found.document.display_title(),
-        "The document's own title",
+        "The title the reader kept",
         "the screen must keep showing what the store still holds"
+    );
+    assert_eq!(
+        found.document.display_authors(),
+        vec!["The author the reader kept"],
+        "and the authors on screen are the ones that survived"
     );
 }
 
@@ -1889,9 +2248,9 @@ fn restoring_the_readers_title_leaves_the_readers_author_exactly_as_it_was() {
         .expect("present");
     assert_eq!(found.document.user_title, None, "the title is restored");
     assert_eq!(
-        found.document.user_author.as_deref(),
-        Some("What the reader called them"),
-        "restoring the title must not touch the reader's author"
+        found.document.authors,
+        vec!["What the reader called them"],
+        "restoring the title must not touch the reader's authors"
     );
     assert_eq!(
         found.document.display_author().as_deref(),
@@ -1901,11 +2260,11 @@ fn restoring_the_readers_title_leaves_the_readers_author_exactly_as_it_was() {
 }
 
 #[test]
-fn an_empty_author_falls_back_to_the_documents_own() {
+fn an_empty_author_list_falls_back_to_the_documents_own() {
     // The deliberate difference from the title: the title refuses a blank because a document must have
-    // one, while an author has a legitimate empty state — "no author of my own". Clearing what the
-    // reader typed restores the document's own author, and a blank value means the same thing as no
-    // value rather than being refused.
+    // one, while an author has a legitimate empty state — "no author of my own" (R42/S5). An empty list
+    // is that decision, and so is a single emptied field in the one-author spelling, which the shipped
+    // editor still sends: both restore the document's own author instead of being refused.
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");
     let identity = FileId::Posix { dev: 7, ino: 22 };
@@ -1913,26 +2272,34 @@ fn an_empty_author_falls_back_to_the_documents_own() {
     doc.author = Some("The document's own author".to_string());
     let id = store.upsert_document(&doc).expect("insert the document");
 
-    for cleared in [None, Some(""), Some("   ")] {
+    let empty_list: [&str; 0] = [];
+    let clearings = [
+        ("no name at all", AuthorEdit::Decided(None)),
+        ("an emptied field", AuthorEdit::Decided(Some(""))),
+        ("a field of spaces", AuthorEdit::Decided(Some("   "))),
+        ("an empty list", AuthorEdit::DecidedList(&empty_list)),
+    ];
+
+    for (how, cleared) in clearings {
         store
             .set_user_naming(id, None, AuthorEdit::Decided(Some("A reader's author")))
             .expect("set the reader's author");
         store
-            .set_user_naming(id, None, AuthorEdit::Decided(cleared))
-            .expect("clearing the reader's author is a legitimate action, not an error");
+            .set_user_naming(id, None, cleared)
+            .expect("clearing the reader's authors is a legitimate action, not an error");
 
         let found = store
             .find_document_by_identity(&identity)
             .expect("lookup")
             .expect("present");
-        assert_eq!(
-            found.document.user_author, None,
-            "clearing must leave no reader's author, got {cleared:?}"
+        assert!(
+            found.document.authors.is_empty(),
+            "clearing with {how} must leave no reader's author"
         );
         assert_eq!(
-            found.document.display_author().as_deref(),
-            Some("The document's own author"),
-            "an empty author must fall back to the document's own, cleared {cleared:?}"
+            found.document.display_authors(),
+            vec!["The document's own author"],
+            "an empty list must fall back to the document's own author, cleared with {how}"
         );
     }
 }
@@ -1966,8 +2333,8 @@ fn an_upsert_never_erases_the_readers_author() {
         .expect("lookup")
         .expect("present");
     assert_eq!(
-        found.document.user_author.as_deref(),
-        Some("What the reader called them"),
+        found.document.authors,
+        vec!["What the reader called them"],
         "a rescan must never rename an author a person chose"
     );
     assert_eq!(
@@ -1978,6 +2345,251 @@ fn an_upsert_never_erases_the_readers_author() {
     // The rescan's fresh metadata still landed: the rule is "do not touch the reader's author", not
     // "ignore the rescan".
     assert_eq!(found.document.pages, Some(120));
+}
+
+#[test]
+fn the_readers_authors_are_one_row_per_person_in_the_readers_order() {
+    // R42/S2 and R42/S3 on the write path. The order is the reader's and is never sorted; deduplication
+    // is case-insensitive on the trimmed name; the spelling that arrives first wins, so an existing card
+    // does not silently change; and the same person typed twice yields one row — in the list and in
+    // `authors`.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let identity = FileId::Posix { dev: 7, ino: 41 };
+    let id = store
+        .upsert_document(&document("/library/coauthored.pdf", identity.clone()))
+        .expect("insert the document");
+
+    store
+        .set_user_naming(
+            id,
+            None,
+            AuthorEdit::DecidedList(&[
+                "Carl Sagan",
+                "Ann Druyan",
+                "carl sagan",
+                "  ANN DRUYAN  ",
+                "Carl  Sagan",
+            ]),
+        )
+        .expect("save a list with a case variant and a repeat");
+    let found = store
+        .find_document_by_identity(&identity)
+        .expect("lookup")
+        .expect("present");
+    assert_eq!(
+        found.document.authors,
+        vec!["Carl Sagan", "Ann Druyan", "Carl  Sagan"],
+        "trimmed, deduplicated case-insensitively, first spelling wins, order untouched — and inner \
+         whitespace is not squashed, because only the ends are trimmed"
+    );
+
+    // One row per kept entry: the case variants collapsed into the spelling that arrived first, and the
+    // double-space spelling stayed a separate entry because only the ENDS of a name are trimmed.
+    let raw = rusqlite::Connection::open(&path).expect("open raw");
+    let names: Vec<String> = raw
+        .prepare("SELECT name FROM authors ORDER BY id")
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        names,
+        vec!["Carl Sagan", "Ann Druyan", "Carl  Sagan"],
+        "one row per person, and the spelling that arrived first is the one kept"
+    );
+    let list_rows: i64 = raw
+        .query_row("SELECT COUNT(*) FROM document_authors", [], |row| row.get(0))
+        .expect("count the list rows");
+    assert_eq!(list_rows, 3, "three entries, and none of them the same person twice");
+
+    // The order is the reader's, so the reverse list is a different — and equally legitimate — answer.
+    store
+        .set_user_naming(
+            id,
+            None,
+            AuthorEdit::DecidedList(&["Ann Druyan", "Carl Sagan"]),
+        )
+        .expect("save the reversed list");
+    let found = store
+        .find_document_by_identity(&identity)
+        .expect("lookup")
+        .expect("present");
+    assert_eq!(
+        found.document.authors,
+        vec!["Ann Druyan", "Carl Sagan"],
+        "the reader's order is preserved on read, never sorted"
+    );
+    let stored: Vec<(String, i64)> = raw
+        .prepare(
+            "SELECT a.name, da.position FROM document_authors da \
+             JOIN authors a ON a.id = da.author_id ORDER BY da.position",
+        )
+        .expect("prepare")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect();
+    assert_eq!(
+        stored,
+        vec![("Ann Druyan".to_string(), 0), ("Carl Sagan".to_string(), 1)],
+        "`position` is the reader's order, and it is what the read sorts by"
+    );
+    let names_after: i64 = raw
+        .query_row("SELECT COUNT(*) FROM authors", [], |row| row.get(0))
+        .expect("count the authors");
+    assert_eq!(
+        names_after, 3,
+        "a list that only reuses known people adds no author rows"
+    );
+
+    // The list is a stored fact, not something a running process remembers: a fresh open reads the
+    // same people in the same order back.
+    let reopened = Store::open(&path).expect("reopen");
+    let found = reopened
+        .document_by_id(id)
+        .expect("read")
+        .expect("present");
+    assert_eq!(found.document.authors, vec!["Ann Druyan", "Carl Sagan"]);
+}
+
+#[test]
+fn a_blank_author_in_the_list_is_refused_and_nothing_is_written() {
+    // R42/S2: a name that is only whitespace is refused, not stored as "". An **empty list** is a
+    // different thing — the reader saying *no author of my own* — and the test above pins that it is
+    // accepted. A blank entry inside a list is the mistake nobody meant.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let identity = FileId::Posix { dev: 7, ino: 42 };
+    let id = store
+        .upsert_document(&document("/library/coauthored.pdf", identity.clone()))
+        .expect("insert the document");
+
+    for blank in ["", "   ", "\t\n"] {
+        let result = store.set_user_naming(
+            id,
+            Some("A title that must not land"),
+            AuthorEdit::DecidedList(&["Carl Sagan", blank]),
+        );
+        match result {
+            Err(OctError::InvalidInput {
+                field,
+                value,
+                expected,
+            }) => {
+                assert_eq!(field, "author");
+                assert_eq!(value, blank);
+                assert!(
+                    expected.contains("non-empty"),
+                    "the refusal must say what was wanted, got: {expected}"
+                );
+            }
+            other => panic!("a blank author must be an invalid argument, got {other:?}"),
+        }
+    }
+
+    // The refusal happens before the transaction opens, so nothing was written — not the valid name
+    // beside the blank one, and not the title.
+    let found = store
+        .find_document_by_identity(&identity)
+        .expect("lookup")
+        .expect("present");
+    assert!(found.document.authors.is_empty());
+    assert_eq!(found.document.user_title, None);
+    let raw = rusqlite::Connection::open(&path).expect("open raw");
+    let authors: i64 = raw
+        .query_row("SELECT COUNT(*) FROM authors", [], |row| row.get(0))
+        .expect("count the authors");
+    assert_eq!(authors, 0, "a refused list must not leave a person behind");
+}
+
+#[test]
+fn the_listing_carries_the_readers_authors_and_the_one_rule_that_decides_what_is_displayed() {
+    // R42/S4 at the store's own boundary. The displayed list is the core's rule
+    // (`Document::display_authors`), and the listing and the single-document read both carry it — so the
+    // card, the filter and the search cannot disagree. All three branches of the precedence are here,
+    // and the embedded string is never split (R42/S6).
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+
+    // 1. No reader's list: the embedded string, as ONE entry, commas and semicolons notwithstanding.
+    let mut comma = document("/library/a-embedded.pdf", FileId::Posix { dev: 6, ino: 1 });
+    comma.author = Some("Sagan, Carl; Druyan, Ann".to_string());
+    let comma_id = store.upsert_document(&comma).expect("insert");
+
+    // 2. A reader's list beside an embedded string: the reader's list wins, in the reader's order.
+    let mut coauthored = document("/library/b-readers.pdf", FileId::Posix { dev: 6, ino: 2 });
+    coauthored.author = Some("The document's own author".to_string());
+    let readers_id = store.upsert_document(&coauthored).expect("insert");
+    store
+        .set_user_naming(
+            readers_id,
+            None,
+            AuthorEdit::DecidedList(&["Ann Druyan", "Carl Sagan"]),
+        )
+        .expect("name the authors");
+
+    // 3. Neither: no displayed author at all, and nothing invented in its place.
+    let none_id = store
+        .upsert_document(&document("/library/c-none.pdf", FileId::Posix { dev: 6, ino: 3 }))
+        .expect("insert");
+
+    // 4. An embedded string that looks like a list and is not one: it is not split on " and " either.
+    let mut conjunction = document("/library/d-embedded-and.pdf", FileId::Posix { dev: 6, ino: 4 });
+    conjunction.author = Some("Carl Sagan and Ann Druyan".to_string());
+    let conjunction_id = store.upsert_document(&conjunction).expect("insert");
+
+    let entries = store.library().expect("list the library");
+    assert_eq!(entries.len(), 4);
+
+    let embedded = &entries[0].document.document;
+    assert_eq!(embedded.authors, Vec::<String>::new());
+    assert_eq!(
+        embedded.display_authors(),
+        vec!["Sagan, Carl; Druyan, Ann"],
+        "the embedded string is ONE author, never split on the comma or the semicolon"
+    );
+
+    let readers = &entries[1].document.document;
+    assert_eq!(readers.authors, vec!["Ann Druyan", "Carl Sagan"]);
+    assert_eq!(
+        readers.display_authors(),
+        vec!["Ann Druyan", "Carl Sagan"],
+        "the reader's list wins over the embedded string, in the reader's order"
+    );
+
+    let nothing = &entries[2].document.document;
+    assert!(nothing.authors.is_empty());
+    assert!(
+        nothing.display_authors().is_empty(),
+        "neither the reader nor the file names an author, so nobody is displayed"
+    );
+
+    let and_string = &entries[3].document.document;
+    assert_eq!(
+        and_string.display_authors(),
+        vec!["Carl Sagan and Ann Druyan"],
+        "\" and \" is not a delimiter either: inventing two authors is the lie S6 refuses"
+    );
+
+    // The single-document read must agree with the listing for every one of them: one rule, one read.
+    for (entry, expected_id) in entries.iter().zip([
+        comma_id,
+        readers_id,
+        none_id,
+        conjunction_id,
+    ]) {
+        assert_eq!(entry.document.id, expected_id);
+        let by_id = store
+            .document_by_id(entry.document.id)
+            .expect("read the document")
+            .expect("present");
+        assert_eq!(
+            by_id.document, entry.document.document,
+            "a document read by id must be the same document the listing carries"
+        );
+    }
 }
 
 #[test]

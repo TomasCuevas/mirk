@@ -115,9 +115,11 @@ pub struct Document {
     pub title: Option<String>,
     /// Document author from the PDF metadata dictionary, when present.
     ///
-    /// This is the document's **own** author, exactly as the scanner found it. It is never written by
-    /// the reader: an author a person typed is a separate fact ([`Document::user_author`]), so the
-    /// document's own author is never destroyed and can always be shown again.
+    /// This is the document's **own** author, exactly as the scanner found it — **one opaque string**.
+    /// It is never written by the reader, never split, and never rewritten: the readers' own authors
+    /// are a separate fact ([`Document::authors`], R42). `"Sagan, Carl; Druyan, Ann"` is what one
+    /// document's metadata happened to hold, and splitting it on commas, semicolons or " and " would
+    /// invent authors nobody wrote (R42/S6), so nobody does.
     pub author: Option<String>,
     /// The title the reader typed, or [`None`] when they have not set one (R31).
     ///
@@ -126,15 +128,20 @@ pub struct Document {
     /// its own field, instead of overwriting [`Document::title`], is what lets the interface say
     /// whose title it is showing and what makes restoring the document's own title possible at all.
     pub user_title: Option<String>,
-    /// The author the reader typed, or [`None`] when they have not set one.
+    /// The authors the reader chose, **in the reader's order**, or empty when they have said nothing
+    /// of their own (R42/S3, R42/S5).
     ///
-    /// **`None` means only "the reader has not set an author"** — it is the reader saying *no author
-    /// of my own*, which is legitimate because many documents have none. Keeping the reader's author in
-    /// its own field, instead of overwriting [`Document::author`], is what lets the interface fall back
-    /// to the document's own author when the reader clears theirs, and what makes that fallback a
-    /// decision rather than data loss. This is the deliberate difference from [`Document::user_title`],
-    /// whose field has no legitimate blank.
-    pub user_author: Option<String>,
+    /// **An empty list means "no author of my own"**, which is legitimate because many documents have
+    /// none, and it is what makes the fallback to [`Document::author`] a decision rather than data
+    /// loss. Keeping the reader's authors in their own field, instead of overwriting `author`, is also
+    /// what keeps the document's own author available to be shown again. This is the deliberate
+    /// difference from [`Document::user_title`], whose field has no legitimate blank.
+    ///
+    /// A stored list is already normalised by the write boundary — trimmed, blank-free and
+    /// deduplicated case-insensitively, first spelling wins — so `"Carl Sagan"` and `"carl sagan"`
+    /// are one person here too. Order is the reader's and is preserved on read: "Carl Sagan, Ann
+    /// Druyan" and "Ann Druyan, Carl Sagan" are different lists and both are legitimate.
+    pub authors: Vec<String>,
     /// The page the reader chose for the cover, zero-based, or [`None`] for the first page (R32).
     ///
     /// `None` is the **default**, not "unknown": the first page is what a document without a choice
@@ -182,7 +189,7 @@ impl Document {
             title: None,
             author: None,
             user_title: None,
-            user_author: None,
+            authors: Vec::new(),
             cover_page: None,
             cover_image: None,
         }
@@ -210,22 +217,42 @@ impl Document {
         title_from_path(&self.path)
     }
 
-    /// The author to show a person.
+    /// The authors to show a person, in the order they should be read (R42/S4).
     ///
-    /// The reader's author wins when they have set one; otherwise it is the document's own author, or
-    /// [`None`] when the PDF carries none. **This is the one place the rule lives**, exactly like
-    /// [`Document::display_title`]: the interface receives this already-resolved value plus the
-    /// separate [`Document::user_author`] field, so no screen decides whose author it is rendering.
+    /// The reader's list wins when it has any entry; otherwise the document's **embedded** author —
+    /// the whole string, as one entry, never split (R42/S6) — and otherwise none at all. **This is the
+    /// one place that precedence lives**, exactly like [`Document::display_title`]: the card, the
+    /// author filter and the free-text search all read what this returns, so no screen decides whose
+    /// author it is rendering and two screens cannot disagree about who wrote a document.
     ///
-    /// A blank value counts as no value in either field, the same way it does for the title, and a
-    /// blank reader's author therefore falls back to the document's own. Unlike the title there is no
-    /// last-resort fallback to the file's name: an author is optional, and inventing one would be the
-    /// lie this field exists to make unnecessary.
-    pub fn display_author(&self) -> Option<String> {
-        if let Some(user) = non_blank(self.user_author.as_deref()) {
-            return Some(user.to_owned());
+    /// A blank entry counts as no entry, the same way a blank title counts as no title: a stored list
+    /// is already blank-free, but PDF metadata and hand-edited databases can hold an empty string, and
+    /// `NULL`/empty already mean "not set" — the two must not be made to mean two different things.
+    /// Unlike the title there is no last-resort fallback to the file's name: an author is optional, and
+    /// inventing one would be the lie this rule exists to make unnecessary.
+    pub fn display_authors(&self) -> Vec<String> {
+        let reader: Vec<String> = self
+            .authors
+            .iter()
+            .filter_map(|name| non_blank(Some(name.as_str())).map(str::to_owned))
+            .collect();
+        if !reader.is_empty() {
+            return reader;
         }
-        non_blank(self.author.as_deref()).map(str::to_owned)
+        non_blank(self.author.as_deref())
+            .map(|own| vec![own.to_owned()])
+            .unwrap_or_default()
+    }
+
+    /// The first of [`Document::display_authors`], for the callers that can still express only one
+    /// author.
+    ///
+    /// The store and the domain model work in a list (R42); the one author by which a single card
+    /// line and the current IPC view are worded is simply the first of that list, and it comes from
+    /// the same rule rather than from a second copy of it. It is deliberately **not** a second
+    /// precedence rule: with no displayed author at all it answers [`None`].
+    pub fn display_author(&self) -> Option<String> {
+        self.display_authors().into_iter().next()
     }
 
     /// The document's percent-encoded `file://` URI.
@@ -358,14 +385,57 @@ mod tests {
         assert_eq!(document.cover_choice(), CoverChoice::Page(4));
     }
 
-    /// The reader's author wins over the document's own, and this is the only place that decides.
+    /// R42/S4: one function decides which authors are shown, and it is the only place that decides.
     #[test]
-    fn the_readers_author_wins_over_the_documents_own() {
+    fn the_readers_authors_win_over_the_documents_own() {
         let mut document = Document::new("/library/report.pdf");
         document.author = Some("Embedded author".to_string());
-        document.user_author = Some("The reader's author".to_string());
+        document.authors = vec!["Carl Sagan".to_string(), "Ann Druyan".to_string()];
 
-        assert_eq!(document.display_author().as_deref(), Some("The reader's author"));
+        assert_eq!(document.display_authors(), vec!["Carl Sagan", "Ann Druyan"]);
+        assert_eq!(document.display_author().as_deref(), Some("Carl Sagan"));
+    }
+
+    /// R42/S3: the reader's order is the one that is shown.
+    #[test]
+    fn the_readers_order_is_the_order_displayed() {
+        let mut document = Document::new("/library/report.pdf");
+        document.authors = vec!["Ann Druyan".to_string(), "Carl Sagan".to_string()];
+
+        assert_eq!(document.display_authors(), vec!["Ann Druyan", "Carl Sagan"]);
+    }
+
+    /// R42/S6: the embedded string is ONE author, never a list the metadata did not mean.
+    #[test]
+    fn an_embedded_author_string_is_never_split_on_commas_semicolons_or_and() {
+        for embedded in [
+            "Sagan, Carl; Druyan, Ann",
+            "Carl Sagan and Ann Druyan",
+            "Sagan, Carl",
+        ] {
+            let mut document = Document::new("/library/report.pdf");
+            document.author = Some(embedded.to_string());
+
+            assert_eq!(
+                document.display_authors(),
+                vec![embedded],
+                "the embedded string is one entry, exactly as the file holds it: {embedded}"
+            );
+        }
+    }
+
+    /// R42/S5: an empty reader's list is "no author of my own", which falls back to the embedded one.
+    #[test]
+    fn an_empty_readers_list_falls_back_to_the_embedded_author_as_one_entry() {
+        let mut document = Document::new("/library/report.pdf");
+        document.author = Some("Sagan, Carl; Druyan, Ann".to_string());
+        document.authors = Vec::new();
+
+        assert_eq!(
+            document.display_authors(),
+            vec!["Sagan, Carl; Druyan, Ann"],
+            "one entry, not two"
+        );
     }
 
     #[test]
@@ -374,12 +444,14 @@ mod tests {
         document.author = Some("Embedded author".to_string());
 
         assert_eq!(document.display_author().as_deref(), Some("Embedded author"));
+        assert_eq!(document.display_authors(), vec!["Embedded author"]);
     }
 
     #[test]
     fn a_document_with_no_author_at_all_shows_none() {
         // An author is optional, and there is no file-name fallback: inventing one would be a lie.
         assert_eq!(Document::new("/library/report.pdf").display_author(), None);
+        assert!(Document::new("/library/report.pdf").display_authors().is_empty());
     }
 
     #[test]
@@ -388,15 +460,19 @@ mod tests {
         document.author = Some("   ".to_string());
 
         assert_eq!(document.display_author(), None);
+        assert!(document.display_authors().is_empty());
     }
 
     #[test]
     fn a_blank_readers_author_falls_back_to_the_documents_own() {
         let mut document = Document::new("/u/report.pdf");
         document.author = Some("Embedded author".to_string());
-        document.user_author = Some("  ".to_string());
+        // A stored list is blank-free, so this is a hand-edited database rather than a write of ours;
+        // it must still be treated as no entry rather than as an author named "  ".
+        document.authors = vec!["  ".to_string()];
 
         assert_eq!(document.display_author().as_deref(), Some("Embedded author"));
+        assert_eq!(document.display_authors(), vec!["Embedded author"]);
     }
 
     #[test]

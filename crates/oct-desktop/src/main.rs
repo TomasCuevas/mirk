@@ -26,7 +26,7 @@ use commands::{
     ScanReportView, SuggestionView, WatchedFolderView,
 };
 use oct_core::OctError;
-use oct_store::{database_path, AuthorEdit, Store};
+use oct_store::{database_path, Store};
 use shell::{action_for_menu_id, dispatch, ShellAction, ShellActions};
 use tauri::menu::{Menu, MenuBuilder};
 use tauri::tray::TrayIconBuilder;
@@ -154,40 +154,78 @@ fn list_library() -> Result<Vec<LibraryEntryView>, String> {
     commands::library_entries(&store).map_err(error_message)
 }
 
-/// Saves the reader's naming of the document with `id` in ONE write (R31, R37).
+/// Saves the reader's naming of the document with `id` in ONE write (R31, R37, R42/S5).
 ///
-/// The editor's Save decides the reader's title and the reader's author in one action, so this is one
+/// The editor's Save decides the reader's title and the reader's authors in one action, so this is one
 /// command: two commands each opening the store and each writing one fact is how a failed author write
 /// used to leave the title saved while the screen said nothing was.
 ///
-/// The three shapes the interface can send are deliberately distinct, because the editor's two controls
-/// decide different things:
+/// The shapes the interface can send are deliberately distinct, because the editor's controls decide
+/// different things:
 ///
-/// - `title: None` restores the document's own title, a legitimate action rather than an error. A blank
+/// - `title: null` restores the document's own title, a legitimate action rather than an error. A blank
 ///   string is refused as an invalid argument by [`commands::set_document_naming`].
-/// - `author: Some(Some(name))` is the reader's author, and `author: Some(null)` — a missing second
-///   value — is *no author of my own*, the deliberate difference from the title: an author may be empty
-///   and then falls back to the document's own.
-/// - `author: None`, the key **absent from the call**, means this action said nothing about the author,
-///   so the reader's author is left exactly as it is. That is how Restore decides the title and nothing
-///   else. An absent argument is `None` here because the outer `Option` makes it optional to send, and
-///   the inner one distinguishes an argument that was sent as `null` from one that was not sent at all.
-///   The interface says it by omitting the key: `JSON.stringify` drops an `undefined` property, and the
-///   web side's `author?: string | null` is exactly this shape.
+/// - `authors: ["Carl Sagan", "Ann Druyan"]` is the reader's ordered list (R42/S5). An **empty list**
+///   — `authors: []` — is *no author of my own*: a decision, deliberately different from the title,
+///   because an author list may be empty and the document's own author then shows again.
+/// - `authors` **absent from the call** means this action said nothing about the authors, so the
+///   reader's list is left exactly as it is. That is how Restore decides the title and nothing else. An
+///   absent argument is `None` here because the outer `Option` makes it optional to send, and the web
+///   side says it by omitting the key: `JSON.stringify` drops an `undefined` property, and `authors?:
+///   readonly string[]` in the editor is exactly this shape.
+///
+/// **`author` is the pre-list spelling and it is still accepted** (a native review found this): a
+/// caller that has not moved to the list sends `author: "Carl Sagan"`, and dropping that key would make
+/// `authors` arrive absent, which the store reads as *said nothing* — the save would report success and
+/// the reader's edit would be discarded in silence. So the single name is mapped to a one-entry list,
+/// and `authors` **wins** when both are sent: one caller, one decision, and the newer spelling is the
+/// one that carries an order.
 #[tauri::command]
 fn set_document_naming(
     id: i64,
     title: Option<String>,
+    authors: Option<Vec<String>>,
+    // The pre-list spelling keeps the type it always had. A review pointed out that a single
+    // `Option<String>` would make an old caller's `author: null` indistinguishable from an absent key,
+    // and the two-option type is what says *the shape distinguishes them* — including to anyone reading
+    // the signature.
+    //
+    // One measured limitation, because a reviewer should not have to rediscover it: **at this IPC
+    // boundary they cannot actually be told apart.** Tauri's argument deserializer calls
+    // `visit_none()` both for a missing key and for a JSON `null`
+    // (`tauri-2.12.3/src/ipc/command.rs`, `impl Deserializer for CommandItem`, `deserialize_option`),
+    // so `author: null` and an absent `author` both arrive as `None`. That is not a regression this
+    // change introduced — the pre-list command had the identical type and therefore the identical
+    // behaviour — and it is not fixable without a custom `CommandArg`. What a pre-list caller CAN do,
+    // and now still can, is send a name, which becomes a one-entry list. Clearing the reader's author is
+    // expressible only through the list spelling (`authors: []`), which is why the editor moved to it.
     author: Option<Option<String>>,
 ) -> Result<(), String> {
     let store = open_store()?;
-    // Borrowed rather than moved: the inner `Option<String>` is what distinguishes "the author was
-    // cleared" from "this action said nothing about the author", and it has to outlive the borrow.
-    let author = match &author {
-        Some(chosen) => AuthorEdit::Decided(chosen.as_deref()),
-        None => AuthorEdit::Untouched,
-    };
-    commands::set_document_naming(&store, id, title.as_deref(), author).map_err(error_message)
+    commands::set_document_naming(&store, id, title.as_deref(), authored(authors, author))
+        .map_err(error_message)
+}
+
+/// The reader's author list, from whichever spelling the caller sent.
+///
+/// `authors` is the list the editor sends, and it is the answer whenever it is present — an empty list
+/// included, because *no author of my own* is a decision. The pre-list `author` keeps its baseline
+/// meaning exactly: a name becomes a one-entry list, an explicit `null` becomes the empty list (the
+/// reader clearing their author), and a blank name becomes the empty list for the same reason a blank
+/// is never an author. Both absent is `None`: this action said nothing about the authors.
+///
+/// A free function rather than a line inside the command so the rule can be tested without a Tauri
+/// application, which is the same reason every other decision in this workspace lives outside its
+/// wrapper.
+fn authored(authors: Option<Vec<String>>, author: Option<Option<String>>) -> Option<Vec<String>> {
+    match (authors, author) {
+        (Some(list), _) => Some(list),
+        // `Some(None)` is an explicit null: *no author of my own*, the empty list.
+        (None, Some(None)) => Some(Vec::new()),
+        (None, Some(Some(name))) if name.trim() == "" => Some(Vec::new()),
+        (None, Some(Some(name))) => Some(vec![name]),
+        (None, None) => None,
+    }
 }
 
 /// Sets or clears the page the reader chose for the document's cover (R32).
@@ -859,6 +897,72 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::{authored, LibraryEntryView};
+
+    /// R42/S5, corrected after a native review: a caller that still sends the pre-list `author` must not
+    /// lose its edit in silence.
+    ///
+    /// The defect the review found is a shape, not a typo: `authors` absent means *said nothing*, so a
+    /// dropped legacy key turns a real edit into no edit and the save still returns success. These four
+    /// cases are the whole mapping, and the first one is the rule that the newer spelling wins.
+    #[test]
+    fn the_naming_command_accepts_both_author_spellings_and_the_list_wins() {
+        assert_eq!(
+            authored(Some(vec!["Carl Sagan".into()]), Some(Some("Ignored".into()))),
+            Some(vec!["Carl Sagan".to_string()]),
+            "the list is the order and it wins when both are sent"
+        );
+        assert_eq!(
+            authored(None, Some(Some("Carl Sagan".into()))),
+            Some(vec!["Carl Sagan".to_string()]),
+            "the legacy single name becomes a one-entry list instead of being dropped"
+        );
+        assert_eq!(
+            authored(None, Some(None)),
+            Some(Vec::new()),
+            "an explicit legacy null is *no author of my own*, not *said nothing*"
+        );
+        assert_eq!(
+            authored(None, Some(Some("   ".into()))),
+            Some(Vec::new()),
+            "a blank legacy name is *no author of my own*, never an author called spaces"
+        );
+        assert_eq!(authored(None, None), None, "neither key means the action said nothing");
+    }
+
+    /// The transient single-author projection must keep serialising `null`, not omit the key.
+    ///
+    /// It stands in for fields that always emitted an explicit `null`, and the native review was right
+    /// that omitting them is an output change nobody asked for: a client cannot tell a missing property
+    /// from one it should read as "no author".
+    #[test]
+    fn the_view_keeps_emitting_null_for_the_transient_single_author() {
+        let document = oct_core::Document::new("/library/no-author.pdf");
+        let view = LibraryEntryView {
+            id: 1,
+            path: document.path.to_string_lossy().into_owned(),
+            title: document.display_title(),
+            user_title: None,
+            authors: Vec::new(),
+            author: None,
+            user_author: None,
+            reader_authors: Vec::new(),
+            pages: None,
+            progress: None,
+            cover_page: None,
+            cover_image: None,
+        };
+        let json = serde_json::to_string(&view).expect("serialize the view");
+        assert!(
+            json.contains("\"author\":null"),
+            "the transient field keeps its null: {json}"
+        );
+        assert!(
+            json.contains("\"userAuthor\":null"),
+            "the transient reader field keeps its null: {json}"
+        );
+    }
+
     /// The phone-shaped window, asserted from the configuration the application actually loads.
     ///
     /// A tray icon and a window's decorations are visual and cannot be asserted here; what can be
