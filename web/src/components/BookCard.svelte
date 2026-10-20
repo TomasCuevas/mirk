@@ -3,6 +3,7 @@
   import type { Translate } from "../lib/i18n";
   import {
     coverSource,
+    describeAuthors,
     describeProgressView,
     displayTitle,
     fetchCover,
@@ -65,6 +66,12 @@
 
   // The card's progress, as a fraction to draw and a number to place on it (R7).
   const view = $derived(describeProgressView(entry, t));
+
+  // The authors as a sentence a person reads (R42/S4): "by Carl Sagan y Ann Druyan" for two names,
+  // commas and one connector for three or more. The list is the one the core resolved — the reader's
+  // when they set one, otherwise the document's own — and `null` means nobody is named, so the card
+  // says nothing rather than printing the words "by" with no name after them.
+  const authors = $derived(describeAuthors(entry.authors, t));
 </script>
 
 <!--
@@ -209,8 +216,8 @@
          title is being edited and offers to restore the document's own only when there is one to restore
          — and `titleEditor` in `library.ts` is where that rule now lives and is tested. -->
 
-    {#if entry.author !== null}
-      <p class="author">{t("library.author", { author: entry.author })}</p>
+    {#if authors !== null}
+      <p class="author">{t("library.author", { author: authors })}</p>
     {/if}
 
     <!-- R7: the bar stands for the fraction read and the number sits over it, at the position that

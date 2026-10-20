@@ -13,8 +13,8 @@ function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
     path: "/library/document.pdf",
     title: "Cosmos",
     userTitle: null,
-    author: null,
-    userAuthor: null,
+    authors: [],
+    readerAuthors: [],
     pages: 300,
     progress: null,
     ...overrides,
@@ -343,5 +343,57 @@ describe("the progress fill's colour", () => {
 
     expect(forty).not.toBeNull();
     expect(forty).not.toBe(fortyTwo);
+  });
+});
+
+/**
+ * R42/S4: the card states the authors the way a person reads a list.
+ *
+ * The document's authors are an ordered list, and the card draws it as a sentence: one name as
+ * itself, two joined by the catalogue's connector, three or more with commas and one connector
+ * before the last. The list is the one the core resolved — the reader's when they set one, otherwise
+ * the document's embedded author — so the card decides nobody. The Spanish sentence uses "y" because
+ * the connector comes from the catalogue; an English "and" there would be a second language inside
+ * the markup.
+ */
+describe("the card states its authors", () => {
+  const props = {
+    onOpenFolder: () => {},
+    onOpenDocument: () => {},
+    onEditDocument: () => {},
+  };
+
+  /** The card's author line as text, or `null` when it draws none. */
+  function authorLine(body: string): string | null {
+    const match = body.match(/<p class="[^"]*\bauthor\b[^"]*">([^<]*)<\/p>/);
+    return match === null ? null : match[1].trim();
+  }
+
+  function line(entry_: LibraryEntry, t = english): string | null {
+    const { body } = render(BookCard, { props: { ...props, entry: entry_, t } });
+    return authorLine(body);
+  }
+
+  it("writes one author as itself", () => {
+    expect(line(entry({ authors: ["Carl Sagan"] }))).toBe("by Carl Sagan");
+  });
+
+  it("joins two authors with the catalogue's connector in both languages", () => {
+    const both = entry({ authors: ["Carl Sagan", "Ann Druyan"] });
+
+    expect(line(both)).toBe("by Carl Sagan and Ann Druyan");
+    expect(line(both, translate("es"))).toBe("de Carl Sagan y Ann Druyan");
+  });
+
+  it("joins three authors with commas and one connector before the last", () => {
+    const three = entry({ authors: ["Carl Sagan", "Ann Druyan", "Jorge Luis Borges"] });
+
+    expect(line(three)).toBe("by Carl Sagan, Ann Druyan and Jorge Luis Borges");
+    expect(line(three, translate("es"))).toBe("de Carl Sagan, Ann Druyan y Jorge Luis Borges");
+  });
+
+  it("says nothing at all when nobody is named, instead of printing a dangling 'by'", () => {
+    expect(line(entry({ authors: [] }))).toBeNull();
+    expect(line(entry({ authors: ["   "] }))).toBeNull();
   });
 });

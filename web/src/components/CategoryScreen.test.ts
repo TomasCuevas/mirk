@@ -82,8 +82,8 @@ describe("a category's empty state while work is in flight (L47)", () => {
       path: "/library/a.pdf",
       title: "A",
       userTitle: null,
-      author: null,
-      userAuthor: null,
+      authors: [],
+      readerAuthors: [],
       pages: 10,
       progress: {
         page: 0,

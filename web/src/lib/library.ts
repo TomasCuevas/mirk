@@ -70,21 +70,24 @@ export interface LibraryEntry {
    */
   userTitle: string | null;
   /**
-   * The author to display, **already resolved by the core**.
+   * The authors to display, **already resolved by the core** (R42/S4).
    *
-   * It is the reader's author when they have set one, otherwise the document's own — and `null`
-   * when neither exists. Because the core resolves it, the interface never decides whose author it
-   * is rendering and the card keeps showing the author the way it always has.
+   * The reader's ordered list when it has any entry, otherwise the document's embedded author as a
+   * single entry, otherwise empty. The precedence lives in ONE place —
+   * `oct_core::Document::display_authors`, in the Rust view this arrives in — so the card, the
+   * filter and the search cannot disagree about who wrote a document. Empty means nobody is named;
+   * an embedded `"Sagan, Carl; Druyan, Ann"` is one entry, never split (R42/S6).
    */
-  author: string | null;
+  authors: string[];
   /**
-   * The reader's own author, or `null` when they have not set one (`userAuthor` from the Rust view).
+   * The reader's own authors, in the order they gave them (`readerAuthors` from the Rust view).
    *
-   * This is what tells the editor whether the author on screen is the reader's, and what the
-   * suggestions list draws on beside the resolved authors. The backend always sends it — `null`
-   * means the reader has not set one — so a listing that forgets it must not typecheck.
+   * A separate fact from `authors`, the resolved list, exactly as `userTitle` is separate from
+   * `title`: this is what tells the editor whether the names on screen are the reader's, and what the
+   * editor's suggestion list draws on beside the displayed names. Empty means the reader has set none,
+   * which is the ordinary state rather than an error.
    */
-  userAuthor: string | null;
+  readerAuthors: string[];
   /** Page count from the scanner; null when it was never established. */
   pages: number | null;
   progress: Progress | null;
@@ -551,18 +554,122 @@ export function titleEditor(entry: LibraryEntry): { value: string; yours: boolea
 }
 
 /**
- * What the author editor shows for one document.
+ * What the author editor shows for one document: its chips, and whose they are.
  *
  * The twin of [`titleEditor`], with one deliberate difference at the SAVE boundary rather than here:
- * the title refuses a blank because a document must have a title, while an EMPTY author field means
- * *no author of my own* and is a legitimate action that falls back to the document's own author. The
- * field is prefilled with the author already on screen — the reader's when they set one, otherwise
- * the document's own — and `yours` says whether that value is the reader's, so the field's label can
- * state whose author it is instead of the interface having to guess.
+ * the title refuses a blank because a document must have a title, while an EMPTY chip list means
+ * *no author of my own* and is a legitimate action that falls back to the document's own author.
+ *
+ * **It is a LIST, never one name** (R42/S3): the stored fact is an ordered list, so the editor is
+ * seeded with the list itself and the reader's order is what survives a round trip. The list is the
+ * reader's own when they have one — `yours` says so, and the label can then state whose it is — and
+ * otherwise the authors the card SHOWS, which for a document nobody has edited is its embedded
+ * metadata string as ONE entry. That last part is deliberate (R42/S6): splitting
+ * `"Sagan, Carl; Druyan, Ann"` would invent two people nobody wrote, so it starts as one chip the
+ * reader can replace by typing the names they meant.
+ *
+ * Chips are trimmed and blank-free and unique case-insensitively, the same rules that adding a name
+ * obeys ([`addAuthorChip`]), so a stored list that arrived with stray spaces cannot produce a chip
+ * nobody can remove.
  */
-export function authorEditor(entry: LibraryEntry): { value: string; yours: boolean } {
-  const yours = entry.userAuthor != null && entry.userAuthor.trim() !== "";
-  return { value: entry.author ?? "", yours };
+export function authorEditor(entry: LibraryEntry): { chips: string[]; yours: boolean } {
+  const reader = normalizeAuthorChips(entry.readerAuthors);
+  if (reader.length > 0) {
+    return { chips: reader, yours: true };
+  }
+  return { chips: normalizeAuthorChips(entry.authors), yours: false };
+}
+
+/**
+ * Adds one author to the editor's list of chips (R42/S2–S3, U30).
+ *
+ * Four rules, decided here rather than in a screen, and each one protects the reader's order:
+ *
+ * - the name is **trimmed** before it becomes a chip, because surrounding spaces are never part of a
+ *   person's name;
+ * - a **blank** is refused — nothing is added, and `added: false` is how the field learns to keep what
+ *   was typed instead of looking as if it had been accepted;
+ * - a name already on the list, compared **trimmed and case-insensitively**, is refused too: the
+ *   existing chip keeps its spelling AND its position, so typing "carl sagan" beside "Carl Sagan"
+ *   cannot silently reshuffle a list the reader ordered;
+ * - a new name is **appended at the end**, which is where the reader put the gesture that added it.
+ */
+export function addAuthorChip(
+  chips: readonly string[],
+  name: string,
+): { chips: string[]; added: boolean } {
+  const trimmed = name.trim();
+  if (trimmed === "" || chips.some((chip) => sameAuthor(chip, trimmed))) {
+    return { chips: [...chips], added: false };
+  }
+  return { chips: [...chips, trimmed], added: true };
+}
+
+/**
+ * Removes exactly the chip `name` identifies, keeping every other chip in the order it had (U30).
+ *
+ * It compares the same way [`addAuthorChip`] does — trimmed, case-insensitively — because two halves
+ * of one control that disagreed about when two names are the same person would leave a chip the
+ * reader had just added unable to be removed. A name that is not on the list removes nothing: an
+ * editor must never lose a chip it was not asked to lose.
+ */
+export function removeAuthorChip(chips: readonly string[], name: string): string[] {
+  return chips.filter((chip) => !sameAuthor(chip, name));
+}
+
+/**
+ * The comparison both chip rules use: trimmed, then case-insensitive.
+ *
+ * `toLowerCase` and not `localeCompare`: "are these the same person" must not depend on the machine's
+ * language any more than the tiebreak in the carousels' order does. It is one function so the add and
+ * the remove halves cannot drift apart.
+ */
+function sameAuthor(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+/**
+ * A stored author list as chips: trimmed, blank-free, and unique case-insensitively in the order given.
+ *
+ * The store already refuses a blank and deduplicates on the way in (R42/S2), so this is not a second
+ * copy of that rule — it is what keeps the EDITOR consistent with the rules a reader's own gesture
+ * obeys, which is what lets both halves use one comparison.
+ */
+function normalizeAuthorChips(names: readonly string[]): string[] {
+  return names.reduce<string[]>(
+    (chips, name) => addAuthorChip(chips, name).chips,
+    [],
+  );
+}
+
+/**
+ * The authors of one document as a sentence, or `null` when nobody is named (R42/S4).
+ *
+ * A person reads a list, not a comma-separated value: one name is itself, two are joined by the
+ * catalogue's connector ("Carl Sagan and Ann Druyan", "Carl Sagan y Ann Druyan"), and three or more
+ * take commas with the connector only before the last ("A, B and C"). **The connector comes from the
+ * catalogue in both languages**, never from a literal here: a hardcoded "and" is a second language
+ * inside the logic, and the Spanish interface would read like a translation nobody finished.
+ *
+ * It takes the DISPLAYED list — `entry.authors` — because the precedence is the core's
+ * (`oct_core::Document::display_authors`): the interface states who wrote a document, it never
+ * decides it.
+ *
+ * `null` for an empty list, and for a list of blanks, because a blank is not a name (R42/S2): the
+ * card then says nothing at all, instead of drawing the words "by " with nobody after them. Each name
+ * is trimmed for the same reason, and the order is the reader's, which is not re-sorted here.
+ */
+export function describeAuthors(names: readonly string[], t: Translate): string | null {
+  const stated = names.map((name) => name.trim()).filter((name) => name !== "");
+  if (stated.length === 0) {
+    return null;
+  }
+  if (stated.length === 1) {
+    return stated[0];
+  }
+  const connector = t("library.authorsAnd");
+  const last = stated[stated.length - 1];
+  return `${stated.slice(0, -1).join(", ")} ${connector} ${last}`;
 }
 
 /**
@@ -575,10 +682,10 @@ export function authorEditor(entry: LibraryEntry): { value: string; yours: boole
  * deriving it from the ten documents a page happens to hold is exactly how an author whose only
  * document sat on page two stopped existing (S1).
  *
- * **It offers the reader's own author as well as the resolved one, and that is where it differs from
- * [`filterAuthors`] (S4).** There the list is the set of documents the reader can choose between, so an
- * entry no card stands for would empty the shelf; here the list is a spelling suggestion, so a name the
- * reader typed once is useful even before a card shows it.
+ * **It offers the reader's own authors as well as the displayed ones, and that is where it differs
+ * from [`filterAuthors`] (S4).** There the list is the set of documents the reader can choose
+ * between, so an entry no card stands for would empty the shelf; here the list is a spelling
+ * suggestion, so a name the reader typed once is useful even before a card shows it.
  *
  * **Deduplication is by the trimmed value.** Two entries whose authors differ only by surrounding
  * spaces are one person and must appear once; the first spelling wins and the surrounding spaces are
@@ -591,7 +698,7 @@ export function authorEditor(entry: LibraryEntry): { value: string; yours: boole
 export function libraryAuthors(entries: readonly LibraryEntry[], locale = "en"): string[] {
   const seen = new Set<string>();
   for (const entry of entries) {
-    for (const candidate of [entry.author, entry.userAuthor]) {
+    for (const candidate of [...entry.authors, ...entry.readerAuthors]) {
       const trimmed = candidate?.trim() ?? "";
       if (trimmed !== "") {
         seen.add(trimmed);
@@ -782,9 +889,11 @@ export function editorRefreshesLibrary(commit: EditorCommit): boolean {
 /**
  * Whether a document matches a free-text query.
  *
- * Case-insensitive, and it searches both the title a reader sees and the path, because a reader
- * looking for a document may remember either. An empty or whitespace-only query matches
- * everything, so clearing the box restores the whole listing.
+ * Case-insensitive, and it searches the title a reader sees, the path they may remember, and **any**
+ * of the displayed authors (R42/S7): a document written by two people is found by either of their
+ * names, which is what "the search matches any of them" means. It reads the displayed list, so the
+ * search cannot disagree with the card above it about who wrote the document. An empty or
+ * whitespace-only query matches everything, so clearing the box restores the whole listing.
  */
 export function matchesQuery(entry: LibraryEntry, query: string): boolean {
   const needle = query.trim().toLowerCase();
@@ -793,7 +902,8 @@ export function matchesQuery(entry: LibraryEntry, query: string): boolean {
   }
   return (
     displayTitle(entry).toLowerCase().includes(needle) ||
-    entry.path.toLowerCase().includes(needle)
+    entry.path.toLowerCase().includes(needle) ||
+    entry.authors.some((author) => author.toLowerCase().includes(needle))
   );
 }
 
@@ -806,13 +916,17 @@ export function filterEntries(
 }
 
 /**
- * The authors the library's author selector offers (R39 / S2).
+ * The authors the library's author selector offers (R39 / S2, R42/S7).
  *
- * The list is the authors the **cards** show: `entry.author`, which the core already resolved to the
- * reader's author when they set one and the document's own otherwise. It deliberately does **not**
- * read `userAuthor`, which the editor's suggestions above do offer beside the resolved authors —
- * there a half-set name is useful, while here the list is the set of documents the reader can choose
- * from, and an entry no card stands for would be a choice that empties the shelf.
+ * The list is the authors the **cards** show: every entry of `entry.authors`, the displayed list the
+ * core already resolved to the reader's authors when they set any and to the document's own
+ * otherwise. It deliberately does **not** read `readerAuthors`, which the editor's suggestions above
+ * do offer beside the displayed names — there a half-set name is useful, while here the list is the
+ * set of documents the reader can choose from, and an entry no card stands for would be a choice
+ * that empties the shelf.
+ *
+ * **Every displayed author is offered, not only the first** (R42/S7): a co-authored document puts
+ * both names in the selector, or one of the people who wrote it would be unfindable.
  *
  * **Deduplication is by the trimmed value**, exactly as `libraryAuthors` does it: two entries whose
  * authors differ only by surrounding spaces are one person and must appear once, and a blank is not
@@ -827,9 +941,11 @@ export function filterEntries(
 export function filterAuthors(entries: readonly LibraryEntry[], locale = "en"): string[] {
   const seen = new Set<string>();
   for (const entry of entries) {
-    const trimmed = entry.author?.trim() ?? "";
-    if (trimmed !== "") {
-      seen.add(trimmed);
+    for (const candidate of entry.authors) {
+      const trimmed = candidate.trim();
+      if (trimmed !== "") {
+        seen.add(trimmed);
+      }
     }
   }
   return [...seen].sort((left, right) => left.localeCompare(right, locale));
@@ -845,14 +961,16 @@ export function filterAuthors(entries: readonly LibraryEntry[], locale = "en"): 
 export const ALL_AUTHORS = "";
 
 /**
- * The documents whose card shows `author`, in the order they arrived (R39 / S3).
+ * The documents with `author` among their displayed authors, in the order they arrived (R39 / S3,
+ * R42/S7).
  *
  * `ALL_AUTHORS` — and any blank value — is the whole listing, so the state's starting value and a
  * cleared selector need no branch at the call site.
  *
- * **The comparison is on the trimmed value.** The selector offers trimmed names (S2), so a document
- * whose stored author carries surrounding spaces would otherwise be missing from the very list that
- * offered it.
+ * **Any of the displayed authors matches** (R42/S7): choosing a co-author shows the document, which
+ * is the whole point of offering them in the list. The comparison is on the trimmed value, because
+ * the selector offers trimmed names (S2) and a document whose stored author carries surrounding
+ * spaces would otherwise be missing from the very list that offered it.
  */
 export function filterByAuthor(
   entries: readonly LibraryEntry[],
@@ -862,7 +980,9 @@ export function filterByAuthor(
   if (chosen === "") {
     return [...entries];
   }
-  return entries.filter((entry) => (entry.author ?? "").trim() === chosen);
+  return entries.filter((entry) =>
+    entry.authors.some((candidate) => candidate.trim() === chosen),
+  );
 }
 
 /**

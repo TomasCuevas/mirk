@@ -26,8 +26,8 @@ function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
     path: "/library/a.pdf",
     title: "A",
     userTitle: null,
-    author: null,
-    userAuthor: null,
+    authors: [],
+    readerAuthors: [],
     pages: 10,
     progress: {
       page: 0,
@@ -88,8 +88,8 @@ describe("Biblioteca without the folder-action outcome", () => {
  */
 describe("Biblioteca's author selector (R39)", () => {
   const entries = [
-    entry({ id: 1, title: "Cosmos", author: "Carl Sagan" }),
-    entry({ id: 2, title: "Ficciones", author: "Jorge Luis Borges" }),
+    entry({ id: 1, title: "Cosmos", authors: ["Carl Sagan"] }),
+    entry({ id: 2, title: "Ficciones", authors: ["Jorge Luis Borges"] }),
   ];
 
   it("draws the selector with the authors the cards show and an 'all' entry", () => {
@@ -113,7 +113,7 @@ describe("Biblioteca's author selector (R39)", () => {
 
   it("offers no author when no card has one, and still offers 'all'", () => {
     const { body } = render(LibraryScreen, {
-      props: libraryProps({ entries: [entry({ id: 3, author: null })] }),
+      props: libraryProps({ entries: [entry({ id: 3, authors: [] })] }),
     });
 
     expect(body).toContain(english("library.authorAll"));

@@ -13,8 +13,8 @@ function entries(count: number): LibraryEntry[] {
     path: `/library/${index}.pdf`,
     title: `Document ${index}`,
     userTitle: null,
-    author: null,
-    userAuthor: null,
+    authors: [],
+    readerAuthors: [],
     pages: 10,
     progress: {
       page: 1,
@@ -96,8 +96,8 @@ describe("the document editor", () => {
   });
 
   it("draws the author list as a real select, and no datalist", () => {
-    const first = document({ id: 1, author: "Ursula K. Le Guin", userAuthor: null });
-    const second = document({ id: 2, author: "Jorge Luis Borges", userAuthor: null });
+    const first = document({ id: 1, authors: ["Ursula K. Le Guin"], readerAuthors: [] });
+    const second = document({ id: 2, authors: ["Jorge Luis Borges"], readerAuthors: [] });
     const body = render(BookGrid, {
       props: { ...props, entries: [first, second], initialEditing: first },
     }).body;
@@ -120,7 +120,7 @@ describe("the document editor", () => {
   // holds one page cannot compute the authors of the whole library. What the screens compute is pinned
   // where the whole listing lives; this pins that the prop is what the control reads.
   it("draws the authors it is handed, not only the ones on the page it shows", () => {
-    const onThisPage = document({ id: 1, author: "Page One Author", userAuthor: null });
+    const onThisPage = document({ id: 1, authors: ["Page One Author"], readerAuthors: [] });
     const body = render(BookGrid, {
       props: { ...props, entries: [onThisPage], authors: ["Only Elsewhere"], initialEditing: onThisPage },
     }).body;
@@ -128,6 +128,50 @@ describe("the document editor", () => {
 
     expect(select).toContain('<option value="Only Elsewhere">');
     expect(select).not.toContain("Page One Author");
+  });
+
+  /** How many remove controls the editor drew — one per chip, and never more. */
+  function removeControls(body: string): number {
+    return (body.match(/aria-label="Remove /g) ?? []).length;
+  }
+
+  // R42/U30, rendered: ONE CHIP PER AUTHOR, in the reader's order, and each chip carries its own
+  // remove control NAMED after that author (S3). An icon with no name would leave two identical
+  // "remove" buttons and no way to know which name goes, so what is pinned here is the names.
+  it("draws one chip per author, in order, each with a remove control named after it", () => {
+    const body = open(
+      document({
+        authors: ["Carl Sagan", "Ann Druyan"],
+        readerAuthors: ["Carl Sagan", "Ann Druyan"],
+      }),
+    );
+
+    const first = english("card.authorRemove", { author: "Carl Sagan" });
+    const second = english("card.authorRemove", { author: "Ann Druyan" });
+    expect(body).toContain(first);
+    expect(body).toContain(second);
+    // The order on screen is the reader's, so the first chip's control comes first in the markup.
+    expect(body.indexOf(first)).toBeLessThan(body.indexOf(second));
+    expect(removeControls(body)).toBe(2);
+  });
+
+  // S6, on screen: the document's embedded author string starts as ONE chip, because splitting
+  // "Sagan, Carl; Druyan, Ann" would invent two people nobody wrote.
+  it("takes the embedded author string as one chip, not two", () => {
+    const body = open(
+      document({ authors: ["Sagan, Carl; Druyan, Ann"], readerAuthors: [] }),
+    );
+
+    expect(body).toContain("Sagan, Carl; Druyan, Ann");
+    expect(removeControls(body)).toBe(1);
+  });
+
+  it("draws no chip and no remove control for a document nobody is named on", () => {
+    const body = open(document({ authors: [], readerAuthors: [] }));
+
+    expect(removeControls(body)).toBe(0);
+    // The add field is still there — the way a name gets in, typed or chosen from the list.
+    expect(body).toContain(english("card.authorAddPlaceholder"));
   });
 
   it("offers to remove the image only once the reader supplied one", () => {

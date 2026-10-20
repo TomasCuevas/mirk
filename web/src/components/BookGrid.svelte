@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import type { Translate } from "../lib/i18n";
   import {
+    addAuthorChip,
     announceLibraryChanged,
     authorEditor,
     coverEditor,
@@ -11,6 +12,7 @@
     editorRefreshesLibrary,
     fetchCover,
     libraryAuthors,
+    removeAuthorChip,
     titleEditor,
     type EditorCommit,
     type LibraryEntry,
@@ -89,17 +91,22 @@
     return {
       entry: opened,
       draft: opened === null ? "" : titleEditor(opened).value,
-      author: opened === null ? "" : authorEditor(opened).value,
+      authors: opened === null ? [] : authorEditor(opened).chips,
       page: opened === null ? "" : coverEditor(opened).page,
       hasImage: opened === null ? false : coverEditor(opened).hasImage,
     };
   });
   let editing = $state<LibraryEntry | null>(seed.entry);
   let draft = $state(seed.draft);
-  // The reader's author draft, decided by the same Cancel/Save pair as the title. An EMPTY value is
-  // legitimate here ("no author of my own") and is sent as no value, unlike the title — the two fields
-  // share the pair of controls but not the blank rule.
-  let authorDraft = $state(seed.author);
+  // R42/U30: the author draft is the LIST the reader is building, one chip per author, in their order
+  // (S3). The chips ARE the value — there is no single name field any more — and an EMPTY list is
+  // legitimate here ("no author of my own"), unlike the title, which refuses a blank. The rules that
+  // decide what a chip is (trim, blank, duplicate, append, remove) live in `library.ts`, because a
+  // screen must not decide them.
+  let authorChips = $state<string[]>(seed.authors);
+  // The field where a NEW name arrives. It is not the value: it is empty between names, so the chip
+  // list is the only place an author can be, and Enter in it adds a chip rather than saving.
+  let authorInput = $state("");
   let saving = $state(false);
   let titleError = $state<string | null>(null);
   // R32: the cover's own draft and error, in the same editor as the title.
@@ -124,16 +131,31 @@
   // this prop: a page of ten cannot know the library's authors.
   const authorSuggestions = $derived(authors ?? libraryAuthors(entries));
 
-  // The list is a PICKER, not a second copy of the value: choosing a name fills the draft and the list
-  // goes back to its "choose an author" entry, so the reader can clear the field and pick the same name
-  // again — a select that still showed it would send no `change` on the second pick. The value stays
-  // where the reader can edit it, in the text field (S2: typing a brand-new author keeps working).
+  // The list is a PICKER, not a second copy of the value: choosing a name ADDS a chip and the list goes
+  // back to its "choose an author" entry, so a name that was added and then removed can be added again
+  // — a select that still showed it would send no `change` on the second pick (L70). Whether the name
+  // is already on the list — or blank — is decided by `addAuthorChip`, never here.
   function chooseAuthor(list: HTMLSelectElement): void {
     const chosen = list.value;
     list.value = "";
     if (chosen !== "") {
-      authorDraft = chosen;
+      addAuthor(chosen);
     }
+  }
+
+  // Adding appends at the end and refuses a blank or a name already on the list. Only an ACCEPTED name
+  // clears the field: a refused one would otherwise look as if it had been taken, which is exactly what
+  // the reader has to be able to see (`card.authorHint` says how to get back to the document's own).
+  function addAuthor(name: string): void {
+    const result = addAuthorChip(authorChips, name);
+    if (result.added) {
+      authorChips = result.chips;
+      authorInput = "";
+    }
+  }
+
+  function removeAuthor(name: string): void {
+    authorChips = removeAuthorChip(authorChips, name);
   }
 
   function openDocumentEditor(entry: LibraryEntry): void {
@@ -142,7 +164,8 @@
     const current = editorEntry(entries, entry);
     editing = current;
     draft = titleEditor(current).value;
-    authorDraft = authorEditor(current).value;
+    authorChips = authorEditor(current).chips;
+    authorInput = "";
     coverPageDraft = coverEditor(current).page;
     coverHasImage = coverEditor(current).hasImage;
     titleError = null;
@@ -176,13 +199,12 @@
       titleError = t("card.titleBlank");
       return;
     }
-    // The author's empty value is legitimate — no author of my own — so it is sent as an EMPTY value
-    // (`null`, which the command reads as "clear the reader's author") rather than refused, and it falls
-    // back to the document's own author. Absent is a different thing and this control never sends it: it
-    // means "say nothing about the author", which is Restore's decision alone. This is the deliberate
-    // difference from the title above, which refuses a blank because a document must have a title.
-    const author = authorDraft.trim();
-    await sendTitle(value, author === "" ? null : author);
+    // The CHIPS are the value now (R42/U30), so a save sends the reader's ordered list itself: trimmed
+    // and duplicate-free by construction, in the order the chips are drawn. An EMPTY list is still
+    // legitimate — "no author of my own" — and is sent as `[]` rather than refused. An ABSENT argument
+    // is a different thing and this control never sends it: it means "say nothing about the authors",
+    // which is Restore's decision alone.
+    await sendTitle(value, [...authorChips]);
   }
 
   async function restoreTitle(): Promise<void> {
@@ -192,16 +214,19 @@
   }
 
   // ONE command and ONE store write, because Save decides two facts in one action: the title and the
-  // author. Written as two commands it was two writes, and a failure between them left the title saved
+  // authors. Written as two commands it was two writes, and a failure between them left the title saved
   // while the screen reported an error implying nothing had been — a half-applied save.
   //
-  // `author` absent (`undefined`, which is what `JSON.stringify` drops from the arguments) means this
-  // action said NOTHING about the author, and the reader's author is left exactly as it was. That is
-  // Restore's decision, which restores the title and nothing else. `null` is different on purpose: it is
-  // Save saying "no author of my own", which clears the reader's author and falls back to the
-  // document's own. The `?` and the `| null` are that distinction, and the Rust command reads it the
+  // `authors` absent (`undefined`, which is what `JSON.stringify` drops from the arguments) means this
+  // action said NOTHING about the authors, and the reader's list is left exactly as it was. That is
+  // Restore's decision, which restores the title and nothing else. An EMPTY list is different on
+  // purpose: it is Save saying "no author of my own", which clears the reader's list and lets the
+  // document's own author show again. The `?` is that distinction, and the Rust command reads it the
   // same way.
-  async function sendTitle(title: string | null, author?: string | null): Promise<void> {
+  async function sendTitle(
+    title: string | null,
+    authors?: readonly string[],
+  ): Promise<void> {
     if (editing === null) {
       return;
     }
@@ -214,7 +239,7 @@
     saving = true;
     titleError = null;
     try {
-      await invoke("set_document_naming", { id: editing.id, title, author });
+      await invoke("set_document_naming", { id: editing.id, title, authors });
       settleEditorAfter("title");
     } catch (error) {
       // The message can be taken at its word: the write is one operation, so a failure means neither
@@ -373,24 +398,49 @@
     {/if}
 
     <!-- The author, in the SAME editor and decided by the same Cancel/Save pair as the title: the user
-         asked for it behind the pencil, never as another control on the card. Its empty value is
-         legitimate — leave it empty to fall back to the document's own author — which is the deliberate
-         difference from the title's blank refusal.
+         asked for it behind the pencil, never as another control on the card. An empty list is
+         legitimate — leaving no chip falls back to the document's own author — which is the
+         deliberate difference from the title's blank refusal.
 
-         R40/S2: the list of names is a real `<select>` beside the field, not a `<datalist>`. WebKitGTK —
-         the engine this window actually renders in — never implemented the `datalist` popup, so even a
-         complete list opened nothing. The field stays editable, because the reader must still be able to
-         type an author nobody in the library has yet. -->
-    <label class="title-field">
+         R42/U30: the value is a list of CHIPS, one per author, in the reader's order (S3). Each chip
+         carries its own remove control, and that control's accessible name NAMES its author — an icon
+         alone would leave two identical "remove" buttons and no way to know which name goes. The text
+         field below is how a NEW name arrives (Enter adds it), and the `<select>` is the way to reuse a
+         name the library already holds (R40/S2: a real select, because WebKitGTK — the engine this
+         window renders in — never implemented the `datalist` popup). -->
+    <div class="title-field">
       <span>{t(author.yours ? "card.authorLabelYours" : "card.authorLabel")}</span>
+      {#if authorChips.length > 0}
+        <ul class="author-chips">
+          {#each authorChips as name (name)}
+            <li class="author-chip">
+              <span class="author-chip-name">{name}</span>
+              <button
+                type="button"
+                class="author-chip-remove"
+                aria-label={t("card.authorRemove", { author: name })}
+                onclick={() => removeAuthor(name)}
+                disabled={saving || coverSaving}
+              >
+                ×
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
       <div class="author-row">
         <input
           type="text"
-          bind:value={authorDraft}
-          aria-label={t(author.yours ? "card.authorLabelYours" : "card.authorLabel")}
+          bind:value={authorInput}
+          placeholder={t("card.authorAddPlaceholder")}
+          aria-label={t("card.authorAdd")}
           onkeydown={(event) => {
             if (event.key === "Enter") {
-              void saveTitle();
+              // Enter ADDS a name here; it does not save. Saving is the button below, which now decides
+              // two facts — the title and the whole list — and a keystroke in one field must not commit
+              // both.
+              event.preventDefault();
+              addAuthor(authorInput);
             }
           }}
         />
@@ -404,7 +454,7 @@
           {/each}
         </select>
       </div>
-    </label>
+    </div>
     <p class="cover-hint">{t("card.authorHint")}</p>
 
     <!-- Two ROWS, and that is a decision rather than a wrapped line. Restore is a different kind of
@@ -550,6 +600,51 @@
   .author-row {
     display: flex;
     gap: 0.4rem;
+  }
+
+  /* R42/U30: the chips, one per author, wrapping in the reader's order. They sit above the field
+     because they are the VALUE — the field below only says how the next one gets in. */
+  .author-chips {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  .author-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.2rem 0.2rem 0.5rem;
+    border: 1px solid #ccd2da;
+    border-radius: 999px;
+    background: #f0f2f5;
+    font-size: 0.8rem;
+    color: #1c2024;
+  }
+
+  .author-chip-remove {
+    padding: 0 0.35rem;
+    border: none;
+    border-radius: 999px;
+    background: none;
+    color: #5a6472;
+    font: inherit;
+    font-size: 0.95rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .author-chip-remove:hover:not(:disabled) {
+    background: #dfe3e9;
+    color: #1c2024;
+  }
+
+  .author-chip-remove:disabled {
+    color: #9aa3af;
+    cursor: default;
   }
 
   .author-row input {

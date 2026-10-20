@@ -3198,6 +3198,72 @@ esten en los libros de la pagina actual y no de todos los PDF disponibles y carg
   it, and the regression test the user's report names: an author whose only document is on page two is offered
   in the editor opened from page one.
 
+### Specs — round 14: co-authors, and Ajustes that explains itself (R42, R43, L71)
+
+Two requests in one message, both product-level: *"Hay que mejorar la UI y el selector de autor en la edicion,
+para permitir coautores o simplemente, varios autores en una misma obra"* and *"Hay que mejorar la UI y la
+estructura en general de la pantalla Ajustes para permitir que los usuarios la comprendan con mayor facilidad,
+ya que no es nada intuitiva actualmente"*.
+
+Three decisions are the user's, asked before any code: the authors are a **real list in the database** (a join
+table, not a delimited string and not JSON); they are edited as **chips, one per author**; and Ajustes becomes an
+**index of three sub-screens**.
+
+**R42 — several authors per work, stored as facts.**
+
+- **S1 — schema V9 adds two tables and nothing else changes meaning.** `authors(id, name)` and
+  `document_authors(doc_id, author_id, position)`. The migration is forward-only, idempotent, and it preserves
+  every existing reader author: a non-blank `documents.user_author` becomes a one-entry list. A migration that
+  fails leaves the database at V8 with every row intact — that test is mandatory, because the project's data is
+  the reason it exists.
+- **S2 — one row per person, and a blank is never an author.** Deduplication is by the **trimmed name,
+  case-insensitively**: "Carl Sagan" and "carl sagan" are one person, and the spelling that arrives first wins so
+  an existing card does not silently change. A name that is only whitespace is refused, not stored as "".
+- **S3 — the order is the reader's order**, stored as `position` and preserved on read: "Carl Sagan, Ann Druyan"
+  and "Ann Druyan, Carl Sagan" are different lists and both are legitimate.
+- **S4 — the displayed authors follow one precedence rule, in one place.** The reader's list when it has any
+  entry; otherwise the document's **embedded** author string as a single entry; otherwise none. It lives where
+  the view is built, never in a screen, so card, filter and search cannot disagree about who wrote a document.
+- **S5 — the naming write is still ONE atomic write and it now carries a list.** `set_document_naming` takes the
+  title and the authors together: the field absent means "this action said nothing about the authors"; an empty
+  list means "no author of my own", which falls back to the embedded one; a list is trimmed, blank-free and
+  deduplicated in the order given. A failure leaves both the title and the authors exactly as they were.
+- **S6 — no guessing about the embedded string.** `"Sagan, Carl; Druyan, Ann"` in a PDF's metadata is **not**
+  split on commas, semicolons or "and": it is one string that one document's metadata happened to hold. Splitting
+  it would invent authors nobody wrote, which is the failure this project refuses everywhere. The reader can
+  replace it with a real list by typing the names they want.
+- **S7 — the filter and the search read the displayed list.** Choosing an author in the library filter shows
+  every document where *that* author appears in the displayed list; the free-text search matches **any** of them;
+  the filter's list is the unique set of every displayed author in the listing. `libraryAuthors` (the editor's
+  suggestion list) keeps offering what the reader has used.
+
+**R43 — Ajustes becomes an index of three sub-screens.**
+
+- **S1 — Ajustes is an index, not a wall.** Three rows — **Biblioteca**, **Lectura**, **Aplicación** — each with
+  its name and one plain sentence saying what lives inside. A person who opens Ajustes sees three choices, not
+  five unrelated blocks.
+- **S2 — each row opens its own screen, addressable by hash** (`#/settings/library`, `#/settings/reading`,
+  `#/settings/app`), so a reload keeps the reader where they were and Back/Forward keep working. Each sub-screen
+  has a back control that returns to the index, named after it.
+- **S3 — the contents move, they do not vanish.** Biblioteca: watched folders, the suggestion queue, and the
+  scan. Lectura: the progress providers (and future reading preferences). Aplicación: the interface language.
+  Every existing action keeps working, with its tests, from its new home.
+- **S4 — the copy explains instead of naming.** Each sub-screen says in one line what it is for, in both
+  languages and the neutral register; an empty state says what would fill it and how.
+- **S5 — nothing about the settings themselves changes.** This is a structure and copy change: no new setting, no
+  removed setting, no different default.
+
+### Tasks — round 14
+
+- **U28** R42/S1–S5 — schema V9, the `authors`/`document_authors` tables, the migration with its backfill and its
+  failure test, the store's author rules, the listing carrying the displayed list, and the naming write taking a
+  list (with `oct-desktop` adapted so the workspace stays green).
+- **U29** R42/S4–S7 (interface half) — the views and command carrying authors, the card saying "de X y Y", the
+  library filter and the free-text search reading the displayed list, and the catalogue strings.
+- **U30** R42 (editor) — the chips: add an author by typing or from the list, remove one with its own control,
+  ordered, saved in the same single write.
+- **U31** R43 — the index and the three sub-screens, the hash routes, the copy, and the tests.
+
 **L45 — the carousels' order: the most recently read document first (U13/R29).** The user asked that
 *"el ultimo elemento que se haya leido siempre aparezca primero … de mas reciente a más antiguo"*. The order
 lives in the same pure selector that decides which documents a category holds, so the carousel, a category's
@@ -3740,3 +3806,16 @@ pasarle a la grilla los autores de la página (`expected [ '', 'Page One Author'
 Two'`).
 
 SIN COMMITEAR, por la regla del usuario: esto queda en el árbol de trabajo hasta que él lo apruebe.
+
+**L71 — coautores: la migración V9, la revisión nativa que encontró seis defectos, y el circuito que se trabó dos veces.**
+El usuario pidió dos cosas en un mensaje: *"permitir coautores o simplemente, varios autores en una misma obra"* y *"mejorar la UI y la estructura en general de la pantalla Ajustes"*. Tres decisiones fueron suyas antes de escribir código: **lista real en la base** (tabla de unión, no texto con separadores ni JSON), **chips** en el editor, y Ajustes como **índice de tres sub-pantallas**. R42 quedó implementado y revisado; R43 (Ajustes) todavía no se empezó.
+
+LA MIGRACIÓN, Y SU PRUEBA SOBRE DATOS REALES. V9 agrega `authors(id, name, name_key UNIQUE)` y `document_authors(doc_id, author_id, position)`; el esquema hace de "una persona, una fila" una garantía (clave normalizada, no `NOCASE`, que sólo pliega ASCII) y guarda el orden del lector como `position`. `documents.user_author` se copia a la lista y **se retira** en la misma transacción: una columna que todavía guarda el nombre es un segundo hogar del mismo hecho. `documents.author` no se toca — es el string incrustado del PDF, de sólo lectura, y jamás se parte por comas, punto y coma ni "and". Antes del commit la migración corrió sobre la base del lector, con backup: 42 documentos intactos, 20 autores movidos a 20 entradas (17 personas), columna retirada, `integrity_check` ok, cero huérfanos. Backup en `oct.sqlite3.pre-v9-20261019-161908`.
+
+LA REVISIÓN NATIVA HIZO SU TRABAJO, DOS VECES. Primero rechazó el candidato completo por tamaño (`lens_context_budget_exceeded`, 19 archivos y 2.680 líneas): el usuario decidió partirlo en slices. El slice de datos pasó, y tres revisores más un refutador encontraron **seis defectos reales**, todos introducidos por mí: (1) el comando IPC renombrado de `author` a `authors` dejaba al cliente viejo sin escribir nada y respondiendo éxito; (2) mi `skip_serializing_if` en los campos temporales cambiaba `null` por "clave ausente". Corregidos: el comando acepta **las dos formas** (la lista gana), los campos vuelven a emitir `null`, y quedó documentado con la referencia al código de Tauri 2.12.3 que **no distingue `null` de clave ausente** en su deserializador de argumentos — una limitación que el contrato original ya tenía y que nadie había escrito.
+
+EL CIRCUITO SE TRABÓ DOS VECES, Y NO ERA MÍO. La primera lineage quedó en `correction_required` y el `capture-correction-plan` fue rechazado tres veces ("missing or stale for current STATUS") porque el `expected_revision` del binding no coincidía con la revisión de autoridad del mismo STATUS; se resolvió con `review.recover` (`scope_changed`) y una lineage sucesora. La segunda murió con `pi-host-relay-transport-failure`: el revisor `review-risk` terminó abruptamente. Tras un STATUS fresco, el mismo slot se reofreció y la corrida completa entró: **aprobada**, con un hallazgo consultivo ya refutado (R1-001, `main.rs:222`), sin acciones abiertas. La autoridad se quemó con su reconocimiento exacto.
+
+LOS DOS SLICES. El de datos quedó en `062dffe` (revisión nativa aprobada). El de interfaz —tarjeta con "de X y Y", filtro y búsqueda leyendo la lista, y los chips del editor con sus reglas puras (`addAuthorChip`, `removeAuthorChip`, `authorEditor`)— quedó verificado por mí (270 pruebas, typecheck 0/0) y **el propio ASSESS lo declara `reviewDue: false`** ("under_budget", riesgo medio): no es un candidato que la política mande revisar, y una corrida más de revisores sobre una mitad de interfaz cubierta por 270 pruebas queda como decisión del usuario.
+
+BOUNDARY, anotado porque el harness lo pide en cada commit: la rama lleva ~34.400 líneas cambiadas en 111 commits desde `main`; la estrategia de entrega (un PR, una cadena de slices, o merge) sigue siendo decisión del usuario, y cada ronda desde L45 sería su propio slice si se elige partirlo.

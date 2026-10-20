@@ -25,8 +25,8 @@ function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
     path: "/library/document.pdf",
     title: "document",
     userTitle: null,
-    author: null,
-    userAuthor: null,
+    authors: [],
+    readerAuthors: [],
     pages: 10,
     progress: {
       page: 0,
@@ -45,16 +45,16 @@ function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
  * so the pages order differs from the title order — which is what makes the sort's share of S3 visible.
  */
 const shelf: LibraryEntry[] = [
-  entry({ id: 1, path: "/library/cosmos.pdf", title: "Cosmos", author: "Carl Sagan", pages: 10 }),
-  entry({ id: 2, path: "/library/contact.pdf", title: "Contact", author: "Carl Sagan", pages: 300 }),
+  entry({ id: 1, path: "/library/cosmos.pdf", title: "Cosmos", authors: ["Carl Sagan"], pages: 10 }),
+  entry({ id: 2, path: "/library/contact.pdf", title: "Contact", authors: ["Carl Sagan"], pages: 300 }),
   entry({
     id: 3,
     path: "/library/ficciones.pdf",
     title: "Ficciones",
-    author: "Jorge Luis Borges",
+    authors: ["Jorge Luis Borges"],
     pages: 200,
   }),
-  entry({ id: 4, path: "/library/anonymous.pdf", title: "Anónimo", author: null, pages: 40 }),
+  entry({ id: 4, path: "/library/anonymous.pdf", title: "Anónimo", authors: [], pages: 40 }),
 ];
 
 /** The titles the grid is actually drawing, in order. */
@@ -230,14 +230,14 @@ describe("the editor's author list on a paged library", () => {
         id: index + 1,
         path: `/library/page-${index + 1}.pdf`,
         title: `page-${String(index + 1).padStart(2, "0")}`,
-        author: "Page One Author",
+        authors: ["Page One Author"],
       }),
     ),
     entry({
       id: 11,
       path: "/library/last.pdf",
       title: "page-11",
-      author: ONLY_ON_PAGE_TWO,
+      authors: [ONLY_ON_PAGE_TWO],
     }),
   ];
 
@@ -290,5 +290,96 @@ describe("the editor's author list on a paged library", () => {
     // …and the list offers the author whose only document is on page two, because the screen computed
     // it from the whole listing (S1).
     expect(offeredAuthors()).toContain(ONLY_ON_PAGE_TWO);
+  });
+});
+
+/**
+ * R42/S7: a document can be written by several people, and the selector and the search read the
+ * DISPLAYED list — the one the core resolved — so a co-author is as findable as the first name.
+ *
+ * Both names of the co-authored document are offered by the selector, choosing either of them leaves
+ * that document, and the free-text box finds it by either name too. What the reader sees is what is
+ * asserted: the options, the cards that remain, and the sentence on the card.
+ */
+describe("a co-authored document in Biblioteca (R42/S7)", () => {
+  let component: ReturnType<typeof mount> | null = null;
+
+  const coauthored: LibraryEntry[] = [
+    entry({
+      id: 1,
+      path: "/library/cosmos.pdf",
+      title: "Cosmos",
+      authors: ["Carl Sagan", "Ann Druyan"],
+      pages: 10,
+    }),
+    entry({
+      id: 2,
+      path: "/library/contact.pdf",
+      title: "Contact",
+      authors: ["Carl Sagan"],
+      pages: 300,
+    }),
+    entry({
+      id: 3,
+      path: "/library/ficciones.pdf",
+      title: "Ficciones",
+      authors: ["Jorge Luis Borges"],
+      pages: 200,
+    }),
+  ];
+
+  function render(): void {
+    component = mount(LibraryScreen, {
+      target: window.document.body,
+      props: {
+        entries: coauthored,
+        inFlight: false,
+        error: null,
+        locale: "en",
+        t: english,
+        onOpenFolder: () => {},
+        onOpenDocument: () => {},
+      },
+    });
+    flushSync();
+  }
+
+  afterEach(() => {
+    if (component !== null) {
+      unmount(component);
+      component = null;
+    }
+    window.document.body.innerHTML = "";
+  });
+
+  it("offers both co-authors, and draws the joined sentence on the card", () => {
+    render();
+    const options = [...(authorSelect()?.querySelectorAll("option") ?? [])].map(
+      (option) => option.value,
+    );
+
+    // Every displayed author is offered, the second name of a document included.
+    expect(options).toContain("Carl Sagan");
+    expect(options).toContain("Ann Druyan");
+    expect(authorLines()).toContain(
+      english("library.author", { author: "Carl Sagan and Ann Druyan" }),
+    );
+  });
+
+  it("narrows to the same document through either co-author", () => {
+    render();
+
+    choose(authorSelect(), "Ann Druyan");
+    expect(titles()).toEqual(["Cosmos"]);
+
+    choose(authorSelect(), "Carl Sagan");
+    expect(titles()).toEqual(["Contact", "Cosmos"]);
+  });
+
+  it("finds the document by a co-author in the free-text search", () => {
+    render();
+
+    type("druyan");
+    expect(titles()).toEqual(["Cosmos"]);
   });
 });

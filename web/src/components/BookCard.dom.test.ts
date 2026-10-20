@@ -22,8 +22,8 @@ function entry(): LibraryEntry {
     path: "/library/seven.pdf",
     title: "Document Seven",
     userTitle: null,
-    author: null,
-    userAuthor: null,
+    authors: [],
+    readerAuthors: [],
     pages: 10,
     progress: null,
   };

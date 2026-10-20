@@ -5,6 +5,7 @@ import {
   CATEGORY_REFRESH_MS,
   LIBRARY_REFRESH_MS,
   STALE_AFTER_SECONDS,
+  addAuthorChip,
   authorEditor,
   authorFilter,
   categoryEntries,
@@ -15,6 +16,7 @@ import {
   currentUnixSeconds,
   describeProgressView,
   describeProvenance,
+  describeAuthors,
   describeLibraryMessage,
   documentActionOutcome,
   describeProvider,
@@ -35,6 +37,7 @@ import {
   paginate,
   progressColor,
   progressFraction,
+  removeAuthorChip,
   sortEntries,
   startCategoryRefresh,
   startLibraryRefresh,
@@ -66,8 +69,8 @@ function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
     path: "/library/document.pdf",
     title: "document",
     userTitle: null,
-    author: null,
-    userAuthor: null,
+    authors: [],
+    readerAuthors: [],
     pages: null,
     progress: null,
     ...overrides,
@@ -439,34 +442,142 @@ describe("the title editor's rule (R31)", () => {
 /**
  * The author editor's rule.
  *
- * Its twin is the title editor, with one deliberate difference: an EMPTY author field is legitimate
- * — "no author of my own" — and falls back to the document's own author, while the title refuses a
- * blank because a document must have a title. The field is prefilled with the author on screen and
- * `yours` says whether it is the reader's, so the label can state whose it is.
+ * Its twin is the title editor, with one deliberate difference: an EMPTY chip list is legitimate —
+ * "no author of my own" — and falls back to the document's own author, while the title refuses a
+ * blank because a document must have a title.
+ *
+ * Since R42 the stored fact is an ORDERED LIST, so the editor is prefilled with a LIST of chips and
+ * never with one name: the reader's own list when they have one (S3: their order is the order), and
+ * otherwise the authors the card shows — which, for a document nobody has edited, is the embedded
+ * metadata string as ONE entry, the honest starting point rather than a split that would invent two
+ * people (S6). `yours` follows `readerAuthors`, so the label can state whose list is on screen.
  */
 describe("the author editor's rule", () => {
-  it("prefills with the author on screen, whoever it belongs to", () => {
-    expect(authorEditor({ ...entry(), author: "The document's own", userAuthor: null })).toEqual({
-      value: "The document's own",
-      yours: false,
-    });
-    expect(authorEditor({ ...entry(), author: "Mine", userAuthor: "Mine" })).toEqual({
-      value: "Mine",
-      yours: true,
-    });
+  it("prefills with the whole author list, in the order it was given", () => {
+    expect(
+      authorEditor({
+        ...entry(),
+        authors: ["Carl Sagan", "Ann Druyan"],
+        readerAuthors: ["Carl Sagan", "Ann Druyan"],
+      }),
+    ).toEqual({ chips: ["Carl Sagan", "Ann Druyan"], yours: true });
+
+    // S3: the other order is a different list and equally legitimate. Nothing re-sorts it.
+    expect(
+      authorEditor({
+        ...entry(),
+        authors: ["Ann Druyan", "Carl Sagan"],
+        readerAuthors: ["Ann Druyan", "Carl Sagan"],
+      }).chips,
+    ).toEqual(["Ann Druyan", "Carl Sagan"]);
   });
 
-  it("prefills with nothing when neither the document nor the reader has an author", () => {
-    // An empty field is the plain state for a document without an author; it is not an error, and
+  it("falls back to the displayed authors when the reader has none of their own", () => {
+    expect(
+      authorEditor({ ...entry(), authors: ["The document's own"], readerAuthors: [] }),
+    ).toEqual({ chips: ["The document's own"], yours: false });
+  });
+
+  it("takes an embedded author string as ONE entry, never split into people (S6)", () => {
+    // "Sagan, Carl; Druyan, Ann" is one string one document's metadata happened to hold. Splitting it
+    // would invent two authors nobody wrote, so it starts as one chip the reader can replace.
+    expect(
+      authorEditor({
+        ...entry(),
+        authors: ["Sagan, Carl; Druyan, Ann"],
+        readerAuthors: [],
+      }).chips,
+    ).toEqual(["Sagan, Carl; Druyan, Ann"]);
+  });
+
+  it("prefills with no chip when neither the document nor the reader has an author", () => {
+    // An empty list is the plain state for a document without an author; it is not an error, and
     // saving it unchanged keeps meaning "no author of my own".
-    expect(authorEditor(entry({ author: null, userAuthor: null }))).toEqual({
-      value: "",
+    expect(authorEditor(entry({ authors: [], readerAuthors: [] }))).toEqual({
+      chips: [],
       yours: false,
     });
   });
 
   it("treats a blank reader's author as no author, for the same reason a blank title is no title", () => {
-    expect(authorEditor({ ...entry(), author: "A", userAuthor: "   " }).yours).toBe(false);
+    expect(authorEditor({ ...entry(), authors: ["A"], readerAuthors: ["   "] })).toEqual({
+      chips: ["A"],
+      yours: false,
+    });
+  });
+});
+
+/**
+ * The chips' two rules, living in `library.ts` because a screen must not decide them (R42/S2–S3, U30).
+ *
+ * Adding is where the reader's order is protected: a name is trimmed before it becomes a chip, a
+ * blank is refused rather than stored as "", a duplicate is refused so the existing chip keeps both
+ * its spelling and its place, and a new name lands at the END. Removing takes out exactly the chip it
+ * names and leaves every other chip in the order the reader chose.
+ */
+describe("the author chips' rules", () => {
+  it("trims a name before it becomes a chip and appends it at the end", () => {
+    const first = addAuthorChip([], "  Carl Sagan  ");
+    expect(first).toEqual({ chips: ["Carl Sagan"], added: true });
+
+    const second = addAuthorChip(first.chips, "Ann Druyan");
+    expect(second).toEqual({ chips: ["Carl Sagan", "Ann Druyan"], added: true });
+  });
+
+  it("refuses a blank, and says so, so the field can keep what was typed", () => {
+    expect(addAuthorChip(["Carl Sagan"], "   ")).toEqual({
+      chips: ["Carl Sagan"],
+      added: false,
+    });
+    expect(addAuthorChip([], "")).toEqual({ chips: [], added: false });
+  });
+
+  it("refuses a duplicate compared trimmed and case-insensitively, keeping the existing chip in place", () => {
+    const chips = ["Carl Sagan", "Ann Druyan"];
+
+    // Nothing is reordered and the first spelling wins: the reader's order is never reshuffled by the
+    // act of typing a name the list already holds.
+    expect(addAuthorChip(chips, "  carl sagan ")).toEqual({
+      chips: ["Carl Sagan", "Ann Druyan"],
+      added: false,
+    });
+    expect(addAuthorChip(chips, "ANN DRUYAN")).toEqual({
+      chips: ["Carl Sagan", "Ann Druyan"],
+      added: false,
+    });
+  });
+
+  it("still refuses a duplicate when the existing chip carries surrounding spaces", () => {
+    expect(addAuthorChip([" Carl Sagan "], "carl sagan")).toEqual({
+      chips: [" Carl Sagan "],
+      added: false,
+    });
+  });
+
+  it("removes exactly the chip it names and keeps the rest in order", () => {
+    const chips = ["Carl Sagan", "Ann Druyan", "Neil deGrasse Tyson"];
+
+    expect(removeAuthorChip(chips, "Ann Druyan")).toEqual([
+      "Carl Sagan",
+      "Neil deGrasse Tyson",
+    ]);
+    expect(removeAuthorChip(chips, "Carl Sagan")).toEqual([
+      "Ann Druyan",
+      "Neil deGrasse Tyson",
+    ]);
+  });
+
+  it("compares a removal the same way it compares an add", () => {
+    // The trimmed, case-insensitive comparison is ONE rule, used by both halves: a chip that reads
+    // "Carl Sagan" is removable by the name the reader typed in another case.
+    expect(removeAuthorChip(["Carl Sagan", "Ann Druyan"], "  carl sagan ")).toEqual([
+      "Ann Druyan",
+    ]);
+  });
+
+  it("leaves the list untouched when the name is not on it", () => {
+    expect(removeAuthorChip(["Carl Sagan"], "Nobody")).toEqual(["Carl Sagan"]);
+    expect(removeAuthorChip([], "Nobody")).toEqual([]);
   });
 });
 
@@ -482,9 +593,9 @@ describe("the author editor's rule", () => {
 describe("the author suggestions", () => {
   it("offers every author the library already holds, without duplicates", () => {
     const entries = [
-      entry({ id: 1, author: "Ursula K. Le Guin", userAuthor: null }),
-      entry({ id: 2, author: "Jorge Luis Borges", userAuthor: null }),
-      entry({ id: 3, author: "Ursula K. Le Guin", userAuthor: "Ursula K. Le Guin" }),
+      entry({ id: 1, authors: ["Ursula K. Le Guin"], readerAuthors: [] }),
+      entry({ id: 2, authors: ["Jorge Luis Borges"], readerAuthors: [] }),
+      entry({ id: 3, authors: ["Ursula K. Le Guin"], readerAuthors: ["Ursula K. Le Guin"] }),
     ];
 
     expect(libraryAuthors(entries)).toEqual(["Jorge Luis Borges", "Ursula K. Le Guin"]);
@@ -496,8 +607,8 @@ describe("the author suggestions", () => {
   // what the cards show, because there a choice must have a document behind it.
   it("keeps the reader's own author that no card shows, which is where it differs from the filter", () => {
     const entries = [
-      entry({ id: 1, author: "Ursula K. Le Guin", userAuthor: "Le Guin" }),
-      entry({ id: 2, author: null, userAuthor: "Only The Reader's" }),
+      entry({ id: 1, authors: ["Ursula K. Le Guin"], readerAuthors: ["Le Guin"] }),
+      entry({ id: 2, authors: [], readerAuthors: ["Only The Reader's"] }),
     ];
 
     expect(libraryAuthors(entries)).toEqual(["Le Guin", "Only The Reader's", "Ursula K. Le Guin"]);
@@ -509,7 +620,7 @@ describe("the author suggestions", () => {
   // U+00C1, so a plain sort puts the accented name after every ASCII one, which is not where a Spanish
   // reader looks for it.
   it("orders the list the way the reader's locale reads it, not by code unit", () => {
-    const entries = [entry({ id: 1, author: "Borges" }), entry({ id: 2, author: "Ávila" })];
+    const entries = [entry({ id: 1, authors: ["Borges"] }), entry({ id: 2, authors: ["Ávila"] })];
 
     expect(libraryAuthors(entries, "es")).toEqual(["Ávila", "Borges"]);
     expect(["Borges", "Ávila"].sort()).toEqual(["Borges", "Ávila"]);
@@ -517,30 +628,30 @@ describe("the author suggestions", () => {
 
   it("does not offer the same author twice for spellings that differ only by surrounding spaces", () => {
     const entries = [
-      entry({ id: 1, author: "  Jorge Luis Borges  ", userAuthor: null }),
-      entry({ id: 2, author: "Jorge Luis Borges", userAuthor: "Jorge Luis Borges" }),
-      entry({ id: 3, author: null, userAuthor: " Jorge Luis Borges " }),
+      entry({ id: 1, authors: ["  Jorge Luis Borges  "], readerAuthors: [] }),
+      entry({ id: 2, authors: ["Jorge Luis Borges"], readerAuthors: ["Jorge Luis Borges"] }),
+      entry({ id: 3, authors: [], readerAuthors: [" Jorge Luis Borges "] }),
     ];
 
     expect(libraryAuthors(entries)).toEqual(["Jorge Luis Borges"]);
   });
 
   it("offers nothing when no document in the library has an author", () => {
-    expect(libraryAuthors([entry({ author: null, userAuthor: null }), entry({ id: 2 })])).toEqual(
+    expect(libraryAuthors([entry({ authors: [], readerAuthors: [] }), entry({ id: 2 })])).toEqual(
       [],
     );
   });
 });
 
 describe("the authors the selector offers (R39)", () => {
-  // S2. The list is the authors the CARDS show: `entry.author`, which the core already resolved to
-  // the reader's author when they set one and the document's own otherwise. Offering `userAuthor`
+  // S2. The list is the authors the CARDS show: `entry.authors`, which the core already resolved to
+  // the reader's authors when they set any and the document's own otherwise. Offering `readerAuthors`
   // beside it — which is what the editor's suggestions do, for a different purpose — would list a
   // name no card on the screen stands for, and the reader would pick it and see an empty shelf.
   it("offers the author each card shows, never the reader's own field", () => {
     const entries = [
-      entry({ id: 1, title: "A", author: "Ursula K. Le Guin", userAuthor: "Le Guin" }),
-      entry({ id: 2, title: "B", author: null, userAuthor: "Only The Reader's" }),
+      entry({ id: 1, title: "A", authors: ["Ursula K. Le Guin"], readerAuthors: ["Le Guin"] }),
+      entry({ id: 2, title: "B", authors: [], readerAuthors: ["Only The Reader's"] }),
     ];
 
     expect(filterAuthors(entries)).toEqual(["Ursula K. Le Guin"]);
@@ -551,14 +662,14 @@ describe("the authors the selector offers (R39)", () => {
   // the same person twice, or offer an unnamed entry they cannot recognise.
   it("offers each author once, trimmed, and never a blank", () => {
     const entries = [
-      entry({ id: 1, author: "  Jorge Luis Borges  " }),
-      entry({ id: 2, author: "Jorge Luis Borges" }),
-      entry({ id: 3, author: null }),
-      entry({ id: 4, author: "   " }),
+      entry({ id: 1, authors: ["  Jorge Luis Borges  "] }),
+      entry({ id: 2, authors: ["Jorge Luis Borges"] }),
+      entry({ id: 3, authors: [] }),
+      entry({ id: 4, authors: ["   "] }),
     ];
 
     expect(filterAuthors(entries)).toEqual(["Jorge Luis Borges"]);
-    expect(filterAuthors([entry({ author: null }), entry({ id: 2, author: " " })])).toEqual([]);
+    expect(filterAuthors([entry({ authors: [] }), entry({ id: 2, authors: [" "] })])).toEqual([]);
   });
 
   // S2's ordering clause: the list reads alphabetically to the PERSON, so it is sorted with their
@@ -566,7 +677,7 @@ describe("the authors the selector offers (R39)", () => {
   // "Á" is U+00C1, so a plain sort puts the accented name after every ASCII one, which is not where
   // a Spanish reader looks for it.
   it("orders the list the way the reader's locale reads it, not by code unit", () => {
-    const entries = [entry({ id: 1, author: "Borges" }), entry({ id: 2, author: "Ávila" })];
+    const entries = [entry({ id: 1, authors: ["Borges"] }), entry({ id: 2, authors: ["Ávila"] })];
 
     expect(filterAuthors(entries, "es")).toEqual(["Ávila", "Borges"]);
     expect(["Borges", "Ávila"].sort()).toEqual(["Borges", "Ávila"]);
@@ -575,10 +686,10 @@ describe("the authors the selector offers (R39)", () => {
 
 describe("filtering the listing by author (R39)", () => {
   const entries = [
-    entry({ id: 1, title: "Cosmos", author: "Carl Sagan" }),
-    entry({ id: 2, title: "Contact", author: "Carl Sagan" }),
-    entry({ id: 3, title: "Ficciones", author: "Jorge Luis Borges" }),
-    entry({ id: 4, title: "Anónimo", author: null }),
+    entry({ id: 1, title: "Cosmos", authors: ["Carl Sagan"] }),
+    entry({ id: 2, title: "Contact", authors: ["Carl Sagan"] }),
+    entry({ id: 3, title: "Ficciones", authors: ["Jorge Luis Borges"] }),
+    entry({ id: 4, title: "Anónimo", authors: [] }),
   ];
 
   // S1: the selector starts on "all", so "all" has to mean the whole listing — the same thing a
@@ -602,7 +713,7 @@ describe("filtering the listing by author (R39)", () => {
   // The list's values are trimmed, so the filter has to compare trimmed values too: otherwise a
   // document whose stored author carries spaces would be missing from the very list that offered it.
   it("matches the trimmed name, so a stored value with spaces still answers to it", () => {
-    const spaced = [entry({ id: 9, author: "  Jorge Luis Borges  " })];
+    const spaced = [entry({ id: 9, authors: ["  Jorge Luis Borges  "] })];
 
     expect(filterByAuthor(spaced, "Jorge Luis Borges").map((e) => e.id)).toEqual([9]);
   });
@@ -627,10 +738,10 @@ describe("filtering the listing by author (R39)", () => {
   it("clamps the page when the narrowing shrinks the listing under the reader", () => {
     const docs = [
       ...Array.from({ length: 22 }, (_, index) =>
-        entry({ id: index + 1, title: `Sagan ${index}`, author: "Carl Sagan" }),
+        entry({ id: index + 1, title: `Sagan ${index}`, authors: ["Carl Sagan"] }),
       ),
-      entry({ id: 90, title: "Ficciones", author: "Jorge Luis Borges" }),
-      entry({ id: 91, title: "El Aleph", author: "Jorge Luis Borges" }),
+      entry({ id: 90, title: "Ficciones", authors: ["Jorge Luis Borges"] }),
+      entry({ id: 91, title: "El Aleph", authors: ["Jorge Luis Borges"] }),
     ];
     const whole = paginate(sortEntries(docs, "title"), 3);
     expect(whole.page).toBe(3);
@@ -639,6 +750,68 @@ describe("filtering the listing by author (R39)", () => {
 
     expect(narrowed.page).toBe(1);
     expect(narrowed.items.map((e) => e.title)).toEqual(["El Aleph", "Ficciones"]);
+  });
+});
+
+/**
+ * R42/S4: the displayed authors are stated the way a person reads a list. The connector is the
+ * catalogue's, so Spanish says "y" where English says "and" — a hardcoded one would be a second
+ * language inside the logic.
+ */
+describe("stating a list of authors (R42/S4)", () => {
+  it("says one name as itself, in both languages", () => {
+    expect(describeAuthors(["Carl Sagan"], english)).toBe("Carl Sagan");
+    expect(describeAuthors(["Carl Sagan"], spanish)).toBe("Carl Sagan");
+  });
+
+  it("joins two names with the catalogue's connector, never a hardcoded one", () => {
+    expect(describeAuthors(["Carl Sagan", "Ann Druyan"], english)).toBe("Carl Sagan and Ann Druyan");
+    expect(describeAuthors(["Carl Sagan", "Ann Druyan"], spanish)).toBe("Carl Sagan y Ann Druyan");
+  });
+
+  it("joins three or more with commas and one connector before the last", () => {
+    expect(describeAuthors(["A", "B", "C"], english)).toBe("A, B and C");
+    expect(describeAuthors(["A", "B", "C", "D"], english)).toBe("A, B, C and D");
+    expect(describeAuthors(["A", "B", "C"], spanish)).toBe("A, B y C");
+  });
+
+  it("says nothing when nobody wrote it, and never invents a name from a blank", () => {
+    expect(describeAuthors([], english)).toBeNull();
+    expect(describeAuthors(["   "], spanish)).toBeNull();
+  });
+
+  it("states each name trimmed, because surrounding spaces are never part of a name", () => {
+    expect(describeAuthors(["  Carl Sagan  ", "Ann Druyan"], english)).toBe(
+      "Carl Sagan and Ann Druyan",
+    );
+  });
+});
+
+/**
+ * R42/S7: a document can be written by several people, and the filter and the search read the
+ * displayed list — the one the core resolved — so a co-author is as findable as the first name.
+ */
+describe("co-authors in the selector and the search (R42/S7)", () => {
+  const coauthored = [
+    entry({ id: 1, title: "Cosmos", authors: ["Carl Sagan", "Ann Druyan"] }),
+    entry({ id: 2, title: "Contact", authors: ["Carl Sagan"] }),
+    entry({ id: 3, title: "Ficciones", authors: ["Jorge Luis Borges"] }),
+  ];
+
+  it("offers every displayed author of a co-authored document", () => {
+    expect(filterAuthors(coauthored)).toEqual(["Ann Druyan", "Carl Sagan", "Jorge Luis Borges"]);
+  });
+
+  it("narrows to the same document through either co-author", () => {
+    expect(filterByAuthor(coauthored, "Ann Druyan").map((e) => e.title)).toEqual(["Cosmos"]);
+    expect(filterByAuthor(coauthored, "Carl Sagan").map((e) => e.title)).toEqual([
+      "Cosmos",
+      "Contact",
+    ]);
+  });
+
+  it("matches a co-author in the free-text search", () => {
+    expect(filterEntries(coauthored, "druyan").map((e) => e.title)).toEqual(["Cosmos"]);
   });
 });
 
@@ -661,8 +834,8 @@ describe("a chosen author who has left the library (R39)", () => {
 
   it("does it silently: the whole library comes back and no sentence mentions a filter", () => {
     const entries = [
-      entry({ id: 1, title: "Cosmos", author: "Carl Sagan" }),
-      entry({ id: 2, title: "Ficciones", author: "Jorge Luis Borges" }),
+      entry({ id: 1, title: "Cosmos", authors: ["Carl Sagan"] }),
+      entry({ id: 2, title: "Ficciones", authors: ["Jorge Luis Borges"] }),
     ];
     const chosen = authorFilter(["Carl Sagan"], "Jorge Luis Borges");
 
