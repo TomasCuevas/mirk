@@ -17,11 +17,13 @@
     coveringFolder,
     hashForScreen,
     hashForView,
+    navbarScreen,
     isScreen,
     viewFromHash,
     type FolderRefusal,
     type FolderRemoval,
     type Screen,
+    type SettingsSection,
     type View,
     type WatchedFolder,
   } from "./lib/screens";
@@ -44,6 +46,9 @@
   import LibraryScreen from "./components/LibraryScreen.svelte";
   import Navbar from "./components/Navbar.svelte";
   import SettingsScreen from "./components/SettingsScreen.svelte";
+  import SettingsAppScreen from "./components/SettingsAppScreen.svelte";
+  import SettingsLibraryScreen from "./components/SettingsLibraryScreen.svelte";
+  import SettingsReadingScreen from "./components/SettingsReadingScreen.svelte";
   import WindowBar from "./components/WindowBar.svelte";
 
   const inTauri = runningInTauri();
@@ -369,6 +374,14 @@
     window.location.hash = hashForView(next);
   }
 
+  // R43/S2: Ajustes' rows open a sub-screen that is a view of its own, so a reload lands there and
+  // Back returns to the index, exactly as a category does against Inicio.
+  function openSettingsSection(section: SettingsSection): void {
+    const next: View = { kind: "settings", section };
+    view = next;
+    window.location.hash = hashForView(next);
+  }
+
   // Window chrome actions are fire-and-forget: the top bar has nowhere to render an error, and a
   // failed window operation is a program error rather than user state. It goes to the console
   // instead of being silently discarded.
@@ -502,26 +515,22 @@
         onOpenFolder={openContainingFolder}
         onOpenDocument={openDocument}
       />
-    {:else if view.kind === "screen"}
-      <SettingsScreen
-        {providers}
-        {providerError}
+    {:else if view.kind === "settings" && view.section === "library"}
+      <SettingsLibraryScreen
         {folders}
         {foldersError}
-        {locale}
+        {suggestions}
+        {detector}
+        {suggestionError}
+        {deciding}
         {t}
         {scanning}
         {scanReport}
         {scanError}
-        {suggestions}
-        {suggestionError}
-        {detector}
-        {deciding}
+        onScan={scan}
+        onOpenFolder={openFolder}
         onOpenDocument={openSuggestionFolder}
         onDecide={decideSuggestion}
-        onScan={scan}
-        onLocale={chooseLocale}
-        onOpenFolder={openFolder}
         {removal}
         onAskRemoval={askRemoval}
         onConfirmRemoval={confirmRemoval}
@@ -529,8 +538,15 @@
         {refusal}
         onCloseRefusal={() => (refusal = null)}
         {inTauri}
+        onBack={() => selectScreen("settings")}
       />
-    {:else}
+    {:else if view.kind === "settings" && view.section === "reading"}
+      <SettingsReadingScreen {providers} {providerError} {t} onBack={() => selectScreen("settings")} />
+    {:else if view.kind === "settings"}
+      <SettingsAppScreen {locale} {t} onLocale={chooseLocale} onBack={() => selectScreen("settings")} />
+    {:else if view.kind === "screen" && view.screen === "settings"}
+      <SettingsScreen {t} onOpenSection={openSettingsSection} />
+    {:else if view.kind === "category"}
       <CategoryScreen
         category={view.category}
         {entries}
@@ -545,9 +561,9 @@
     {/if}
   </main>
 
-  <!-- A category list belongs to Inicio, so the navbar keeps Inicio marked while the reader is on
-       one, rather than marking nothing. -->
-  <Navbar screen={view.kind === "screen" ? view.screen : "home"} {t} onSelect={selectScreen} />
+  <!-- A category list belongs to Inicio and a settings sub-screen belongs to Ajustes, so the navbar
+       keeps the parent screen marked while the reader is inside one, rather than marking nothing. -->
+  <Navbar screen={navbarScreen(view)} {t} onSelect={selectScreen} />
 </div>
 
 <style>

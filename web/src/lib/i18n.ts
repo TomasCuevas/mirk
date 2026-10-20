@@ -155,7 +155,27 @@ recorded is not claimed here.",
   "provider.reason.unknown": "it is not present on this machine",
 
   "settings.heading": "Settings",
+  // R43/S1–S4. Ajustes is an index of three sub-screens, so each one needs its name, the one sentence
+  // the index says under it, and the one line the sub-screen says about itself. Nothing here is a new
+  // setting: it is the same five blocks, named, grouped and explained.
+  "settings.intro": "Each section groups one kind of setting.",
+  "settings.back": "Back to Settings",
+  "settings.library.title": "Library",
+  "settings.library.summary": "The folders oct reads and the documents waiting for your decision.",
+  "settings.library.purpose":
+    "What oct watches, which documents it saw you open elsewhere, and the scan that adds a folder.",
+  "settings.reading.title": "Reading",
+  "settings.reading.summary": "Which programmes can record where you are in a document.",
+  "settings.reading.purpose":
+    "The viewers oct can take a reading position from, and whether this machine has each one.",
+  "settings.app.title": "Application",
+  "settings.app.summary": "The language the interface and the tray are written in.",
+  "settings.app.purpose":
+    "The language of every word in this application, the tray menu included.",
   "settings.language.heading": "Language",
+  // R1: the choice is not the screen's private state — the desktop process builds the tray's words from
+  // the same stored value — so the selector says so instead of leaving the reader to discover it.
+  "settings.language.hint": "The tray menu and the next launch follow this choice.",
   "settings.folders.heading": "Watched folders",
   "settings.folders.loading": "Reading the folders the store has recorded…",
   "settings.folders.empty": "No folder has been recorded yet. A scan records one.",
@@ -326,7 +346,22 @@ fuente registró nunca no se listan acá.",
   "provider.reason.unknown": "no está presente en esta máquina",
 
   "settings.heading": "Ajustes",
+  "settings.intro": "Cada sección reúne un tipo de ajuste.",
+  "settings.back": "Volver a Ajustes",
+  "settings.library.title": "Biblioteca",
+  "settings.library.summary": "Las carpetas que oct lee y los documentos que esperan una decisión.",
+  "settings.library.purpose":
+    "Qué vigila oct, qué documentos le vio abrir en otro lado y el escaneo que agrega una carpeta.",
+  "settings.reading.title": "Lectura",
+  "settings.reading.summary": "Qué programas pueden registrar por dónde va en un documento.",
+  "settings.reading.purpose":
+    "Los visores de los que oct puede tomar una posición de lectura y si esta máquina tiene cada uno.",
+  "settings.app.title": "Aplicación",
+  "settings.app.summary": "El idioma en que se escriben la interfaz y la bandeja.",
+  "settings.app.purpose":
+    "El idioma de todas las palabras de esta aplicación, incluido el menú de la bandeja.",
   "settings.language.heading": "Idioma",
+  "settings.language.hint": "El menú de la bandeja y el próximo inicio siguen esta elección.",
   "settings.folders.heading": "Carpetas vigiladas",
   "settings.folders.loading": "Leyendo las carpetas que el almacén tiene registradas…",
   "settings.folders.empty": "Todavía no hay ninguna carpeta registrada. Un escaneo registra una.",

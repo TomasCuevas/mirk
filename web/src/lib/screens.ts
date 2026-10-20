@@ -49,12 +49,30 @@ export function hashForScreen(screen: Screen): string {
 }
 
 /**
- * A hash-named view: one of the navbar screens, or one home category's list on a screen of its own
- * (B2).
+ * A hash-named view: one of the navbar screens, one home category's list on a screen of its own (B2),
+ * or one of Ajustes' sub-screens (R43/S2).
  */
 export type View =
   | { readonly kind: "screen"; readonly screen: Screen }
-  | { readonly kind: "category"; readonly category: HomeCategory };
+  | { readonly kind: "category"; readonly category: HomeCategory }
+  | { readonly kind: "settings"; readonly section: SettingsSection };
+
+/**
+ * The three sections Ajustes is an index of (R43/S1).
+ *
+ * The user's report was that Ajustes was *"nada intuitiva"*, and the shape they chose when asked was an
+ * index of three sub-screens rather than five unrelated blocks on one page. The order is theirs —
+ * Biblioteca, Lectura, Aplicación — and it is the order the index renders in.
+ */
+export type SettingsSection = "library" | "reading" | "app";
+
+/** Every settings section, in the index's order. */
+export const settingsSections: readonly SettingsSection[] = ["library", "reading", "app"];
+
+/** Whether a string names a settings section. Anything else is not a sub-screen. */
+export function isSettingsSection(value: string): value is SettingsSection {
+  return (settingsSections as readonly string[]).includes(value);
+}
 
 /**
  * The view a hash names, defaulting to Inicio.
@@ -62,22 +80,84 @@ export type View =
  * A category list is a screen of its own rather than a flag on Inicio (B2), so a reload or a shared
  * link lands on the list the reader was looking at. An unknown category falls back to Inicio, the
  * same way [`screenFromHash`] falls back for an unknown screen.
+ *
+ * A settings sub-screen is a view of its own for the same reason (R43/S2), and its fallback is
+ * different on purpose: an unknown category belongs to a screen the reader did not ask for, while an
+ * unknown sub-screen belongs to Ajustes — so it lands on the index, with the three choices in front of
+ * them, rather than on Inicio.
  */
 export function viewFromHash(hash: string): View {
   const name = hashName(hash);
-  const prefix = "category/";
-  if (name.startsWith(prefix)) {
-    const category = name.slice(prefix.length);
+
+  const categoryPrefix = "category/";
+  if (name.startsWith(categoryPrefix)) {
+    const category = name.slice(categoryPrefix.length);
     if (isHomeCategory(category)) {
       return { kind: "category", category };
     }
   }
+
+  const settingsPrefix = "settings/";
+  if (name.startsWith(settingsPrefix)) {
+    const section = name.slice(settingsPrefix.length);
+    if (isSettingsSection(section)) {
+      return { kind: "settings", section };
+    }
+    return { kind: "screen", screen: "settings" };
+  }
+
   return { kind: "screen", screen: isScreen(name) ? name : "home" };
 }
 
 /** The hash that names a view. The inverse of [`viewFromHash`]. */
 export function hashForView(view: View): string {
-  return view.kind === "category" ? `#/category/${view.category}` : hashForScreen(view.screen);
+  if (view.kind === "category") {
+    return `#/category/${view.category}`;
+  }
+  if (view.kind === "settings") {
+    return `#/settings/${view.section}`;
+  }
+  return hashForScreen(view.screen);
+}
+
+/**
+ * The navbar destination a view belongs to.
+ *
+ * A category list belongs to Inicio and a settings sub-screen belongs to Ajustes, so the navbar keeps
+ * that destination marked while the reader is inside one rather than marking nothing — which would
+ * leave them with no answer to "where am I". The rule lives here, once, because it is the same rule
+ * for every kind of view and a screen must not carry its own version of it.
+ */
+export function navbarScreen(view: View): Screen {
+  switch (view.kind) {
+    case "category":
+      return "home";
+    case "settings":
+      return "settings";
+    case "screen":
+      return view.screen;
+  }
+}
+
+/** The name of one settings section, as the index and the sub-screen's own heading show it. */
+export function settingsSectionTitle(section: SettingsSection, t: Translate): string {
+  return t(`settings.${section}.title`);
+}
+
+/**
+ * The one sentence the index says under a section's name, saying what lives inside it (R43/S1).
+ *
+ * It is a separate string from the sub-screen's purpose line on purpose: the index answers "what is in
+ * there" for a reader choosing, and the sub-screen answers "what is this for" for a reader who has
+ * already chosen. One sentence doing both jobs would be the wall this round removed.
+ */
+export function settingsSectionSummary(section: SettingsSection, t: Translate): string {
+  return t(`settings.${section}.summary`);
+}
+
+/** The one line a sub-screen states about itself, saying what it is for (R43/S4). */
+export function settingsSectionPurpose(section: SettingsSection, t: Translate): string {
+  return t(`settings.${section}.purpose`);
 }
 
 /** The navbar label for a screen. */
