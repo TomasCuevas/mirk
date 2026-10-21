@@ -64,11 +64,15 @@ warning: a screenshot of a crashed page is not evidence about design.
 | ID | Specs | Task | Route | Commit |
 | --- | --- | --- | --- | --- |
 | T1 | S1, S2, S2.1, S4, S5 | Write `scripts/capture-ui.mjs`: seed, matrix, scroll-container full page, console gate | inline | `fc4db32` |
-| T2 | S3 D4, S3.1 | Author one step below the title: `--text-xs` and `--fg-muted` | inline | 2 |
-| T3 | S3 D3, S3.2 | Draw the pager only when `pageCount > 1`, with a DOM test that fails first | inline | 2 |
+| T2 | S3 D4, S3.1 | Author one step below the title: `--text-xs` and `--fg-muted` | inline | `ac9ce39` |
+| T3 | S3 D3, S3.2 | Draw the pager only when `pageCount > 1`, with a DOM test that fails first | inline | `ac9ce39` |
 | T4 | S3 D1, D2, D7 | Dropped: each is a recorded decision, not a defect (S3.3) | — | — |
 | T5 | S3 D5, D6 | Dropped: measurement disproved both claims | — | — |
-| T6 | S1 | Re-capture and confirm both fixes in the image, then report | inline | 2 |
+| T6 | S1 | Re-capture and confirm both fixes in the image, then report | inline | `ac9ce39` |
+
+Verified before closing: `bun run typecheck` 0 errors and 0 warnings; `bun run test` 333 passed in 19
+files (the new pager test is one of them); a fresh `node scripts/capture-ui.mjs` reported no
+exceptions and the captures show the pager gone and the author a clear step under the title.
 
 ## Log
 
