@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>oct — previsualización de estilo (documento de decisión, no código de la app)</title>
+    <style>
+      /* ------------------------------------------------------------------
+         Este archivo NO es parte de la aplicación. Es un banco de pruebas
+         para decidir dirección visual: mismo marcado, cuatro juegos de
+         tokens. Nada de acá se importa desde web/src.
+         ------------------------------------------------------------------ */
+
+      *, *::before, *::after { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        padding: 2rem 1.5rem 4rem;
+        background: #101214;
+        color: #d9dde1;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.5;
+      }
+
+      .intro { max-width: 78ch; margin: 0 auto 2.5rem; }
+      .intro h1 { font-size: 1.1rem; letter-spacing: .02em; margin: 0 0 .4rem; }
+      .intro p { margin: 0 0 .6rem; color: #9aa4ad; font-size: .9rem; }
+      .intro code { font-size: .85em; background: #1b2024; padding: .1em .35em; border-radius: 3px; }
+
+      .bench {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        gap: 2rem 1.5rem;
+        max-width: 1560px;
+        margin: 0 auto;
+      }
+
+      .col { display: flex; flex-direction: column; gap: .9rem; }
+      .col > h2 {
+        margin: 0;
+        font-size: .82rem;
+        font-weight: 600;
+        letter-spacing: .12em;
+        text-transform: uppercase;
+        color: #7f8a93;
+      }
+      .col > h2 b { color: #e8ecef; letter-spacing: .04em; text-transform: none; font-size: .95rem; display: block; margin-top: .15rem; }
+
+      /* ---------- el marco: 430×844, la ventana real, escalada ---------- */
+      .frame {
+        width: 430px;
+        height: 844px;
+        transform-origin: top left;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        font-size: 16px;
+      }
+      .stage {
+        /* reserva el espacio del marco ya escalado, para que el grid no se rompa */
+        --scale: .78;
+        width: calc(430px * var(--scale));
+        height: calc(844px * var(--scale));
+        position: relative;
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 18px 50px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.06);
+      }
+      .stage > .frame { transform: scale(var(--scale)); }
+
+      /* =================== TOKENS POR VARIANTE =================== */
+
+      .frame[data-theme="actual"] {
+        --bg: #f6f7f9;
+        --surface: #ffffff;
+        --surface-2: #f0f2f5;
+        --ink: #1c2024;
+        --muted: #5a6472;
+        --border: #e2e6eb;
+        --border-strong: #ccd2da;
+        --accent: #24506b;
+        --accent-ink: #ffffff;
+        --track: #e8ebef;
+        --radius-card: .75rem;
+        --radius-ctl: .4rem;
+        --font-head: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --num: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --shadow: none;
+      }
+
+      /* A — papel y tinta */
+      .frame[data-theme="papel"] {
+        --bg: #f5f0e6;
+        --surface: #fffdf8;
+        --surface-2: #ece4d6;
+        --ink: #1e1b17;
+        --muted: #6a6155;
+        --border: #e0d7c8;
+        --border-strong: #cdc1ad;
+        --accent: #8c2f28;
+        --accent-ink: #fffdf8;
+        --track: #e5ddcf;
+        --radius-card: .5rem;
+        --radius-ctl: .35rem;
+        --font-head: "Iowan Old Style", "Palatino Linotype", "URW Palladio L", "Book Antiqua", Georgia, serif;
+        --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --num: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --shadow: 0 1px 0 rgba(30,27,23,.04);
+      }
+
+      /* B — instrumento (oscuro) */
+      .frame[data-theme="instrumento"] {
+        --bg: #0f1214;
+        --surface: #171b1e;
+        --surface-2: #1f2529;
+        --ink: #ece9e2;
+        --muted: #8b959c;
+        --border: #262d32;
+        --border-strong: #364046;
+        --accent: #e0a458;
+        --accent-ink: #1a1206;
+        --track: #262d32;
+        --radius-card: .6rem;
+        --radius-ctl: .35rem;
+        --font-head: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --num: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+        --shadow: none;
+      }
+
+      /* C — editorial claro */
+      .frame[data-theme="editorial"] {
+        --bg: #fbfaf8;
+        --surface: #ffffff;
+        --surface-2: #f1f4f3;
+        --ink: #191d1f;
+        --muted: #5d686e;
+        --border: #e4e8e6;
+        --border-strong: #c9d2ce;
+        --accent: #1d5f57;
+        --accent-ink: #ffffff;
+        --track: #e8ecea;
+        --radius-card: .65rem;
+        --radius-ctl: .4rem;
+        --font-head: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --num: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --shadow: 0 1px 2px rgba(25,29,31,.04);
+      }
+
+      /* =================== EL MARCO =================== */
+
+      .frame { background: var(--bg); color: var(--ink); font-family: var(--font-body); }
+
+      .topbar {
+        flex: none;
+        height: 2.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 .25rem 0 .8rem;
+        background: var(--ink);
+        color: var(--bg);
+        font-size: .92rem;
+        font-weight: 700;
+        letter-spacing: .1em;
+      }
+      .frame[data-theme="instrumento"] .topbar { background: #0a0c0e; color: var(--ink); }
+      .topbar .dots { display: flex; gap: .35rem; opacity: .75; }
+      .topbar .dots i { width: .7rem; height: .7rem; border-radius: 50%; background: currentColor; opacity: .35; }
+
+      .screen {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
+        padding: 1.1rem .8rem .9rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      h1 {
+        margin: 0;
+        font-family: var(--font-head);
+        font-size: 1.5rem;
+        font-weight: 700;
+        letter-spacing: -.01em;
+      }
+      .frame[data-theme="papel"] h1 { font-weight: 600; font-size: 1.6rem; }
+      .frame[data-theme="instrumento"] h1 { font-size: 1.35rem; letter-spacing: -.02em; }
+
+      .carousel { display: flex; flex-direction: column; gap: .55rem; }
+      .carousel-head { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
+      .carousel-head h2 {
+        margin: 0;
+        font-family: var(--font-head);
+        font-size: 1.02rem;
+        font-weight: 650;
+        color: var(--ink);
+      }
+      .carousel-head button {
+        border: none; background: none; padding: 0;
+        color: var(--accent); font: inherit; font-size: .78rem; font-weight: 600;
+        cursor: pointer;
+      }
+
+      .strip {
+        display: flex; gap: .75rem; overflow: hidden; padding-bottom: .35rem;
+      }
+
+      .card {
+        flex: 0 0 10.6rem;
+        display: flex; flex-direction: column; gap: .4rem;
+        padding: .6rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow);
+      }
+
+      .cover {
+        aspect-ratio: 9 / 11;
+        border: 1px dashed var(--border-strong);
+        border-radius: var(--radius-ctl);
+        background: repeating-linear-gradient(45deg,
+          var(--bg), var(--bg) 8px,
+          var(--surface-2) 8px, var(--surface-2) 16px);
+        position: relative;
+      }
+      .cover .page {
+        position: absolute; bottom: .3rem; right: .3rem;
+        padding: .12rem .35rem;
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius-ctl);
+        font-size: .68rem; color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .title {
+        margin: 0;
+        font-size: .88rem;
+        line-height: 1.3;
+        font-weight: 600;
+        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+        overflow: hidden;
+      }
+      .frame[data-theme="papel"] .title { font-family: var(--font-head); font-weight: 600; font-size: .95rem; }
+
+      .author { margin: 0; font-size: .72rem; color: var(--muted); }
+
+      .progress { margin-top: auto; display: flex; flex-direction: column; gap: .25rem; }
+      .bar { position: relative; height: .45rem; border-radius: 999px; background: var(--track); margin: .6rem 0 .2rem; }
+      .fill {
+        position: absolute; inset: 0 auto 0 0; border-radius: inherit;
+        /* la rampa de progreso es una decisión ya tomada (R38): no se toca acá */
+      }
+      .marker {
+        position: absolute; top: 50%; transform: translate(-50%, -50%);
+        left: var(--at);
+        width: 3.4em; box-sizing: border-box;
+        border: 1px solid var(--border-strong); border-radius: 999px;
+        background: var(--surface); color: var(--ink);
+        font-size: .72rem; font-variant-numeric: tabular-nums; text-align: center;
+        white-space: nowrap;
+      }
+      .prov { margin: 0; font-size: .68rem; color: var(--muted); }
+
+      .navbar {
+        flex: none;
+        display: flex; gap: .25rem;
+        padding: .4rem .5rem;
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+      }
+      .frame[data-theme="instrumento"] .navbar { background: #0a0c0e; }
+      .navbar button {
+        flex: 1 1 0; min-width: 0;
+        padding: .5rem .4rem;
+        border: none; border-radius: var(--radius-ctl);
+        background: transparent; color: var(--muted);
+        font: inherit; font-size: .82rem; cursor: pointer;
+      }
+      .navbar button.active { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+      /* =================== FICHA DE TOKENS =================== */
+      .tokens { display: flex; flex-direction: column; gap: .35rem; font-size: .78rem; }
+      .swatches { display: flex; flex-wrap: wrap; gap: .3rem; }
+      .sw { display: flex; align-items: center; gap: .3rem; padding: .18rem .4rem .18rem .18rem; border: 1px solid #2a3238; border-radius: 999px; color: #a8b2ba; }
+      .sw i { width: 1rem; height: 1rem; border-radius: 50%; display: block; }
+      .ratios { color: #8b959c; font-variant-numeric: tabular-nums; }
+      .ratios b { color: #d9dde1; font-weight: 600; }
+      .bad .val { color: #f2776b; }
+      .good .val { color: #86d39b; }
+      .note { color: #7f8a93; font-size: .76rem; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="intro">
+      <h1>oct — banco de pruebas visual</h1>
+      <p>
+        Cuatro juegos de tokens sobre <b>el mismo marcado</b>: la barra superior, un carrusel de Inicio con
+        tres tarjetas y la navbar. La ventana es la real (430 × 844, fija), escalada al 78 %.
+      </p>
+      <p>
+        Lo que cambia entre variantes: color, tipografía, radios, bordes y sombras. Lo que
+        <b>no</b> cambia: la rampa de progreso (decisión R38), la estructura de pantallas, y el hecho de que
+        el número va sobre la barra. La primera columna es <code>data-theme="actual"</code>, el estado de hoy,
+        para comparar.
+      </p>
+    </div>
+
+    <div class="bench" id="bench"></div>
+
+    <template id="frame-tpl">
+      <div class="stage"><div class="frame">
+        <div class="topbar"><span>oct</span><span class="dots"><i></i><i></i><i></i></span></div>
+        <div class="screen">
+          <h1>Inicio</h1>
+
+          <section class="carousel">
+            <div class="carousel-head"><h2>Leyendo ahora</h2><button>Ver todo</button></div>
+            <div class="strip">
+              <article class="card">
+                <div class="cover"><span class="page">471 pág.</span></div>
+                <h3 class="title">Cien años de soledad</h3>
+                <p class="author">de Gabriel García Márquez</p>
+                <div class="progress">
+                  <div class="bar"><span class="fill" style="width:62%;background:#c9a227"></span><span class="marker" style="--at:clamp(1.7em,62%,calc(100% - 1.7em))">62 %</span></div>
+                  <p class="prov">registrado por oct</p>
+                </div>
+              </article>
+              <article class="card">
+                <div class="cover"><span class="page">194 pág.</span></div>
+                <h3 class="title">La invención de Morel</h3>
+                <p class="author">de Adolfo Bioy Casares</p>
+                <div class="progress">
+                  <div class="bar"><span class="fill" style="width:91%;background:#3c9a5f"></span><span class="marker" style="--at:clamp(1.7em,91%,calc(100% - 1.7em))">91 %</span></div>
+                  <p class="prov">registrado por Evince</p>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="carousel">
+            <div class="carousel-head"><h2>Empezados hace mucho</h2><button>Ver todo</button></div>
+            <div class="strip">
+              <article class="card">
+                <div class="cover"><span class="page">148 pág.</span></div>
+                <h3 class="title">El Aleph</h3>
+                <p class="author">de Jorge Luis Borges</p>
+                <div class="progress">
+                  <div class="bar"><span class="fill" style="width:18%;background:#b8452f"></span><span class="marker" style="--at:clamp(1.7em,18%,calc(100% - 1.7em))">18 %</span></div>
+                  <p class="prov">registrado al cerrar Evince</p>
+                </div>
+              </article>
+              <article class="card">
+                <div class="cover"><span class="page">312 pág.</span></div>
+                <h3 class="title">Los siete locos</h3>
+                <p class="author">de Roberto Arlt</p>
+                <div class="progress">
+                  <div class="bar"><span class="fill" style="width:44%;background:#c06a2a"></span><span class="marker" style="--at:clamp(1.7em,44%,calc(100% - 1.7em))">44 %</span></div>
+                  <p class="prov">registrado por oct</p>
+                </div>
+              </article>
+            </div>
+          </section>
+        </div>
+        <nav class="navbar"><button class="active">Inicio</button><button>Biblioteca</button><button>Ajustes</button></nav>
+      </div></div>
+    </template>
+
+    <script>
+      const variants = [
+        {
+          id: "actual",
+          label: "Referencia",
+          name: "Actual (lo que hay hoy)",
+          tone: "Neutro frío + azul petróleo. Funciona, pero no dice nada: es el default de cualquier panel.",
+          tokens: ["--bg", "--surface", "--ink", "--muted", "--border", "--accent"],
+          pairs: [["--ink", "--bg"], ["--muted", "--bg"], ["--accent-ink", "--accent"]],
+        },
+        {
+          id: "papel",
+          label: "A — Papel y tinta",
+          name: "Cálido · literario · serif en títulos",
+          tone: "Fondo papel, tinta casi negra, un solo acento carmín (tela de libro). El carmín aparece poco y por eso pesa.",
+          tokens: ["--bg", "--surface", "--surface-2", "--ink", "--muted", "--border", "--accent"],
+          pairs: [["--ink", "--bg"], ["--muted", "--bg"], ["--accent-ink", "--accent"], ["--accent", "--bg"]],
+        },
+        {
+          id: "instrumento",
+          label: "B — Instrumento",
+          name: "Oscuro · preciso · ámbar de lámpara",
+          tone: "La lectura como medición: superficies casi negras, cifras tabulares, un ámbar que ilumina. Es el que más se aparta de lo genérico.",
+          tokens: ["--bg", "--surface", "--surface-2", "--ink", "--muted", "--border", "--accent"],
+          pairs: [["--ink", "--bg"], ["--muted", "--bg"], ["--accent-ink", "--accent"], ["--accent", "--bg"]],
+        },
+        {
+          id: "editorial",
+          label: "C — Editorial claro",
+          name: "Evolución medida del actual",
+          tone: "Mismo esqueleto, menos cromo: blanco cálido, hairlines, verde verdigris en lugar del azul. El cambio de menor riesgo.",
+          tokens: ["--bg", "--surface", "--surface-2", "--ink", "--muted", "--border", "--accent"],
+          pairs: [["--ink", "--bg"], ["--muted", "--bg"], ["--accent-ink", "--accent"], ["--accent", "--bg"]],
+        },
+      ];
+
+      const tpl = document.getElementById("frame-tpl");
+      const bench = document.getElementById("bench");
+      const frames = {};
+
+      for (const v of variants) {
+        const col = document.createElement("div");
+        col.className = "col";
+        col.innerHTML = `<h2>${v.label}<b>${v.name}</b></h2>`;
+        const node = tpl.content.cloneNode(true);
+        const frame = node.querySelector(".frame");
+        frame.dataset.theme = v.id;
+        col.appendChild(node);
+        frames[v.id] = frame;
+
+        const info = document.createElement("div");
+        info.className = "tokens";
+        info.innerHTML = `<div class="swatches"></div><div class="ratios"></div><p class="note">${v.tone}</p>`;
+        col.appendChild(info);
+        bench.appendChild(col);
+        v._info = info;
+      }
+
+      // Los ratios se calculan del CSS aplicado, no se escriben a mano.
+      function lum(rgb) {
+        const [r, g, b] = rgb.map((c) => {
+          const s = c / 255;
+          return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      }
+      function parse(css) {
+        const m = css.match(/rgba?\(([^)]+)\)/);
+        if (!m) return null;
+        return m[1].split(",").slice(0, 3).map((n) => parseFloat(n));
+      }
+      function varValue(frame, name) {
+        const raw = getComputedStyle(frame).getPropertyValue(name).trim();
+        const tmp = document.createElement("div");
+        tmp.style.color = raw;
+        document.body.appendChild(tmp);
+        const rgb = parse(getComputedStyle(tmp).color);
+        tmp.remove();
+        return { raw, rgb };
+      }
+      function ratio(a, b) {
+        const la = lum(a), lb = lum(b);
+        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+      }
+
+      for (const v of variants) {
+        const frame = frames[v.id];
+        const sw = v._info.querySelector(".swatches");
+        for (const t of v.tokens) {
+          const { raw } = varValue(frame, t);
+          const chip = document.createElement("span");
+          chip.className = "sw";
+          chip.innerHTML = `<i style="background:${raw}"></i>${t.replace("--", "")} ${raw}`;
+          sw.appendChild(chip);
+        }
+        const ratios = v._info.querySelector(".ratios");
+        const parts = v.pairs.map(([fg, bg]) => {
+          const f = varValue(frame, fg), b = varValue(frame, bg);
+          const r = ratio(f.rgb, b.rgb);
+          const cls = r >= 4.5 ? "good" : r >= 3 ? "warn" : "bad";
+          return `<span class="${cls}">${fg.replace("--", "")} / ${bg.replace("--", "")} = <span class="val">${r.toFixed(1)}:1</span></span>`;
+        });
+        ratios.innerHTML = parts.join(" &nbsp;·&nbsp; ") + "<br /><span class='note'>AA texto normal ≥ 4.5:1 · AA texto grande ≥ 3:1</span>";
+      }
+    </script>
+  </body>
+</html>
