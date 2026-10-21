@@ -52,3 +52,6 @@ spike/parser/target/
 
 # CodeGraph index (a tool artifact, not part of the product)
 .codegraph/
+
+# Engram project binding and local sync chunks
+.engram/

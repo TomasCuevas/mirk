@@ -124,3 +124,66 @@ A direct read of each original id now fails, and each copy reads back with `proj
   session.
 - The **empty `~/.git` at `/home/tomas-cuevas`** that caused the misattribution is still present. It
   also underlies risk R6. Removing it is a user decision, outside this repository's scope.
+
+---
+
+# Second relocation: `oct` → `mirk` (product rename, 2026-10-21)
+
+The product was renamed `oct` → `mirk`, and Engram keys a project by the **git root**, not by the
+folder name: `mem_current_project` returned `{"project":"oct","project_source":"git_root"}`. So the
+rename would have split one repository's history across two keys — 61 observations, 183 prompts and
+93 sessions stranded under a name nothing would query again.
+
+## What the supported paths actually do (measured, not assumed)
+
+| Attempt | Result |
+| --- | --- |
+| `engram projects merge --from oct --to mirk --dry-run` | Refused: "must be a distinct separator variant or Unicode normalization variant of canonical project" — it repairs `My-App` vs `my-app`, not renames. |
+| `engram projects rescue-ownership --project mirk --observation 5951` | Refused: `owned_by_other_project (owner: oct)`. The command moves *orphans*, not records that belong to a live project. |
+| `engram import` with the export rewritten to `mirk` | `1 skipped stale`: deduplicates by `sync_id`, so an existing record is never copied to another project. |
+| `POST /projects/migrate {source_project, target_project, confirmed:true}` | Same handler as `rescue-ownership`: "provide a target project and at least one positive record ID". The v1.10.0 bulk migration was replaced by this stricter rescue semantics; a project rename is still an open request (upstream issue #508). |
+
+Conclusion: **Engram 3.4.0 has no project rename.** The choice was to keep ids or to keep the
+history whole; the owner chose the ids.
+
+## The method, exercised on a copy first
+
+1. Consistent snapshot of the live database (a raw `cp` is wrong: the WAL held 46 MB):
+   `VACUUM INTO '/tmp/engram-backup-20261021T134535.db'` — 123.8 MB, taken before any write.
+2. The exact transaction, rehearsed on a second instance (`ENGRAM_DATA_DIR=/tmp/engram-test`,
+   port 7438) where the FTS search still answered and only after that run against the real database:
+
+   ```sql
+   BEGIN IMMEDIATE;
+   UPDATE observations      SET project = 'mirk' WHERE project = 'oct';
+   UPDATE observations_fts  SET project = 'mirk' WHERE project = 'oct';
+   UPDATE user_prompts      SET project = 'mirk' WHERE project = 'oct';
+   UPDATE prompts_fts       SET project = 'mirk' WHERE project = 'oct';
+   UPDATE sessions          SET project = 'mirk' WHERE project = 'oct';
+   UPDATE sessions          SET id = replace(id, '@oct', '@mirk') WHERE id LIKE '%@oct';
+   COMMIT;
+   ```
+
+3. Verification, from the live server (port 7437), not from the file:
+
+   | Check | Result |
+   | --- | --- |
+   | `projects list` | `mirk` 59 obs / 93 sessions / 183 prompts; `oct` gone |
+   | `search webkitgtk --project mirk` | `#5951 … project: mirk` — the id survived |
+   | `search webkitgtk --project oct` | `unknown project: oct` |
+   | `context mirk` | serves the migrated sessions |
+
+## What was deliberately not touched
+
+- **`sync_mutations` (21 003 rows), `prompt_tombstones`, `sync_delete_tombstones`,
+  `sync_apply_deferred`, `cloud_upgrade_state`**: these are an *audit log of what happened under the
+  old name*, and `sync_enrolled_projects` is empty — no cloud target exists, so nothing replays. A log
+  that says `oct` is accurate; rewriting it would be the one edit that destroys evidence.
+- **`topic_key` values** such as `oct/r12/webkitgtk-pdfjs-rendering-spike`: they are content, not an
+  index. Rewriting them would break the `mem_save` upsert match for the topics they name.
+- **Observation, prompt and session ids**: unchanged by construction — the reason this route was
+  chosen over export/import.
+
+A project binding now exists at `.engram/config.json` (`{"project_name":"mirk"}`), gitignored, so the
+next session resolves `mirk` from configuration instead of from whatever the folder happens to be
+called.
