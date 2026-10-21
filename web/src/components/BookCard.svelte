@@ -422,6 +422,18 @@
     margin: auto 0 0;
   }
 
+  /* The author is a fact about the title, never a second title.
+
+     It used to inherit the card's base size (14 px) while the title is `--text-sm` (13 px), so the
+     author was a pixel LARGER than the name it belongs to, in the same colour and at regular weight.
+     On a card whose author line is longer than its title, the subordinate fact therefore won the
+     eye. One step down to `--text-xs` and one contrast step down to `--fg-muted` puts it under the
+     title, and still a step above the provenance underneath it, which is `--fg-subtle`. */
+  .author {
+    font-size: var(--text-xs);
+    color: var(--fg-muted);
+  }
+
   /* The number is placed on the bar itself, so the statement is the bar's own geometry rather than a
      caption beside it. The clamp is the honest compromise: a number has width, so at the very ends it
      is nudged inside the bar instead of hanging off it. **The inset is measured, not guessed**: the

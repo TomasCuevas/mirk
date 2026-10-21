@@ -21,20 +21,35 @@ screenshot is a failure of this feature, not a workaround for it.
 S2.1: commit 1 must not modify `web/src/lib/tauri.ts`. The seed is injected by the capture script;
 the application's shared IPC bridge stays untouched.
 
-**S3 — the defects the loop found, each verified against source, not inferred from a canvas.**
+**S3 — the defects the loop found, and what measurement did to each claim.**
 
-| # | Screen | Defect |
-| --- | --- | --- |
-| D1 | Home | The horizontal carousel's next/prev button floats **over the cover art** of the trailing card, with no inset. |
-| D2 | Home | An empty section renders a full-size ghost card (~185×215 CSS px, diagonal stripes, "Nothing here yet.") that outranks the real content above it. |
-| D3 | Library | Pagination (`‹ 1 ›`) renders **above** the grid, orphaned in a gap between the filters and the cards — and renders at all when there is only one page. |
-| D4 | Library + Home | The author line carries the same size and nearly the same weight as the document title, so the two do not separate. |
-| D5 | Library + Home | The provenance sentence ("recorded when Evince closed") overflows the card and is clipped by its right edge. |
-| D6 | All | The bottom navbar's active pill has a fixed width while inactive items are content-width, so the three labels are spread unevenly. |
-| D7 | Settings | The three section cards have no navigation affordance: no chevron, no hover state. They read as static text. |
+The first pass read seven findings off the captures. Measuring them in the live page (geometry and
+computed styles, not the canvas) confirmed two, disproved three, and found two to be deliberate
+choices documented in the source. The verdict column is the specification now; a claim that was
+never measured is not a task.
 
-Verified **not** a defect: the percentage pill sitting on the progress bar is deliberate
-(`BookCard.svelte`: `left: clamp(2.1em, var(--at), calc(100% - 2.1em))`). It is not in scope.
+| # | Screen | Claim | Verdict |
+| --- | --- | --- | --- |
+| D1 | Home | The carousel arrow floats over the cover art | **Deliberate.** `.strip-arrow` is an absolute overlay with its own scrim (`rgba(7,8,10,.78)`), an accessible name, and a `disabled` state at each end (R15) |
+| D2 | Home | An empty section renders a full-size ghost card | **Deliberate.** HomeScreen B1 reserves the cover slot on purpose and already made it shorter than a populated carousel |
+| D3 | Library | Pagination renders above the grid | **Half.** The placement is the reader's own request (R10, L22, L27). The real defect is that it renders **at all with one page** — measured: `pageCount` 1 and the strip still drawn |
+| D4 | Library + Home | The author line outranks the title | **Confirmed, and worse than claimed.** Measured: title `13px/600`, author `14px/400`, both `rgb(244,244,246)`. The author is a pixel *larger* than the name it belongs to |
+| D5 | Library + Home | The provenance sentence overflows the card | **Disproved.** `.provenance` is 192 px wide with `scrollWidth` 192 and `white-space: normal`, in a 206 px card: it fits. The clipped text in the capture was the *second card*, cut by the carousel's own viewport |
+| D6 | All | The navbar items are spread unevenly | **Disproved.** Measured: three items of 135 px at x = 8, 147, 287 |
+| D7 | Settings | The section cards have no navigation affordance | **Half.** `.section:hover` exists (background and border both change), so "no hover state" was wrong. No chevron remains — a judgment, not a defect, and the source records the cards as one target on purpose |
+
+In scope: D4 and the single-page case of D3.
+
+**S3.1 — the hierarchy rule for D4.** On a card, the title outranks the author, and the author
+outranks the provenance. Three sizes are not required, but the order is: title `--text-sm` semibold
+in `--fg`, author `--text-xs` in `--fg-muted`, provenance `--text-xs` in `--fg-subtle`.
+
+**S3.2 — the rule for D3.** The pager renders only when there is a page to turn (`pageCount > 1`).
+Its position above and below the grid is untouched.
+
+**S3.3 — what is not in scope, and why.** D1, D2, the pager's placement and D7's missing chevron are
+recorded decisions in the source, each with the reader's own words behind it. Reversing them is a
+product decision, not a defect fix, and this feature does not make it.
 
 **S4 — the capture matrix is the shipped window, quoted from `crates/mirk-desktop/tauri.conf.json`.**
 Width 430, height 844, `resizable: false`, `maxWidth`/`maxHeight` equal. Captures are 430×844 at
@@ -48,15 +63,12 @@ warning: a screenshot of a crashed page is not evidence about design.
 
 | ID | Specs | Task | Route | Commit |
 | --- | --- | --- | --- | --- |
-| T1 | S1, S2, S2.1, S4, S5 | Write `scripts/capture-ui.mjs`: seed, matrix, scroll-container full page, console gate | inline | 1 |
-| T2 | S3 D1 | Inset the carousel controls so they never sit on cover art | inline | 2 |
-| T3 | S3 D2 | Make the empty section slot compact instead of a full ghost card | inline | 2 |
-| T4 | S3 D3 | Move pagination below the grid and hide it for a single page | inline | 2 |
-| T5 | S3 D4 | Separate title from author in size and colour | inline | 2 |
-| T6 | S3 D5 | Stop the provenance sentence from overflowing the card | inline | 2 |
-| T7 | S3 D6 | Give the navbar's three items equal width | inline | 2 |
-| T8 | S3 D7 | Give the settings section cards a chevron and a hover state | inline | 2 |
-| T9 | S1 | Re-capture and confirm every fix in the screenshot, then report | inline | 2 |
+| T1 | S1, S2, S2.1, S4, S5 | Write `scripts/capture-ui.mjs`: seed, matrix, scroll-container full page, console gate | inline | `fc4db32` |
+| T2 | S3 D4, S3.1 | Author one step below the title: `--text-xs` and `--fg-muted` | inline | 2 |
+| T3 | S3 D3, S3.2 | Draw the pager only when `pageCount > 1`, with a DOM test that fails first | inline | 2 |
+| T4 | S3 D1, D2, D7 | Dropped: each is a recorded decision, not a defect (S3.3) | — | — |
+| T5 | S3 D5, D6 | Dropped: measurement disproved both claims | — | — |
+| T6 | S1 | Re-capture and confirm both fixes in the image, then report | inline | 2 |
 
 ## Log
 
@@ -80,3 +92,20 @@ document-level capture silently yields one viewport.
 with no `grim`, `gnome-screenshot` or xdg-desktop-portal screenshot path, and `xwd` cannot see
 Wayland surfaces. Chrome renders layout and hierarchy faithfully enough to judge those; it is not
 proof of WebKitGTK paint fidelity.
+
+**L6 (measured, and it corrected S3)** — Six of the seven findings were re-checked in the live page
+(`/tmp/probe2.mjs`: geometry plus computed styles, over the same seed). Result: title `13px/600` vs
+author `14px/400` (D4 confirmed and worse); `.provenance` 192/192 px in a 206 px card (D5 disproved);
+navbar items 135 px at x = 8/147/287 (D6 disproved); `.strip-arrow` has its own scrim and disabled
+states (D1 deliberate); HomeScreen's empty slot is documented as reserved on purpose (D2 deliberate);
+`.section:hover` exists (D7 half wrong); the pager's placement above the grid is the reader's own
+request (D3 half wrong — only the single-page case survived).
+
+**L7** — The capture script earned its keep before it fixed anything: the three disproved claims were
+the ones read off pixels alone. Measuring in the page is the step that turns a screenshot into a
+finding, and it is the difference between improving the interface and rewriting decisions the reader
+already made.
+
+**L8** — Delivery note: the branch `feat/phase-1-core` is already ~124 commits ahead of `main`, far
+past the ~400-line review slice. The two commits of this feature are small and self-contained, but
+the branch as a whole needs a delivery strategy (chained PRs) before it is reviewable.

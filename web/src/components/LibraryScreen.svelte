@@ -173,6 +173,10 @@
   <!-- One definition of the page controls, rendered above and below the grid (R10, L27). The buttons
        move the window over the same filtered, sorted listing, so turning a page keeps the filters. -->
   {#snippet pager()}
+    <!-- A pager with nothing to turn is not a control, it is noise: with one page the arrows are
+         already disabled, and `< 1 >` above the grid still claims there is more to see. The snippet
+         carries the condition itself rather than its two call sites, so the copies cannot disagree. -->
+    {#if paged.pageCount > 1}
     <!-- R15: the reader asked for the familiar strip — arrows at the ends and the pages in between —
          instead of two sentences ("previous page", "next page") that made pagination the ugliest part
          of the screen. The numbers come from `pageWindow`, which decides which pages are worth
@@ -218,6 +222,7 @@
         </svg>
       </button>
     </nav>
+    {/if}
   {/snippet}
 </section>
 

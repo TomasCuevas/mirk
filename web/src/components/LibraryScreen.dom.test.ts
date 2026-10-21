@@ -485,3 +485,38 @@ describe("a page turn asks the shell for the top", () => {
     expect(onResetScroll).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * A pager that cannot move is a control with no meaning.
+ *
+ * The library in this file is four documents at ten per page: one page. Both arrows are already
+ * disabled, but drawing `< 1 >` still tells the reader there is something to turn to, and it does so
+ * above the grid, where it holds the space a filter row would use. The pager stays exactly where it
+ * is whenever there IS a page to turn — that placement was the reader's own request (L22, L27) — so
+ * what this proves is the single-page case only.
+ */
+describe("a single page draws no pager", () => {
+  it("draws no page controls when every document fits on one page", () => {
+    const component = mount(LibraryScreen, {
+      target: window.document.body,
+      props: {
+        entries: shelf,
+        inFlight: false,
+        error: null,
+        locale: "en",
+        t: english,
+        onOpenFolder: () => {},
+        onOpenDocument: () => {},
+        onResetScroll: () => {},
+      },
+    });
+    flushSync();
+
+    const pager = window.document.querySelector(
+      `nav[aria-label="${english("library.pagination")}"]`,
+    );
+
+    expect(pager).toBeNull();
+    unmount(component);
+  });
+});
