@@ -86,6 +86,23 @@ page counting parse actual PDFs: without the library they **fail** with a messag
 remedies rather than passing without checking anything. Set `MIRK_PDFIUM_LIB` to point at a specific
 library file or directory instead.
 
+## Developing
+
+```bash
+bun run tauri dev
+```
+
+One command, and the app updates while you work. The Tauri CLI runs `bun run dev` first (Vite on
+`:1420`), then builds and opens the window pointed at that server: a change to a `.svelte` or `.ts`
+file reaches the running window without a restart, and a change under `crates/` rebuilds the Rust
+side and relaunches it. Both the hook and the URL are declared in
+[`crates/mirk-desktop/tauri.conf.json`](crates/mirk-desktop/tauri.conf.json).
+
+Because `devUrl` is set, **a debug build always expects the dev server**: running the binary on its
+own (`cargo run -p mirk-desktop`) opens an empty window unless `bun run dev` is already listening.
+That is the price of a live loop, and it is why the loop goes through the CLI. For interface work in
+isolation, `bun run dev` in a browser is enough — see “Looking at the interface” below.
+
 ## Looking at the interface
 
 The desktop window is a fixed 430×844 shape (`resizable: false`), so the interface is judged at

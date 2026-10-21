@@ -4,6 +4,9 @@
   "version": "0.0.1",
   "identifier": "dev.mirk.desktop",
   "build": {
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build",
+    "devUrl": "http://localhost:1420",
     "frontendDist": "../../web/dist"
   },
   "app": {
