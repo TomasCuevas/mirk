@@ -1,6 +1,6 @@
 # Feature: Mirk — identity, typography, screens, and the name
 
-Status: **in progress**
+Status: **done** — implementation and verification complete; delivery (push/PR/merge) is the user's decision
 Created: 2026-10-20
 Engram mirror: `odd/mirk-ui/tasks`
 Supersedes the naming decision recorded in `odd/tasks/pdf-progress-tracker.md` ("Product name: `oct`").
@@ -31,10 +31,13 @@ says otherwise.
 **S2 — typography, quoted verbatim.**
 > "Copiar la tipografia de la WEB"
 
-`Inter` for interface text, `Instrument Serif` for screen titles, `JetBrains Mono` for numerals that
-are compared (page counts, percentages). All three are **bundled locally** under `web/public/fonts/`
-with their OFL licence texts: a desktop application cannot fetch a font at runtime, and the project
-already records every licence it ships.
+`Inter` for interface text, `Instrument Serif` for screen titles, and `Inter`'s tabular figures for
+the numerals that are compared (page counts, percentages). **Two** fonts are bundled locally under
+`web/public/fonts/` with their OFL licence texts: a desktop application cannot fetch a font at
+runtime, and the project already records every licence it ships. **Amendment (L7, measured):** this
+spec first named `JetBrains Mono` for those numerals. It was not bundled, because the only numerals
+that are compared fit Inter's tabular figures and mirk displays no code; the licence texts actually
+shipped are `OFL-Inter.txt` and `OFL-InstrumentSerif.txt`.
 
 **S3 — scope, quoted verbatim.**
 > "Rediseño de pantallas también"
@@ -121,30 +124,32 @@ evidence, not asserted.
 
 | ID | Task | Specs | Route | Commit |
 | --- | --- | --- | --- | --- |
-| T1 | Design tokens + bundled fonts + global styles | S1, S2, S6 | inline | **done** (uncommitted) |
-| T2 | Shell: top bar, navbar, scroll surface | S1, S3 | inline | **done** (uncommitted) |
-| T3 | Card and grid: surface, ramp, numerals | S1, S3, S5 | worker | **done** (uncommitted) |
-| T4 | Inicio, Biblioteca, Categoría: hierarchy | S1, S3 | worker | **done** (uncommitted) |
-| T5 | Ajustes (index + 3) and Modal | S1, S3 | worker | **done** (uncommitted) |
-| T6 | Rename `oct` → `loci`, data adoption | S4 | worker + parent | **done** (uncommitted) |
-| T7 | README, this record, licence notices | S1–S4 | inline | pending |
+| T1 | Design tokens + bundled fonts + global styles | S1, S2, S6 | inline | **done** — `0f1b428` |
+| T2 | Shell: top bar, navbar, scroll surface | S1, S3 | inline | **done** — `0f1b428` |
+| T3 | Card and grid: surface, ramp, numerals | S1, S3, S5 | worker | **done** — `fa1cb93` |
+| T4 | Inicio, Biblioteca, Categoría: hierarchy | S1, S3 | worker | **done** — `fa1cb93` |
+| T5 | Ajustes (index + 3) and Modal | S1, S3 | worker | **done** — `fa1cb93` |
+| T6 | Rename `oct` → `loci`, data adoption | S4 | worker + parent | **done** — `fceebf2` (as `mirk`) |
+| T7 | README, this record, licence notices | S1–S4 | inline | **done** — `fceebf2`, `0f1b428`, `5f446ef` |
 | T8 | Verification: tests, typecheck, build, real screen | all | parent | **done, with one residual** |
-| T9 | Inicio: carousel arrows, no scrollbar, "Lista completa →" | S7 | inline | **done** (uncommitted) |
-| T10 | Biblioteca: numbered pagination, selects, cover fill, count, 100 % | S8 | inline | **done** (uncommitted) |
-| T11 | Ajustes: back arrow, Library and Application structure | S9 | inline | **done** (uncommitted) |
-| T12 | Window chrome: three strokes in one hand | S10 | inline | **done** (uncommitted) |
-| T13 | Copy: both catalogues, in the catalogue's own register | S10 | inline | **done** (uncommitted) |
+| T9 | Inicio: carousel arrows, no scrollbar, "Lista completa →" | S7 | inline | **done** — `fa1cb93` |
+| T10 | Biblioteca: numbered pagination, selects, cover fill, count, 100 % | S8 | inline | **done** — `fa1cb93` |
+| T11 | Ajustes: back arrow, Library and Application structure | S9 | inline | **done** — `fa1cb93` |
+| T12 | Window chrome: three strokes in one hand | S10 | inline | **done** — `fa1cb93` |
+| T13 | Copy: both catalogues, in the catalogue's own register | S10 | inline | **done** — `fa1cb93` |
 | T14 | Verification of the round | S7–S10 | parent | **done** |
-| T15 | Editor: two groups, combobox author field, icon buttons, cover preview | S11 | inline | **done** (uncommitted) |
-| T16 | Pagination: vertical breathing room | S12 | inline | **done** (uncommitted) |
-| T17 | Hide icon: an eye with a slash, not a download | S13 | inline | **done** (uncommitted) |
+| T15 | Editor: two groups, combobox author field, icon buttons, cover preview | S11 | inline | **done** — `fa1cb93` |
+| T16 | Pagination: vertical breathing room | S12 | inline | **done** — `fa1cb93` |
+| T17 | Hide icon: an eye with a slash, not a download | S13 | inline | **done** — `fa1cb93` |
 | T18 | Verification of the round | S11–S13 | parent | **done** |
-| T19 | Cover source as a stored fact (schema V10), UI switch, tests | S18 | inline | **done** (uncommitted) |
+| T19 | Cover source as a stored fact (schema V10), UI switch, tests | S18 | inline | **done** — `fceebf2` (schema), `fa1cb93` (UI) |
 | T20 | Verification of the round | S18 | parent | **done** |
+| T21 | Close the rename: the last `oct` names in code and the spike path, and this record's reconciliation | S4 | inline | **done** — `6018447` |
+| T22 | Verification of the closing round | S4 | parent | **done** — see L74 and L75 |
 
 **The user's standing rule applies: nothing is committed until they approve it on screen** (recorded
-in `pdf-progress-tracker.md`, L70). The "commit" column therefore records the intended Conventional
-Commit message, not a hash.
+in `pdf-progress-tracker.md`, L70). Each "Commit" cell names the commit that actually carries the
+task, so this table can be used to resume.
 
 A task is checked only after its outcome and checks were observed. Commit slices are the work-unit
 boundary: ~400 authored lines each, tests and docs alongside the behaviour.
@@ -459,18 +464,96 @@ from the applied CSS).
 
 ---
 
+**L74 — the closing of the rename, measured.** The user's request, verbatim: *"Estuve trabajando en
+la migracion de OCT a Mirk, hice ese cambio de nombre en mi proyecto. Que hace falta para finalizar?"*
+The answer was an inventory taken from the tree before touching anything, and the owner chose
+*"Cerrar todo: nombres + spike + registro"*.
+
+What the four commits of this feature had already settled, measured rather than assumed:
+`cargo check --workspace --all-targets` clean; `cargo test --workspace` green **except five
+`mirk-desktop` tests** that fail with `libpdfium.so: cannot open shared object file`; `svelte-check`
+0 errors and 0 warnings; `bun run test` 332/332; `mem_current_project` in the repository root returns
+`{"project":"mirk","project_source":"config"}`.
+
+The five red tests are **not** a rename regression and were not "fixed": `vendor/pdfium/` is
+gitignored, this clone has not fetched it, and the failure message names both remedies
+(`scripts/fetch-pdfium.sh` or `MIRK_PDFIUM_LIB`). That is the invariant the README states — fail
+naming the remedy rather than pass without checking — so the remedy is the operator's step, not a
+code change.
+
+What was actually left, and what was done with it:
+
+| Leftover | Where | Why it was worth closing |
+| --- | --- | --- |
+| `oct-desktop`, `oct-store`, `oct_core::Document` in comments | `web/src/lib/{window,tauri,settings,library}.ts`, `web/vite.config.ts` | They name crates that no longer exist; a reader following them finds nothing. |
+| `LIBRARY_CHANGED_EVENT = "oct:library-changed"` | `web/src/lib/library.ts:1438` | The only leftover with a runtime value. Safe to rename because `App.svelte` consumes it through the constant alone — no test and no Rust code names the literal. |
+| `crates/oct-scan/tests/fixtures` | `spike/parser/run.py:121` | **Broken, not cosmetic**: the Phase-0 harness's own self-check would fail if re-run. |
+| `oct` in comments | `BookCard`, `HomeScreen`, `SettingsLibraryScreen`, `suggestions.ts`, its test, `i18n.test.ts` | The product speaks about itself in the third person; it was calling itself by the name before last. |
+| S2 named three fonts | this document | The spec contradicted what shipped: two fonts, `OFL-Inter.txt` and `OFL-InstrumentSerif.txt`. Corrected in place, with the reason L7 already recorded. |
+| The task table said "done (uncommitted)" | this document | The commits exist; a record that says otherwise cannot be used to resume. |
+
+**Deliberately not touched, and why.** `LEGACY_APP_DIRS = ["loci", "oct"]` and
+`LEGACY_DATABASE_FILES = ["loci.sqlite3", "oct.sqlite3"]` in `mirk-store` are the data-adoption
+chain: erasing `oct` there would make a reader's existing library invisible on first launch. Their
+tests are the ones that write and read `oct.sqlite3` on purpose. `odd/tasks/pdf-progress-tracker.md`
+(77 mentions), `odd/engram-migration.md`, `spike/parser/FINDINGS.md` and `spike/ui/*.html` are
+history and measured evidence: a record that says `oct` because it happened under `oct` is accurate,
+and rewriting it destroys the evidence the project keeps. `bun.lock` matches are base64 by chance.
+
+**Still outside this repository, and therefore a user decision, not an agent action:** the old
+`~/.local/share/oct` directory adopts itself on the first real launch (implemented and tested, never
+yet observed against that directory by this session); the stray empty `~/.git` in `$HOME` (risk R6)
+still exists; and delivery — push, PR, merge — starts from a branch with no remote configured.
+
+---
+
+**L75 — the five red tests were not a missing fetch, and the reason is the rename's directory.** The
+owner asked to fetch pdfium and commit, and `scripts/fetch-pdfium.sh` did its job: 8 MB of
+`vendor/pdfium/lib/libpdfium.so`, `ELF 64-bit`, `dlopen` clean from outside the build. The same five
+`mirk-desktop` tests failed again, with the same sentence, which is what made the diagnosis possible
+rather than a retry.
+
+The sentence was the evidence. `bind_to_library` hands libloading a *full path* and libloading prints
+whatever it was given, so a bare `libpdfium.so: cannot open shared object file` could only mean the
+resolver had already fallen back to `bind_to_system_library()` — the file was never looked for where
+the operator had just put it. `strings` on the compiled rlib showed why:
+
+```
+/home/tomas-cuevas/Workspace/Proyectos/oct/crates/mirk-scan/../../vendor/pdfium/lib
+```
+
+`mirk_scan::vendor_pdfium_directory` is `env!("CARGO_MANIFEST_DIR")` joined with the vendor path, and
+`CARGO_MANIFEST_DIR` is a **compile-time** constant that cargo's fingerprint does not include. The
+project directory itself had been renamed `Proyectos/oct` → `Proyectos/mirk`, so `target/` still held
+artifacts built under the old root — **1150 files** carrying the dead path — and nothing rebuilt
+because no source had changed. `cargo clean` removed 26 053 files / 13.4 GiB; the rebuild then ran
+**322 tests in 13 test binaries, all green**, the 97 desktop ones included, and the five that had
+been red for two rounds passed.
+
+What this costs if it is forgotten: the error message names the wrong remedy. "Fetch the library" is
+what an operator will do — twice, as here — because nothing in it says the binary is looking at a
+directory that no longer exists. Two rules follow, and they belong to any future rename: after
+renaming the project *directory*, `target/` is not reusable, and a bare library filename in a
+dlopen error means the resolver fell back rather than that the file is absent.
+
+The fetched library stays out of git (`vendor/pdfium/`, gitignored) and the recipe remains the README's:
+`scripts/fetch-pdfium.sh` once per clone, or `MIRK_PDFIUM_LIB` to point elsewhere.
+
+---
+
 ## Delivery slices (recorded on request)
 
 **Branch boundary, recorded because the branch is far past any PR-sized unit:**
 `feat/phase-1-core` carries **~39.500 authored changed lines in 119 commits since `main`**. This
-feature is four work-unit commits:
+feature is five work-unit commits:
 
 | Commit | Message | Why this boundary |
 | --- | --- | --- |
 | `fceebf2` | `feat!: rename to mirk, adopt the data-directory chain, and store the cover source (schema V10)` | The rename and the data model live in the same Rust files and cannot be separated without rewriting the tree; both are data-path changes and belong together. |
 | `0f1b428` | `feat(ui): a token layer, self-hosted fonts, and the window shell` | Foundation only: it compiles and renders the old screens with the new chrome. |
 | `fa1cb93` | `feat(ui): the card, the screens and the document editor` | One unit, because `library.ts` and the components changed together: splitting them would produce commits whose build fails (the removed `editorClosesAfterCommit` is still imported by the old `BookGrid`). |
-| (this one) | `docs: the mirk record and the design aids` | The record and the decision artifacts. |
+| `5f446ef` | `docs: the mirk record and the design decision aids` | The record and the decision artifacts. |
+| `6018447` | `refactor(names): close the oct to mirk rename in the interface and the spike` | The closing slice: stale `oct` names left in comments and in the internal change event, plus the broken fixture path in the Phase-0 spike harness. Behaviour is unchanged except the event's string, which is only ever consumed through its own constant. |
 
 **What this means for delivery, stated rather than discovered at review time:** the feature is
 reviewable commit by commit, but the branch as a whole is not a pull request. Whether it becomes one
