@@ -595,34 +595,20 @@
 </div>
 
 <style>
-  :global(html),
-  :global(body) {
-    margin: 0;
-    height: 100%;
-  }
-
-  :global(body) {
-    background: #f6f7f9;
-    color: #1c2024;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    line-height: 1.5;
-  }
-
-  :global(#app) {
-    height: 100%;
-  }
-
   /* The window is a fixed phone shape, so the layout fills it exactly: the top bar and the navbar
-     stay put and only the screen between them scrolls. */
+     stay put and only the screen between them scrolls. The canvas, the font and the base type now
+     live in `styles/tokens.css`, which is the single place a theme is decided. */
   .app {
     height: 100vh;
     display: flex;
     flex-direction: column;
+    background: var(--canvas);
   }
 
   .state {
-    margin: 0 0 0.75rem;
-    color: #5a6472;
+    margin: 0 0 var(--space-3);
+    color: var(--fg-muted);
+    font-size: var(--text-sm);
   }
 
   main {
@@ -635,6 +621,12 @@
        and in the screens and cards together rather than one place at a time. The top value is the
        exception and went up, not down: the user found each screen's own heading too close to the
        window bar (L23), and this is the one place that spacing can be stated for every screen. */
-    padding: 1.1rem 0.8rem 0.9rem;
+    padding: var(--space-4) var(--space-4) var(--space-4);
+  }
+
+  /* The scroll container of a dark canvas: a hairline under the top bar is the only edge it needs,
+     and the overscroll bounce must not paint a light strip over the canvas. */
+  main::-webkit-scrollbar {
+    width: 0;
   }
 </style>

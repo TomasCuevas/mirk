@@ -1,0 +1,189 @@
+/*
+ * The design tokens of mirk.
+ *
+ * One file, one source of truth. Before this existed, thirteen components carried their own hex
+ * values (#ffffff thirty-five times, #5a6472 twenty-nine, #ccd2da twenty-three): a theme was not a
+ * decision, it was thirteen edits that had to agree. Now a component names what a thing IS
+ * (`--surface`, `--fg-muted`) and this file decides what that looks like.
+ *
+ * The values are measured from raycast.com's own stylesheets, read on 2026-10-20 (see
+ * odd/tasks/mirk-ui.md, S1): the neutral ramp is theirs by name, the hairline is `#ffffff1a`, the
+ * radii are 4/6/8/12/16, and the one loud control is a white fill with black text. What is NOT
+ * theirs is the information palette: in mirk, colour states a fact about a document, so the
+ * chrome stays achromatic and the progress ramp is the only saturated thing on a screen.
+ *
+ * The window is a fixed 430 × 844 (A2), so the scale is sized for that width, not for a browser.
+ */
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/instrument-serif-latin.woff2") format("woff2");
+}
+
+:root {
+  /* Canvas and surfaces: the Raycast greys, by role rather than by number. */
+  --canvas: #07080a;
+  --surface: #0c0d0f;
+  --surface-1: #111214;
+  --surface-2: #18191a;
+  --surface-3: #1b1c1e;
+
+  /* Lines. Never a hard grey on a dark canvas: 8% white is an edge, 14% is a deliberate border. */
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --line-focus: #56c2ff;
+
+  /* Text. `--fg-subtle` is for non-essential marks only (4.0:1); body text is `--fg` or `--fg-muted`. */
+  --fg: #f4f4f6;
+  --fg-muted: #9c9c9d;
+  --fg-subtle: #6a6b6c;
+  --fg-on-loud: #07080a;
+
+  /* Semantic. `--brand` is the mark and nothing else: it is not an action colour, and it must not
+     compete with the progress ramp, which is the only place a hue means something about reading. */
+  --brand: #ff6363;
+  --danger: #ff6363;
+  --success: #59d499;
+  --warning: #ff9217;
+  --info: #56c2ff;
+
+  /* Type. Inter is the interface; Instrument Serif is the screen's own voice, used once per screen
+     so it stays a voice and not a costume. */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Instrument Serif", Georgia, serif;
+
+  --text-xs: 0.6875rem; /* 11px — provenance, badges */
+  --text-sm: 0.8125rem; /* 13px — card text, controls */
+  --text-base: 0.875rem; /* 14px — body */
+  --text-lg: 1rem;
+  --text-xl: 1.125rem;
+  --display: 1.875rem; /* the screen title, Instrument Serif */
+
+  --tracking-tight: -0.012em;
+  --tracking-wide: 0.14em;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* Geometry: 4px base, the same radii the reference uses. */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-full: 999px;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --fast: 120ms;
+
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.65), 0 0 0 1px var(--line);
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.45;
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+h1,
+h2,
+h3 {
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+}
+
+/* The screen's title is the one place the serif speaks. Components may override it, but they opt in
+   by naming it: the default is the same on every screen, which is what makes it a voice. */
+h1 {
+  font-family: var(--font-display);
+  font-weight: var(--weight-regular);
+  font-size: var(--display);
+  line-height: 1.1;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+/* Focus is a fact, not a decoration: it must be visible on the canvas, on a card and inside a modal,
+   so it uses the reference's blue rather than an outline of the text colour. */
+:focus-visible {
+  outline: 2px solid var(--line-focus);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(255, 99, 99, 0.35);
+  color: var(--fg);
+}
+
+/* Motion is never the only channel here, and a reader who asked for less of it must not receive a
+   transition as a side effect of a restyle. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* A `select` is the one control whose arrow the engine draws itself, in the engine's colour, which
+   makes it the single element on a screen that does not belong to this palette. `appearance: none`
+   removes it; the inline SVG is the replacement, in the muted tone of every other icon. Components
+   must set `background-color` on a select, never the `background` shorthand, or they erase this
+   chevron. */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.75 6 7.75 9 4.75' fill='none' stroke='%239c9c9d' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 0.7rem;
+  padding-right: 1.6rem;
+}

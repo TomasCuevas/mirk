@@ -33,36 +33,39 @@
 
 <style>
   /* The navbar is the last child of the full-height shell, so it sits at the bottom of the fixed
-     window without a fixed-position overlay or a padding hack. */
+     window without a fixed-position overlay or a padding hack. It is canvas, not a card: the hairline
+     is the only edge, and the active item is a lift of the surface rather than a filled accent. The
+     accent belongs to the progress ramp, which is the only place a hue states a fact. */
   nav {
     flex: none;
     display: flex;
     gap: 0.25rem;
     padding: 0.4rem 0.5rem;
-    background: #ffffff;
-    border-top: 1px solid #e2e6eb;
-    box-shadow: 0 -1px 6px rgba(28, 32, 36, 0.05);
+    background: var(--canvas);
+    border-top: 1px solid var(--line);
   }
 
   button {
     flex: 1 1 0;
     min-width: 0;
-    padding: 0.5rem 0.45rem;
+    padding: 0.45rem 0.4rem;
     border: none;
-    border-radius: 0.5rem;
+    border-radius: var(--r-md);
     background: transparent;
-    color: #5a6472;
+    color: var(--fg-subtle);
     font: inherit;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
     cursor: pointer;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
   }
 
-  button:hover {
-    background: #f0f2f5;
+  button:hover:not(.active) {
+    color: var(--fg);
   }
 
   button.active {
-    background: #24506b;
-    color: #ffffff;
-    font-weight: 600;
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--fg);
   }
 </style>

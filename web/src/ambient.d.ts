@@ -5,3 +5,8 @@ declare module "*.svelte" {
   const component: unknown;
   export default component;
 }
+
+// A side-effect CSS import (`import "./styles/tokens.css"`) is a module to Vite but an opaque
+// specifier to `tsc`, which refuses it without a declaration. The file has no exports to describe:
+// importing it is the whole effect.
+declare module "*.css";

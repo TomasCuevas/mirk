@@ -18,7 +18,7 @@ describe("the window controls", () => {
       expect(control.action).not.toMatch(forbidden);
       expect(control.command).not.toMatch(forbidden);
       expect(control.labelKey).not.toMatch(forbidden);
-      expect(control.glyph).not.toMatch(forbidden);
+      expect(control.icon).not.toMatch(forbidden);
     }
   });
 
@@ -31,7 +31,7 @@ describe("the window controls", () => {
     for (const control of windowControls) {
       expect(catalogues.en[control.labelKey]?.trim()).toBeTruthy();
       expect(catalogues.es[control.labelKey]?.trim()).toBeTruthy();
-      expect(control.glyph.trim()).not.toBe("");
+      expect(control.icon.trim()).not.toBe("");
     }
   });
 });

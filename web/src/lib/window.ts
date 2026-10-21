@@ -13,6 +13,17 @@
 /** The three things the top bar can ask the shell to do. */
 export type WindowAction = "minimize" | "hide" | "close";
 
+/**
+ * The drawing a control uses.
+ *
+ * The first version used font glyphs (`–`, `⌄`, `✕`), and the user's verdict was that they read as
+ * characters borrowed from a font rather than as this application's own controls — the three of them
+ * came from three different typefaces. These are three strokes in one hand: the same 1.6 weight, the
+ * same rounded caps, the same 16 px box. Minimise is a bar, hiding is an arrow into a tray (which is
+ * what the action does, and what a bar cannot say), and closing is a cross.
+ */
+export type WindowIcon = "minimize" | "hide" | "close";
+
 /** One control in the top bar. */
 export interface WindowControl {
   /** The shell action this control performs. */
@@ -21,8 +32,8 @@ export interface WindowControl {
   command: string;
   /** The catalogue key for its accessible label and tooltip. */
   labelKey: string;
-  /** The visual mark shown inside the button. Decorative; the label is the accessible name. */
-  glyph: string;
+  /** The drawing inside the button. Decorative; the label is the accessible name. */
+  icon: WindowIcon;
 }
 
 /**
@@ -33,7 +44,7 @@ export interface WindowControl {
  * window itself and not only by this list.
  */
 export const windowControls: readonly WindowControl[] = [
-  { action: "minimize", command: "minimize_window", labelKey: "window.minimize", glyph: "–" },
-  { action: "hide", command: "hide_window", labelKey: "window.hide", glyph: "⌄" },
-  { action: "close", command: "close_app", labelKey: "window.close", glyph: "✕" },
+  { action: "minimize", command: "minimize_window", labelKey: "window.minimize", icon: "minimize" },
+  { action: "hide", command: "hide_window", labelKey: "window.hide", icon: "hide" },
+  { action: "close", command: "close_app", labelKey: "window.close", icon: "close" },
 ];

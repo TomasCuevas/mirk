@@ -49,7 +49,32 @@
         disabled={!inTauri}
         onclick={() => onAction(control)}
       >
-        <span aria-hidden="true">{control.glyph}</span>
+        <svg
+          viewBox="0 0 24 24"
+          width="16"
+          height="16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+          focusable="false"
+        >
+          {#if control.icon === "minimize"}
+            <path d="M6 12h12" />
+          {:else if control.icon === "hide"}
+            <!-- R16: the first drawing was an arrow into a tray, and the user read it as "download" —
+                 which it is, in every icon set. Hiding a window is hiding it, so this is an eye with
+                 a slash: the one metaphor that cannot be mistaken for a transfer. -->
+            <path d="M4.2 12s3-5.2 7.8-5.2S19.8 12 19.8 12s-3 5.2-7.8 5.2S4.2 12 4.2 12z" />
+            <circle cx="12" cy="12" r="2.1" />
+            <path d="M5 19 19 5" />
+          {:else}
+            <path d="M7 7l10 10" />
+            <path d="M17 7L7 17" />
+          {/if}
+        </svg>
       </button>
     {/each}
   </div>
@@ -61,55 +86,71 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
-    height: 2.5rem;
-    padding: 0 0.25rem 0 0.7rem;
-    background: #1c2024;
-    color: #f6f7f9;
+    gap: var(--space-2);
+    height: 2.75rem;
+    padding: 0 0.35rem 0 1rem;
+    background: var(--canvas);
+    border-bottom: 1px solid var(--line);
+    color: var(--fg);
     user-select: none;
   }
 
+  /* The wordmark is the one place the product names itself. The dot is the mark: one accent, small,
+     and it is not a button and not a status — it only says "this is mirk". A pseudo-element keeps the
+     markup unchanged, so the accessible name is still just the product's name. */
   .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
     font-size: 0.95rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: lowercase;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.01em;
+  }
+
+  .brand::before {
+    content: "";
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    background: var(--brand);
+    box-shadow: 0 0 10px rgba(255, 99, 99, 0.55);
   }
 
   .controls {
     display: flex;
-    gap: 0.15rem;
+    gap: 0.1rem;
   }
 
   button {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 2rem;
-    height: 2rem;
+    width: 1.75rem;
+    height: 1.75rem;
     padding: 0;
     border: none;
-    border-radius: 0.35rem;
+    border-radius: var(--r-sm);
     background: transparent;
-    color: #c4cdd8;
+    color: var(--fg-muted);
     font: inherit;
-    font-size: 0.95rem;
+    font-size: 0.8rem;
     line-height: 1;
     cursor: pointer;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
   }
 
   button:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.12);
-    color: #ffffff;
+    background: var(--surface-2);
+    color: var(--fg);
   }
 
   button.close:hover:not(:disabled) {
-    background: #b53b2a;
+    background: var(--danger);
     color: #ffffff;
   }
 
   button:disabled {
-    opacity: 0.4;
+    opacity: 0.35;
     cursor: default;
   }
 </style>
