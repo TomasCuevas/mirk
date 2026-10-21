@@ -233,7 +233,11 @@
     <div class="progress">
       <div class="bar">
         <span class="fill" style="width: {view.fraction * 100}%; background: {view.color}"></span>
-        <span class="marker" style="--at: {view.markerAt * 100}%">{view.marker}</span>
+        <span
+          class="marker"
+          class:complete={view.complete}
+          style="--at: {view.markerAt * 100}%">{view.marker}</span
+        >
       </div>
       {#if view.provenance !== null}
         <p class="provenance">{view.provenance}</p>
@@ -259,7 +263,7 @@
        the then-current 3/4 ratio: covers of 186.2 and 146.0 px, a 40.2 px difference that had nothing
        to do with the gap (L29). */
     flex: 1;
-    gap: 0.35rem;
+    gap: 0.45rem;
     /* `box-sizing: border-box` is what R8 turned out to need, and the reason is measurable. With the
        default `content-box`, `min-height: 100%` set the card's *content* box to the height of its grid
        row and then added the padding and the border on top of it: the card's border box stuck out
@@ -269,10 +273,18 @@
        `aspect-ratio` was the first suspect and measurements cleared it. */
     box-sizing: border-box;
     min-height: 100%;
-    padding: 0.7rem;
-    background: #ffffff;
-    border: 1px solid #e2e6eb;
-    border-radius: 0.75rem;
+    padding: 0.45rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  }
+
+  /* The card is a surface, and the pointer says so by lifting it one step rather than by drawing a
+     frame around it: the hairline is the edge, and `--line-strong` is the same edge, stated. */
+  article:hover {
+    background: var(--surface-1);
+    border-color: var(--line-strong);
   }
 
   /* The action is positioned against the cover, which is what keeps it anchored to the document
@@ -294,25 +306,32 @@
     /* `border-box` so the 9/11 ratio describes the visible cover rectangle, border included, rather
        than its content box. The placeholder sets the same so the two rectangles are identical. */
     box-sizing: border-box;
-    border: 1px dashed #ccd2da;
-    border-radius: 0.4rem;
-    background: repeating-linear-gradient(45deg, #f6f7f9, #f6f7f9 8px, #eef0f3 8px, #eef0f3 16px);
-    color: #8b95a3;
-    font-size: 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    /* The stand-in is a surface with a hatch on it, not a photograph of one: 1.8 % white at 45° is
+       a texture a person reads as "nothing here yet" without it competing with a real cover. */
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent 0 9px,
+      rgba(255, 255, 255, 0.018) 9px 18px
+    );
+    color: var(--fg-subtle);
+    font-size: var(--text-xs);
     text-align: center;
   }
 
   /* R32: the real cover occupies exactly the placeholder's rectangle. `width` and the inline
      `aspect-ratio` fix the box; `object-fit: contain` letterboxes a page of any ratio inside it
-     instead of cropping it, and the white background is what shows in the letterbox. */
+     instead of cropping it, and the surface behind it is what shows in the letterbox. */
   .cover-image {
     display: block;
     width: 100%;
     box-sizing: border-box;
-    border: 1px solid #e2e6eb;
-    border-radius: 0.4rem;
-    background: #ffffff;
-    object-fit: contain;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    object-fit: cover;
   }
 
   /* The fixed height of the text block. Like the cover ratio, the height is declared inline on the
@@ -351,7 +370,10 @@
 
   .title {
     margin: 0;
-    font-size: 0.98rem;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    line-height: 1.3;
+    color: var(--fg);
     overflow-wrap: anywhere;
     /* The title does not make every card the same height — the fixed text block that did that was
        removed at the user's request, because reserving it made the card read as stretched and left
@@ -408,17 +430,20 @@
      measurement caught. */
   .bar {
     position: relative;
-    height: 0.5rem;
-    margin: 0.55rem 0;
-    border-radius: 999px;
-    background: #e8ebef;
+    height: 0.3rem;
+    margin: 0.55rem 0 0.15rem;
+    border-radius: var(--r-full);
+    /* The one literal colour the card keeps, and it is not a theme value: 9 % white is the neutral
+       TRACK, the surface a colour is drawn on. Naming it in the token file would make the ramp's
+       ground a decision someone could re-theme into a colour of its own. */
+    background: rgba(255, 255, 255, 0.09);
   }
 
   .fill {
     position: absolute;
     inset: 0 auto 0 0;
     border-radius: inherit;
-    background: #24506b;
+    background: var(--fg-muted);
   }
 
   /* R38: the fill's colour is computed from the fraction and arrives as an inline `background`, so it
@@ -427,6 +452,18 @@
      builds a view without a colour: a fill that lost its background would be an invisible bar, and an
      invisible bar says "nothing read" about a document that was read. The track keeps its own neutral
      grey — the user asked for the progress to change colour, not the bar. */
+
+  /* R15: a finished document says so twice — the number is wider, and it is the one green pill on
+     the card. "100 %" in the same pill as "42 %" made the end of a book look like any other number;
+     the user asked for it to be obvious at a glance. */
+  .marker.complete {
+    width: 4.2em;
+    left: clamp(2.1em, var(--at), calc(100% - 2.1em));
+    border-color: transparent;
+    background: var(--success);
+    color: #06281a;
+    font-weight: var(--weight-semibold);
+  }
 
   .marker {
     position: absolute;
@@ -438,12 +475,13 @@
     left: clamp(1.7em, var(--at), calc(100% - 1.7em));
     box-sizing: border-box;
     width: 3.4em;
-    border: 1px solid #ccd2da;
-    border-radius: 999px;
-    background: #ffffff;
-    color: #1c2024;
-    font-size: 0.85rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-full);
+    background: var(--surface-2);
+    color: var(--fg);
+    font-size: 0.625rem;
     line-height: 1.5;
+    font-variant-numeric: tabular-nums;
     text-align: center;
     white-space: nowrap;
     transform: translate(-50%, -50%);
@@ -451,8 +489,8 @@
 
   .provenance {
     margin: 0;
-    font-size: 0.75rem;
-    color: #5a6472;
+    font-size: var(--text-xs);
+    color: var(--fg-subtle);
   }
 
   .open-folder {
@@ -465,15 +503,17 @@
     width: 1.7rem;
     height: 1.7rem;
     padding: 0;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
-    background: #ffffff;
-    color: #24506b;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    color: var(--fg-muted);
     cursor: pointer;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
   }
 
   .open-folder:hover {
-    background: #f0f2f5;
+    background: var(--surface-2);
+    color: var(--fg);
   }
 
   /* R31, corrected in R32: the same pill as the folder action, on the opposite corner, and the ONE
@@ -488,33 +528,42 @@
     width: 1.7rem;
     height: 1.7rem;
     padding: 0;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
-    background: #ffffff;
-    color: #24506b;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    color: var(--fg-muted);
     cursor: pointer;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
   }
 
   .edit-document:hover {
-    background: #f0f2f5;
+    background: var(--surface-2);
+    color: var(--fg);
   }
 
   /* R31: the reader's-title note. Muted and small, because it marks whose title this is rather than
      restating it. */
-  /* R19: the page count as a badge on the cover's bottom-right. Same inset, border radius and white
-     pill as the folder action one line up, because they are the same kind of thing: a small fact
-     about the document, stated on the space that stands for its body. */
+  /* R19: the page count as a badge on the cover's bottom-right, in the same corner grammar as the
+     folder action at its top-right: a small fact about the document, stated on the space that stands
+     for its body. It is a translucent pill rather than a solid one because it sits ON the cover — a
+     real page's pixels the application does not own — so it carries its own ground instead of
+     borrowing the surface underneath it. */
   .cover-pages {
     position: absolute;
     bottom: 0.3rem;
     right: 0.3rem;
     margin: 0;
     padding: 0.15rem 0.4rem;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
-    background: #ffffff;
-    color: #55606d;
-    font-size: 0.72rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-xs);
+    /* The second literal the card keeps: the badge sits ON a cover, whose pixels the application does
+       not own, so it needs its own ground — the canvas colour at 80 %, blurred — rather than the
+       surface underneath it. */
+    background: rgba(7, 8, 10, 0.8);
+    backdrop-filter: blur(2px);
+    color: var(--fg-muted);
+    font-size: 0.625rem;
+    font-variant-numeric: tabular-nums;
   }
 
 </style>

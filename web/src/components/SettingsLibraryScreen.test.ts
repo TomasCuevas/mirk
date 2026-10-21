@@ -110,7 +110,7 @@ describe("the Biblioteca sub-screen explains itself", () => {
 });
 
 /**
- * L56. The queue of documents oct saw open, and the only place the reader can decide about them.
+ * L56. The queue of documents Mirk saw open, and the only place the reader can decide about them.
  *
  * These tests exist because a rule that is computed and then never wired is this project's recurring
  * failure: the pure decisions have their own tests in \`suggestions.test.ts\`, and what is checked here is
@@ -142,7 +142,7 @@ describe("the suggestions the reader decides about", () => {
   });
 
   // The heading is the file's own name, and the claim stops there: nothing on the card says the
-  // document has a title, because oct has not read this file — it only saw it open.
+  // document has a title, because Mirk has not read this file — it only saw it open.
   it("does not claim a title it never read", () => {
     const { body } = render(
       SettingsLibraryScreen,
@@ -175,7 +175,7 @@ describe("the suggestions the reader decides about", () => {
       { props: screenProps({ suggestions: null }) },
     );
 
-    expect(body).toContain("Checking for documents opened outside oct");
+    expect(body).toContain("Checking for documents opened outside Mirk");
     expect(body).not.toContain("No document is waiting for a decision");
   });
 

@@ -108,6 +108,17 @@ function typeAuthor(name: string): void {
   flushSync();
 }
 
+/** Types into the title field, the way the reader does. */
+function typeTitle(value: string): void {
+  const field = window.document.body.querySelector<HTMLInputElement>(
+    `input[aria-label="${english("card.titleLabel")}"], input[aria-label="${english("card.titleLabelYours")}"]`,
+  );
+  expect(field, "the editor renders the title field").toBeDefined();
+  field!.value = value;
+  field!.dispatchEvent(new Event("input", { bubbles: true }));
+  flushSync();
+}
+
 /** The chips on screen, in the order they are drawn. */
 function chipNames(): string[] {
   return [...window.document.body.querySelectorAll(".author-chip-name")].map(
@@ -124,22 +135,42 @@ function removeControl(name: string): HTMLButtonElement | undefined {
 }
 
 /** The card's pencil, which opens the one editor (R31/R32). */
-function pencil(): HTMLButtonElement | undefined {
-  const button = window.document.body.querySelector("button.edit-document");
-  return button === null ? undefined : (button as HTMLButtonElement);
-}
-
 /**
  * The editor's author list, found by its accessible name — the same way the reader finds it.
  *
  * It used to be located by one of the names among its options, which quietly tied every test to that
  * one name: the co-author test hands a different library and found no list at all.
  */
-function authorList(): HTMLSelectElement | undefined {
-  const select = window.document.body.querySelector(
-    `select[aria-label="${english("card.authorChoose")}"]`,
+/** R16: the field IS the picker, so the control to find is the combobox itself. */
+function authorField(): HTMLInputElement | undefined {
+  const field = window.document.body.querySelector('input[role="combobox"]');
+  return field === null ? undefined : (field as HTMLInputElement);
+}
+
+/** The names the field is offering right now, in order. */
+function offeredNames(): string[] {
+  return [...window.document.body.querySelectorAll("#author-choices button[role='option']")].map(
+    (option) => option.textContent?.trim() ?? "",
   );
-  return select === null ? undefined : (select as HTMLSelectElement);
+}
+
+/** Focus opens the list, the way a reader sees it the moment they click the field. */
+function openChoices(): void {
+  const field = authorField();
+  expect(field, "the editor renders the author combobox").toBeDefined();
+  field!.dispatchEvent(new FocusEvent("focus"));
+  flushSync();
+}
+
+/** Clicks a name in the open list — the pointer path, not the keyboard one. */
+function chooseFromList(name: string): void {
+  openChoices();
+  const option = [...window.document.body.querySelectorAll<HTMLButtonElement>(
+    "#author-choices button[role='option']",
+  )].find((candidate) => candidate.textContent?.trim() === name);
+  expect(option, `the field offers "${name}"`).toBeDefined();
+  option!.click();
+  flushSync();
 }
 
 describe("the editor's Save, pressed for real", () => {
@@ -165,21 +196,29 @@ describe("the editor's Save, pressed for real", () => {
 
   it("carries the title and the author to the store in ONE command, once", async () => {
     const document_ = prepare();
-    expect(saveButton(), "the editor renders a Save button").toBeDefined();
+    // R18: the pair exists only while there is something to save, so the test makes a change first —
+    // which is also the real path a reader takes.
+    expect(saveButton(), "an untouched editor offers nothing to save").toBeUndefined();
+    typeTitle("A title of my own");
+    expect(saveButton(), "the editor renders a Save button once there is a change").toBeDefined();
 
     saveButton()?.click();
 
-    // Wait for the successful save's own observable end — the editor closes — before counting. Without
-    // this the count raced the second call a double write would make, and a version of this test that
-    // passed against two writes proved nothing: the first correction of this file did exactly that.
+    // Wait for the successful save's own observable end — the pair disappears because the store now
+    // holds the draft — before counting. Without this the count raced the second call a double write
+    // would make.
     await vi.waitFor(() => expect(saveButton()).toBeUndefined());
+
+    // R18: and the form is still on screen. The user asked for exactly this: saving must not take the
+    // editor away, because the next change is usually right there.
+    expect(window.document.body.textContent).toContain(english("card.documentEditor"));
 
     // One command carrying BOTH facts. Written as two commands it was two writes, and a failure
     // between them left the title saved while the screen implied nothing had been (L55).
     expect(saves()).toHaveLength(1);
     expect(saves()[0]).toEqual([
       "set_document_naming",
-      { id: document_.id, title: document_.title, authors: [] },
+      { id: document_.id, title: "A title of my own", authors: [] },
     ]);
   });
 
@@ -215,12 +254,24 @@ describe("the editor's Save, pressed for real", () => {
     component = mountEditor(document_);
     expect(chipNames()).toEqual(["Carl Sagan"]);
 
-    const restore = [...window.document.body.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === english("card.titleRestore"),
+    // R16: the control is an icon with its own accessible name, so the name is how it is found.
+    const restore = window.document.body.querySelector<HTMLButtonElement>(
+      `button[aria-label="${english("card.titleRestore")}"]`,
     );
     expect(restore, "the restore control exists for a title the reader set").toBeDefined();
     restore!.click();
-    await vi.waitFor(() => expect(saveButton()).toBeUndefined());
+    flushSync();
+
+    // R18: it asks first, and nothing is written by the question itself.
+    expect(window.document.body.textContent).toContain(english("card.restoreConfirmTitle"));
+    expect(saves()).toHaveLength(0);
+
+    const confirm = [...window.document.body.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === english("card.restoreConfirmAction"),
+    );
+    expect(confirm, "the confirmation offers the action").toBeDefined();
+    confirm!.click();
+    await vi.waitFor(() => expect(saves()).toHaveLength(1));
 
     expect(saves()).toHaveLength(1);
     // What actually crosses the bridge is the serialised arguments: no `authors` key at all.
@@ -235,11 +286,7 @@ describe("the editor's Save, pressed for real", () => {
     typeAuthor("Carl Sagan");
     expect(chipNames()).toEqual(["Carl Sagan"]);
 
-    const list = authorList();
-    expect(list, "the editor draws a list of the library's authors").toBeDefined();
-    list!.value = "Ursula K. Le Guin";
-    list!.dispatchEvent(new Event("change", { bubbles: true }));
-    flushSync();
+    chooseFromList("Ursula K. Le Guin");
 
     // A third name, typed, so that what remains after the removal is MORE than one: "Ursula" then
     // "Ann" is exactly the order the reader gave, and no sort could produce it — with a single name
@@ -283,7 +330,10 @@ describe("the editor's Save, pressed for real", () => {
     expect(authorAddField()?.value).toBe("  carl sagan ");
   });
 
-  it("discards the chips and the typed name when the reader cancels", () => {
+  // R18: Cancelar no longer closes the editor — it discards the draft and leaves the reader where they
+  // were, which is the only reading that makes sense once the pair is hidden whenever there is nothing
+  // to discard. Nothing reaches the store either way.
+  it("discards the draft and keeps the editor open when the reader cancels", () => {
     prepare();
     typeAuthor("Carl Sagan");
     expect(chipNames()).toEqual(["Carl Sagan"]);
@@ -291,31 +341,21 @@ describe("the editor's Save, pressed for real", () => {
     cancelButton()?.click();
     flushSync();
 
-    // Cancel discards the whole draft: the editor is gone, nothing reached the store…
-    expect(saveButton()).toBeUndefined();
-    expect(chipNames()).toEqual([]);
-    expect(saves()).toHaveLength(0);
-
-    // …and reopening the editor seeds from the document again, not from the draft that was thrown
-    // away — the document has no author of its own, so there is no chip and the field is empty.
-    pencil()?.click();
-    flushSync();
-    expect(saveButton()).toBeDefined();
+    // The dialog is still on screen, the chips are back to what the store holds, and the pair is gone
+    // because there is nothing left to save or discard.
+    expect(window.document.body.textContent).toContain(english("card.documentEditor"));
     expect(chipNames()).toEqual([]);
     expect(authorAddField()?.value).toBe("");
+    expect(saveButton(), "nothing left to save").toBeUndefined();
+    expect(saves()).toHaveLength(0);
   });
 
   // S2, pressed for real. `datalist` cannot be exercised in WebKitGTK, so the list is a select beside
   // the field; choosing a name there adds a chip, and Save still sends ONE command carrying it.
   it("adds the name chosen from the list as a chip, and saves it in the same single write", async () => {
     const document_ = prepare(["Ursula K. Le Guin", "Jorge Luis Borges"]);
-    const list = authorList();
-    expect(list, "the editor draws a list of the library's authors").toBeDefined();
-
-    // Chosen the way a browser reports it: set the value, then send the `change` that travels up.
-    list!.value = "Jorge Luis Borges";
-    list!.dispatchEvent(new Event("change", { bubbles: true }));
-    flushSync();
+    // The pointer path: focus the field, click the name in the list it opens.
+    chooseFromList("Jorge Luis Borges");
 
     // The chip carries the name, and the add field stays empty: it is how the NEXT name arrives.
     expect(chipNames()).toEqual(["Jorge Luis Borges"]);
@@ -332,26 +372,278 @@ describe("the editor's Save, pressed for real", () => {
     ]);
   });
 
-  // The list is a picker, never a second copy of the value: it goes back to its "choose an author"
-  // entry, so a reader who removes a chip can pick the same name again and a real browser sends the
-  // `change` that adds it (L70).
-  it("returns the list to its choose-an-author entry, so a removed name can be added again", () => {
+  // R16: once a name is on the list, the field stops offering it — a suggestion that would be refused
+  // as a duplicate is a dead entry. Removing the chip brings it back, which is the loop the old
+  // "reset the select" test was protecting.
+  it("stops offering a name that is already on the list, and offers it again once removed", () => {
     prepare(["Jorge Luis Borges"]);
 
-    authorList()!.value = "Jorge Luis Borges";
-    authorList()!.dispatchEvent(new Event("change", { bubbles: true }));
-    flushSync();
-    expect(authorList()?.value).toBe("");
+    openChoices();
+    expect(offeredNames()).toContain("Jorge Luis Borges");
+
+    chooseFromList("Jorge Luis Borges");
     expect(chipNames()).toEqual(["Jorge Luis Borges"]);
+
+    // Still focused, the list now has nothing left to offer for this document.
+    expect(offeredNames()).not.toContain("Jorge Luis Borges");
 
     removeControl("Jorge Luis Borges")?.click();
     flushSync();
     expect(chipNames()).toEqual([]);
 
-    authorList()!.value = "Jorge Luis Borges";
-    authorList()!.dispatchEvent(new Event("change", { bubbles: true }));
+    openChoices();
+    expect(offeredNames()).toContain("Jorge Luis Borges");
+  });
+
+  // R16: the keyboard path and the pointer path must land on the same value. ArrowDown highlights the
+  // first name and Enter takes it — without typing a single character.
+  it("takes a highlighted name with the arrow keys and Enter", () => {
+    prepare(["Ursula K. Le Guin"]);
+
+    openChoices();
+    const field = authorField()!;
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     flushSync();
-    expect(chipNames()).toEqual(["Jorge Luis Borges"]);
-    expect(authorList()?.value).toBe("");
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    flushSync();
+
+    expect(chipNames()).toEqual(["Ursula K. Le Guin"]);
+    expect(authorAddField()?.value).toBe("");
+  });
+
+  // R16: typing narrows the list to what matches — the whole point of a combobox over a select.
+  it("narrows the list as the reader types", () => {
+    prepare(["Jorge Luis Borges", "Ursula K. Le Guin", "Ann Druyan"]);
+
+    openChoices();
+    const field = authorField()!;
+    field.value = "bor";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+
+    expect(offeredNames()).toEqual(["Jorge Luis Borges"]);
+  });
+
+  // R17: the user's report was that changing the cover left the old picture in the editor. The
+  // preview and the card are refreshed by the same answer now, and this presses that link: the store
+  // is asked for the cover again after the page changes, and the image on screen is the new one.
+  it("refreshes the cover preview after the page changes", async () => {
+    prepare();
+    const cover = "data:image/png;base64,AAAA";
+    invoke.mockImplementation(async (command: string) =>
+      command === "document_cover" ? cover : null,
+    );
+
+    // R18: the page save appears only when the page differs from the stored one.
+    const page = window.document.body.querySelector<HTMLInputElement>(
+      `input[aria-label="${english("card.coverPageLabel")}"]`,
+    );
+    expect(page, "the editor renders the page field").toBeDefined();
+    page!.value = "3";
+    page!.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+
+    const savePage = [...window.document.body.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === english("card.coverPageSave"),
+    );
+    expect(savePage, "the editor offers the page save").toBeDefined();
+    savePage!.click();
+
+    await vi.waitFor(() => {
+      const image = window.document.body.querySelector(".cover-preview img");
+      expect(image?.getAttribute("src")).toBe(cover);
+    });
+  });
+});
+
+/**
+ * R19, pressed for real: which cover source is in force, and the control that switches it back.
+ *
+ * The user's report was that an image, once chosen, could not be replaced by a page, and that after
+ * replacing it there was no way back to the image without choosing the file again. Both halves are
+ * exercised here: the button that offers the saved image, and the page button that takes over while
+ * the image stays stored.
+ */
+describe("the cover's two sources", () => {
+  let component: ReturnType<typeof mount> | null = null;
+
+  afterEach(() => {
+    if (component !== null) {
+      unmount(component);
+      component = null;
+    }
+    window.document.body.innerHTML = "";
+  });
+
+  it("brings the stored image back without choosing it again", async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    const document_: LibraryEntry = {
+      ...entry(),
+      coverPage: 2,
+      coverImage: "mine.png",
+      coverSource: "page",
+    };
+    component = mountEditor(document_);
+    flushSync();
+
+    const useImage = [...window.document.body.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === english("card.coverUseImage"),
+    );
+    expect(useImage, "the editor offers the saved image").toBeDefined();
+    useImage!.click();
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("use_cover_image", { id: document_.id }),
+    );
+  });
+
+  // R20: the whole loop the user asked for, pressed. The page button appears while the image is in
+  // force, disappears the moment the page takes over, comes back when the page number changes, and
+  // comes back again when the image returns.
+  it("hides the page button once the page takes over, and brings it back with the image", async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    const document_: LibraryEntry = {
+      ...entry(),
+      coverPage: 2,
+      coverImage: "mine.png",
+      coverSource: "image",
+    };
+    component = mountEditor(document_);
+    flushSync();
+
+    const button = (label: string) =>
+      [...window.document.body.querySelectorAll("button")].find(
+        (candidate) => candidate.textContent?.trim() === label,
+      );
+
+    expect(button(english("card.coverPageSave")), "the page can take over").toBeDefined();
+    button(english("card.coverPageSave"))!.click();
+
+    // Gone: the store holds the page now, and the image is still stored beside it.
+    await vi.waitFor(() => expect(button(english("card.coverPageSave"))).toBeUndefined());
+    expect(invoke).toHaveBeenCalledWith("set_cover_page", { id: document_.id, page: 2 });
+    expect(button(english("card.coverUseImage")), "the image can come back").toBeDefined();
+
+    // A different number is a new change, so the button returns.
+    const page = window.document.body.querySelector<HTMLInputElement>(
+      `input[aria-label="${english("card.coverPageLabel")}"]`,
+    );
+    expect(page, "the editor renders the page field").toBeDefined();
+    page!.value = "5";
+    page!.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    expect(button(english("card.coverPageSave")), "a new page is a change").toBeDefined();
+
+    // Save it, then take the image back: the page button returns because the image is in force.
+    button(english("card.coverPageSave"))!.click();
+    await vi.waitFor(() => expect(button(english("card.coverPageSave"))).toBeUndefined());
+    button(english("card.coverUseImage"))!.click();
+    await vi.waitFor(() =>
+      expect(button(english("card.coverPageSave")), "the page can take over again").toBeDefined(),
+    );
+  });
+
+  it("does not offer the saved image while the image is already the cover", () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    component = mountEditor({
+      ...entry(),
+      coverPage: 2,
+      coverImage: "mine.png",
+      coverSource: "image",
+    });
+    flushSync();
+
+    const useImage = [...window.document.body.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === english("card.coverUseImage"),
+    );
+    expect(useImage).toBeUndefined();
+
+    // And the page button IS offered, because taking the cover back to a page is always meaningful
+    // while an image is in force — even with the number unchanged.
+    const usePage = [...window.document.body.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === english("card.coverPageSave"),
+    );
+    expect(usePage, "the page can take over").toBeDefined();
+  });
+});
+
+/**
+ * R15. The carousel's arrows are its controls.
+ *
+ * The user asked for arrows on Inicio's carousels and for the scrollbar under them to go. The
+ * scrollbar is CSS; the arrows are behaviour, and behaviour that no server-side render can check:
+ * this mounts a strip, gives it the widths a real layout would give it, presses both arrows and
+ * asserts the distance and the direction. happy-dom has no layout, so the geometry is stated here
+ * explicitly rather than guessed from the engine.
+ */
+describe("the carousel arrows", () => {
+  let component: ReturnType<typeof mount> | null = null;
+
+  afterEach(() => {
+    if (component !== null) {
+      unmount(component);
+      component = null;
+    }
+    window.document.body.innerHTML = "";
+  });
+
+  function mountStrip(): { grid: HTMLElement; scrollBy: ReturnType<typeof vi.fn> } {
+    component = mount(BookGrid, {
+      target: window.document.body,
+      props: {
+        entries: [entry(), { ...entry(), id: 8, path: "/library/eight.pdf" }],
+        t: english,
+        onOpenFolder: () => {},
+        onOpenDocument: () => {},
+        layout: "strip",
+      },
+    });
+    flushSync();
+
+    const grid = window.document.querySelector("ul.grid") as HTMLElement;
+    const scrollBy = vi.fn();
+    grid.scrollBy = scrollBy as unknown as typeof grid.scrollBy;
+    // One tile is 168 px wide and the strip's gap is 12 px, so one step is 180 px.
+    (grid.firstElementChild as HTMLElement).getBoundingClientRect = () =>
+      ({ width: 168 }) as DOMRect;
+    Object.defineProperty(grid, "clientWidth", { value: 400, configurable: true });
+    Object.defineProperty(grid, "scrollWidth", { value: 800, configurable: true });
+    // The strip measured itself at mount, when happy-dom reported a zero-width box; asking it to
+    // measure again is what a real scroll event does, and it is what enables the next arrow.
+    grid.dispatchEvent(new Event("scroll"));
+    flushSync();
+    return { grid, scrollBy };
+  }
+
+  it("moves the strip by one tile when the next arrow is pressed", () => {
+    const { scrollBy } = mountStrip();
+
+    const next = window.document.querySelector(".strip-arrow.next") as HTMLButtonElement;
+    next.click();
+
+    expect(scrollBy).toHaveBeenCalledTimes(1);
+    expect(scrollBy.mock.calls[0][0]).toMatchObject({ left: 180 });
+  });
+
+  it("refuses a step that would leave the strip where it already is", () => {
+    const { grid, scrollBy } = mountStrip();
+
+    // Both ends are visible at once, and the previous arrow is disabled until the strip has moved.
+    const previous = window.document.querySelector(".strip-arrow.prev") as HTMLButtonElement;
+    expect(previous.disabled).toBe(true);
+    previous.click();
+    expect(scrollBy).not.toHaveBeenCalled();
+
+    // Once scrolled to the end, the next arrow is the disabled one and the previous one works.
+    grid.scrollLeft = 400;
+    grid.dispatchEvent(new Event("scroll"));
+    flushSync();
+
+    const next = window.document.querySelector(".strip-arrow.next") as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+    expect(previous.disabled).toBe(false);
+    previous.click();
+    expect(scrollBy).toHaveBeenCalledTimes(1);
+    expect(scrollBy.mock.calls[0][0]).toMatchObject({ left: -180 });
   });
 });

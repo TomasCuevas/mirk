@@ -120,7 +120,20 @@
   <!-- R43/S2: a way back that does not depend on the bottom navigation, named after the screen it
        returns to. It calls the same navigation the navbar's Ajustes button uses, so there is one
        mechanism rather than two. -->
-  <button type="button" class="back" onclick={onBack}>{t("settings.back")}</button>
+  <!-- R15: the arrow is the affordance; the label names where it goes. -->
+  <button
+    type="button"
+    class="back"
+    aria-label={t("settings.backLabel")}
+    onclick={onBack}
+  >
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+        stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12.5 8h-9" />
+        <path d="M7.5 4 3.5 8l4 4" />
+      </svg>
+    {t("settings.back")}
+  </button>
 
   <h1>{settingsSectionTitle("library", t)}</h1>
   <!-- R43/S4: one line saying what this screen is for, which the index's sentence does not: the index
@@ -128,7 +141,14 @@
   <p class="purpose">{settingsSectionPurpose("library", t)}</p>
 
   <div class="panel">
-    <h2>{t("settings.folders.heading")}</h2>
+    <!-- R15: each panel states how much is inside it, at the top right, so the screen can be read
+         without opening anything: two folders watched, three documents waiting. -->
+    <div class="panel-head">
+      <h2>{t("settings.folders.heading")}</h2>
+      {#if folders !== null && folders.length > 0}
+        <span class="badge">{folders.length}</span>
+      {/if}
+    </div>
     {#if foldersError !== null}
       <p class="state error">{t("settings.folders.error", { message: foldersError })}</p>
     {:else if folderMessage !== null}
@@ -181,7 +201,12 @@
     actions do. The heading is the file's own name and never the path; the path is stated under it.
   -->
   <div class="panel">
-    <h2>{t("suggestion.heading")}</h2>
+    <div class="panel-head">
+      <h2>{t("suggestion.heading")}</h2>
+      {#if suggestions !== null && suggestions.length > 0}
+        <span class="badge">{suggestions.length}</span>
+      {/if}
+    </div>
     <p class="state">{t("suggestion.definition")}</p>
     {#if suggestionError !== null}
       <p class="state error">{t("suggestion.error", { message: suggestionError })}</p>
@@ -218,7 +243,9 @@
   </div>
 
   <div class="panel">
-    <h2>{t("scan.heading")}</h2>
+    <div class="panel-head">
+      <h2>{t("scan.heading")}</h2>
+    </div>
     <form onsubmit={submit}>
       <!--
         R25: the section is composed rather than stacked. The folder being acted on is the subject, so it
@@ -323,53 +350,88 @@
 
   h1 {
     margin: 0;
-    font-size: 1.35rem;
   }
 
   .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
     align-self: flex-start;
     padding: 0.35rem 0.6rem;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
-    background: #ffffff;
-    color: #24506b;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+    color: var(--fg-muted);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
     cursor: pointer;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
   }
 
   .back:hover {
-    background: #f0f2f5;
+    background: var(--surface-2);
+    color: var(--fg);
   }
 
   .purpose {
     margin: 0;
-    font-size: 0.85rem;
-    color: #5a6472;
+    font-size: var(--text-sm);
+    color: var(--fg-muted);
   }
 
+  /* The block's name, as an eyebrow: small caps is what tells a reader this line names the block below
+     it rather than starting a paragraph. */
   h2 {
-    margin: 0 0 0.75rem;
-    font-size: 0.85rem;
+    margin: 0;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #5a6472;
+    letter-spacing: var(--tracking-wide);
+    color: var(--fg-muted);
+  }
+
+  /* One thin rule under every panel's name, and the count on the other side of it: the three panels
+     now share a header shape instead of three headings floating at three distances. */
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding-bottom: 0.55rem;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.35rem;
+    height: 1.35rem;
+    padding: 0 0.4rem;
+    border-radius: var(--r-full);
+    background: var(--surface-2);
+    color: var(--fg-muted);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
   }
 
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e6eb;
-    border-radius: 0.75rem;
-    padding: 0.7rem 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: 0.8rem 0.9rem;
   }
 
   .state {
     margin: 0;
-    color: #5a6472;
+    color: var(--fg-muted);
   }
 
   .state.error {
-    color: #a1301f;
+    color: var(--danger);
   }
 
   ul {
@@ -385,26 +447,35 @@
     display: flex;
     flex-direction: column;
     gap: 0.1rem;
+    padding: 0.45rem 0.5rem;
+    border-radius: var(--r-md);
+    transition: background var(--fast) var(--ease);
+  }
+
+  li:hover {
+    background: var(--surface-1);
   }
 
   /* R21 and R24: the watched folder's address is a control (it opens the folder) and reads as the least
-     important thing on the row rather than the loudest. */
+     important thing on the row rather than the loudest: the underline says "clickable", the muted
+     colour says "read the row, then this". */
   .watched-path {
     background: none;
     border: 0;
     padding: 0;
-    color: #24506b;
+    color: var(--fg-muted);
     font: inherit;
-    font-size: 0.82rem;
+    font-size: var(--text-xs);
     text-align: left;
     text-decoration: underline;
     text-underline-offset: 0.15em;
     cursor: pointer;
     overflow-wrap: anywhere;
+    transition: color var(--fast) var(--ease);
   }
 
   .watched-path:hover {
-    color: #17364a;
+    color: var(--fg);
   }
 
   /* R27: the way to stop watching a folder, which now takes the folder's documents with it. It is still
@@ -412,18 +483,20 @@
      stated — which is the point of asking. */
   .remove {
     background: none;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
     padding: 0.15rem 0.45rem;
-    color: #a1301f;
+    color: var(--danger);
     font: inherit;
-    font-size: 0.75rem;
+    font-size: var(--text-xs);
     cursor: pointer;
     align-self: flex-start;
+    transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
   }
 
   .remove:hover {
-    background: #fdf1ef;
+    background: var(--surface-2);
+    border-color: var(--line-strong);
   }
 
   /* R25: the folder the panel acts on, as a readout. It is styled like a field because that is what it
@@ -431,24 +504,25 @@
      and pushing the layout around is worse than breaking a line. */
   .field {
     margin: 0;
-    padding: 0.45rem 0.6rem;
-    border: 1px solid #e2e6eb;
-    border-radius: 0.4rem;
-    background: #f7f9fb;
-    font-size: 0.82rem;
-    color: #1c2024;
+    padding: 0.45rem 0.55rem;
+    display: block;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+    font-size: var(--text-xs);
+    color: var(--fg-muted);
     overflow-wrap: anywhere;
     box-sizing: border-box;
     width: 100%;
   }
 
   .field .empty {
-    color: #8b95a3;
+    color: var(--fg-subtle);
   }
 
   .detail {
-    font-size: 0.8rem;
-    color: #5a6472;
+    font-size: var(--text-xs);
+    color: var(--fg-muted);
   }
 
   /* L57: the suggestion cards, shaped like the library's. Two columns, because the window is 430 wide
@@ -476,21 +550,24 @@
     border: 0;
     padding: 0;
     text-align: left;
-    font-size: 0.7rem;
-    color: #5a6472;
+    font-size: var(--text-xs);
+    color: var(--fg-muted);
     cursor: pointer;
     overflow-wrap: anywhere;
+    transition: color var(--fast) var(--ease);
   }
 
   .suggestion-path:hover {
-    color: #17364a;
+    color: var(--fg);
     text-decoration: underline;
   }
 
   .suggestion-title {
     margin: 0;
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
     line-height: 1.2;
+    color: var(--fg);
     overflow: hidden;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -503,15 +580,20 @@
   }
 
   input {
-    padding: 0.45rem 0.6rem;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
-    background: #ffffff;
+    height: 2rem;
+    padding: 0 0.55rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
     font: inherit;
-    font-size: 0.9rem;
-    color: #1c2024;
+    font-size: var(--text-sm);
+    color: var(--fg);
     box-sizing: border-box;
     max-width: 100%;
+  }
+
+  input::placeholder {
+    color: var(--fg-subtle);
   }
 
   form {
@@ -535,11 +617,16 @@
   .manual summary {
     list-style: none;
     cursor: pointer;
-    color: #24506b;
-    font-size: 0.8rem;
+    color: var(--fg-muted);
+    font-size: var(--text-xs);
     text-decoration: underline;
     text-underline-offset: 0.15em;
     width: fit-content;
+    transition: color var(--fast) var(--ease);
+  }
+
+  .manual summary:hover {
+    color: var(--fg);
   }
 
   .manual summary::-webkit-details-marker {
@@ -551,24 +638,37 @@
     width: 100%;
   }
 
+  /* The one loud control in the application: a white fill with the canvas colour as its text, which is
+     the reference's own primary. Everything that is not the primary is `secondary` — a raised surface
+     with a hairline — so the screen has one place to look first. */
   button {
     padding: 0.45rem 0.8rem;
-    border: 1px solid #24506b;
-    border-radius: 0.4rem;
-    background: #24506b;
-    color: #ffffff;
+    border: 1px solid var(--fg);
+    border-radius: var(--r-sm);
+    background: var(--fg);
+    color: var(--fg-on-loud);
     font: inherit;
+    font-size: var(--text-sm);
     cursor: pointer;
   }
 
   button.secondary {
-    background: #ffffff;
-    color: #24506b;
+    background: var(--surface-1);
+    border-color: var(--line);
+    color: var(--fg);
   }
 
+  button.secondary:hover:not(:disabled) {
+    background: var(--surface-2);
+    border-color: var(--line-strong);
+  }
+
+  /* Destruction is its own colour, and its text is the canvas rather than white: white on this red is
+     under 3:1, and a destructive control is the last place to spend contrast. */
   button.danger {
-    background: #a1301f;
-    border-color: #a1301f;
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--fg-on-loud);
   }
 
   button:disabled {
@@ -579,8 +679,8 @@
   .failures {
     margin-top: 0.75rem;
     gap: 0.35rem;
-    font-size: 0.85rem;
-    color: #a1301f;
+    font-size: var(--text-xs);
+    color: var(--danger);
   }
 
   .failures li {

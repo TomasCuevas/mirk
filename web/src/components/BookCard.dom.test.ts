@@ -95,3 +95,54 @@ describe("the card opens the document", () => {
     expect(onOpenDocument).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * R15. A finished document is a state, not a number like any other.
+ *
+ * The user asked for the 100 % pill to be wider and differently coloured so the end of a book is
+ * obvious at a glance. What is pinned here is the class that carries that decision, because the
+ * colour lives in the stylesheet and the DECISION — this card is finished — must come from
+ * `describeProgressView`, the one place that decides what a fraction means.
+ */
+describe("a finished document says so", () => {
+  let component: ReturnType<typeof mount> | null = null;
+
+  afterEach(() => {
+    if (component !== null) {
+      unmount(component);
+      component = null;
+    }
+    window.document.body.innerHTML = "";
+  });
+
+  function withProgress(page: number, total: number): void {
+    component = mount(BookCard, {
+      target: window.document.body,
+      props: {
+        entry: { ...entry(), progress: { page, total, source: "native", confidence: "exact", recordedAt: null, readAt: null } },
+        t: english,
+        onOpenFolder: () => {},
+        onOpenDocument: () => {},
+        onEditDocument: () => {},
+        cover: null,
+      },
+    });
+    flushSync();
+  }
+
+  it("marks the 100 % pill as complete", () => {
+    withProgress(9, 10);
+
+    const marker = window.document.querySelector(".marker");
+    expect(marker?.textContent?.trim()).toBe("100%");
+    expect(marker?.classList.contains("complete")).toBe(true);
+  });
+
+  it("leaves a document in progress without the complete pill", () => {
+    withProgress(4, 10);
+
+    const marker = window.document.querySelector(".marker");
+    expect(marker?.textContent?.trim()).toBe("50%");
+    expect(marker?.classList.contains("complete")).toBe(false);
+  });
+});

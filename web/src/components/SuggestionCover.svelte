@@ -113,14 +113,15 @@
 
   /* The first page of a document the library has never seen (L60). The same rectangle and the same
      corner radius as a library cover, so a suggestion and a library document read as the same kind of
-     object — which is the whole point of the card. */
+     object — which is the whole point of the card. The rules below are BookCard's, verbatim: if the two
+     ever disagree, the two objects stop being one family. */
   .cover-image {
     display: block;
     width: 100%;
     box-sizing: border-box;
-    border: 1px solid #e2e6eb;
-    border-radius: 0.4rem;
-    background: #ffffff;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
     object-fit: contain;
   }
 
@@ -131,16 +132,25 @@
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
-    border: 1px dashed #ccd2da;
-    border-radius: 0.4rem;
-    background: repeating-linear-gradient(45deg, #f6f7f9, #f6f7f9 8px, #eef0f3 8px, #eef0f3 16px);
-    color: #8b95a3;
-    font-size: 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent 0 9px,
+      rgba(255, 255, 255, 0.018) 9px 18px
+    );
+    color: var(--fg-subtle);
+    font-size: var(--text-xs);
     text-align: center;
   }
 
   /* The two decisions sit at the bottom of the cover's space and centred: the middle read as covering
-     the document, and the bottom edge is where an action belongs. */
+     the document, and the bottom edge is where an action belongs.
+
+     They are drawn as the card's own pills — the marker on the bar and the page badge on the cover — so
+     the actions on a suggestion are the same kind of object as the facts on a library card: one raised
+     surface, one strong hairline, fully rounded. */
   .cover-decisions {
     position: absolute;
     inset: 0;
@@ -156,8 +166,17 @@
     align-items: center;
     justify-content: center;
     padding: 0.4rem;
-    border-radius: 999px;
-    background: #ffffff;
+    /* `currentColor`, so each pill's edge is its own decision's colour and the two rules below only have
+       to state the hue once. */
+    border: 1px solid currentColor;
+    border-radius: var(--r-full);
+    background: var(--surface-2);
+    cursor: pointer;
+    transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  }
+
+  .cover-decisions button:hover:not(:disabled) {
+    background: var(--surface-3);
   }
 
   .cover-decisions button:disabled {
@@ -165,13 +184,13 @@
     opacity: 0.6;
   }
 
+  /* Accept and discard keep their meaning in their hue — the same two colours the progress ramp starts
+     and ends on — and the icon repeats it in words through the button's accessible name. */
   .accept {
-    color: #1c6b3f;
-    border-color: #1c6b3f;
+    color: var(--success);
   }
 
   .discard {
-    color: #a1301f;
-    border-color: #a1301f;
+    color: var(--danger);
   }
 </style>

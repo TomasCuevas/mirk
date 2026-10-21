@@ -38,15 +38,13 @@ describe("the Aplicación sub-screen", () => {
   it("offers both languages, and marks the one the interface is in", () => {
     const { body } = render(SettingsAppScreen, { props: screenProps("es") });
 
-    expect(body).toContain("<select");
-    // Both languages are offered, and the only one that can be marked as chosen is the current one:
-    // the selector states the choice so a reader sees what it is set to before touching it. Asserting
-    // the bare option tags for BOTH would contradict the marking below — the first version of this
-    // test did exactly that and failed as soon as the screen marked the current language.
+    // R15: the two languages are a segmented control, not a dropdown — both are on screen, and the
+    // current one is pressed. Exactly one button may be pressed, and it must be the Spanish one.
+    expect(body).toContain('role="group"');
     expect(body).toContain(">English<");
     expect(body).toContain(">Español<");
-    expect(body).toMatch(/<option value="es"[^>]*selected[^>]*>Español<\/option>/);
-    expect(body).not.toMatch(/<option value="en"[^>]*selected[^>]*>English<\/option>/);
+    expect(body).toMatch(/<button[^>]*aria-pressed="true"[^>]*>Español<\/button>/);
+    expect(body).not.toMatch(/<button[^>]*aria-pressed="true"[^>]*>English<\/button>/);
   });
 
   // R1: the tray's menu is built by the desktop process from the same stored value, so the screen says

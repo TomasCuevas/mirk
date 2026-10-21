@@ -10,6 +10,7 @@
     filterEntries,
     libraryAuthors,
     libraryView,
+    pageWindow,
     paginate,
     sortEntries,
     sortKeys,
@@ -96,6 +97,18 @@
 <section class="screen">
   <h1>{t("library.heading")}</h1>
 
+  {#if view !== "loading" && error === null && entries.length > 0}
+    <!-- R15: the count says something only when it says something new. "42 of 42 documents" is
+         arithmetic dressed as information; the whole number is stated once, and the filtered
+         fraction appears only when a filter or a page actually hides documents. It sits under the
+         title, where a subtitle belongs, rather than floating at the end of a row of controls. -->
+    <p class="lede">
+      {paged.total === entries.length
+        ? t("library.countAll", { total: entries.length })
+        : t("library.count", { shown: paged.total, total: entries.length })}
+    </p>
+  {/if}
+
   {#if view === "loading"}
     <p class="state">{t("library.loading")}</p>
   {:else if error !== null}
@@ -132,7 +145,6 @@
           {/each}
         </select>
       </label>
-      <span class="count">{t("library.count", { shown: paged.total, total: entries.length })}</span>
     </div>
 
     {#if visible.length === 0}
@@ -161,23 +173,51 @@
   <!-- One definition of the page controls, rendered above and below the grid (R10, L27). The buttons
        move the window over the same filtered, sorted listing, so turning a page keeps the filters. -->
   {#snippet pager()}
-    <div class="pager">
+    <!-- R15: the reader asked for the familiar strip — arrows at the ends and the pages in between —
+         instead of two sentences ("previous page", "next page") that made pagination the ugliest part
+         of the screen. The numbers come from `pageWindow`, which decides which pages are worth
+         showing; this snippet only draws what it decides. -->
+    <nav class="pager" aria-label={t("library.pagination")}>
       <button
         type="button"
+        class="step"
+        aria-label={t("library.previousPage")}
         disabled={paged.page <= 1}
         onclick={() => turnTo(paged.page - 1)}
       >
-        {t("library.previousPage")}
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+          stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M10 3.5 5.5 8l4.5 4.5" />
+        </svg>
       </button>
-      <span>{t("library.pagePosition", { page: paged.page, pages: paged.pageCount })}</span>
+
+      {#each pageWindow(paged.page, paged.pageCount) as slot, index (index)}
+        {#if slot.kind === "gap"}
+          <span class="gap" aria-hidden="true">…</span>
+        {:else}
+          <button
+            type="button"
+            class:current={slot.page === paged.page}
+            aria-current={slot.page === paged.page ? "page" : undefined}
+            aria-label={t("library.page", { page: slot.page })}
+            onclick={() => turnTo(slot.page)}
+          >{slot.page}</button>
+        {/if}
+      {/each}
+
       <button
         type="button"
+        class="step"
+        aria-label={t("library.nextPage")}
         disabled={paged.page >= paged.pageCount}
         onclick={() => turnTo(paged.page + 1)}
       >
-        {t("library.nextPage")}
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+          stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 3.5 10.5 8 6 12.5" />
+        </svg>
       </button>
-    </div>
+    </nav>
   {/snippet}
 </section>
 
@@ -190,49 +230,66 @@
 
   h1 {
     margin: 0;
-    font-size: 1.35rem;
   }
 
   .state {
     margin: 0;
-    color: #5a6472;
+    color: var(--fg-muted);
+  }
+
+  .lede {
+    margin: -0.35rem 0 0;
+    color: var(--fg-muted);
+    font-size: var(--text-sm);
+    font-variant-numeric: tabular-nums;
   }
 
   .state.error {
-    color: #a1301f;
+    color: var(--danger);
   }
 
+  /* The controls sit on the canvas rather than in a panel of their own, and they arrange themselves in
+     three rows without the markup saying so: the text filter is the whole first row, the author and the
+     order share the second, and the count is a line of its own under them. `align-items: flex-end` keeps
+     the two selects on the same baseline as the search field above them. */
   .controls {
     display: flex;
     flex-wrap: wrap;
     align-items: flex-end;
-    gap: 0.6rem 1rem;
-    padding: 0.7rem 0.8rem;
-    background: #ffffff;
-    border: 1px solid #e2e6eb;
-    border-radius: 0.75rem;
+    gap: var(--space-2);
   }
 
   .controls label {
     display: flex;
-    flex: 1 1 8rem;
+    flex: 1 1 0;
+    min-width: 0;
     flex-direction: column;
     gap: 0.25rem;
-    font-size: 0.8rem;
-    color: #5a6472;
+    font-size: var(--text-xs);
+    color: var(--fg-subtle);
+  }
+
+  /* The search label owns its row: a query is a sentence, and half a window is not enough to type one. */
+  .controls > label:first-of-type {
+    flex: 1 0 100%;
   }
 
   input,
   select {
-    padding: 0.45rem 0.6rem;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
-    background: #ffffff;
+    height: 2rem;
+    padding: 0 0.55rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background-color: var(--surface-1);
     font: inherit;
-    font-size: 0.9rem;
-    color: #1c2024;
+    font-size: var(--text-sm);
+    color: var(--fg);
     box-sizing: border-box;
     max-width: 100%;
+  }
+
+  input::placeholder {
+    color: var(--fg-subtle);
   }
 
   input {
@@ -240,38 +297,59 @@
     min-width: 0;
   }
 
-  .count {
-    margin-left: auto;
-    font-size: 0.8rem;
-    color: #5a6472;
-  }
-
   .pager {
+    /* R16: a little air above and below the strip. Without it the page numbers were glued to the
+       grid above and to the bottom edge of the screen. */
+    margin: 0.4rem 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 0.6rem;
-    font-size: 0.85rem;
-    color: #5a6472;
+    gap: 0.15rem;
+    font-size: var(--text-sm);
+    color: var(--fg-muted);
+    font-variant-numeric: tabular-nums;
   }
 
+  /* A page number is a quiet button until it is the page you are on; the current one is a filled
+     pill, which is the only thing in the strip that carries weight. */
   .pager button {
-    padding: 0.4rem 0.6rem;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
-    background: #ffffff;
-    color: #24506b;
+    min-width: 1.9rem;
+    height: 1.9rem;
+    padding: 0 0.4rem;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--fg-muted);
     font: inherit;
-    font-size: 0.85rem;
+    font-size: var(--text-xs);
     cursor: pointer;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
   }
 
   .pager button:hover:not(:disabled) {
-    background: #f0f2f5;
+    background: var(--surface-2);
+    color: var(--fg);
+  }
+
+  .pager button.current {
+    background: var(--fg);
+    color: var(--fg-on-loud);
+    font-weight: var(--weight-semibold);
+  }
+
+  .pager button.step {
+    color: var(--fg-subtle);
+  }
+
+  .pager .gap {
+    min-width: 1.1rem;
+    text-align: center;
+    color: var(--fg-subtle);
   }
 
   .pager button:disabled {
-    color: #9aa3af;
+    color: var(--fg-subtle);
+    opacity: 0.45;
     cursor: default;
   }
 </style>

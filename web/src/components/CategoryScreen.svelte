@@ -66,7 +66,16 @@
   <!-- A way back that does not depend on the bottom navigation. It calls the same navigation the
        navbar's Inicio button uses (App wires it to `selectScreen("home")`), so returning from a
        category uses the existing routing rather than a second mechanism. -->
-  <button type="button" class="back" onclick={onBack}>{t("category.back")}</button>
+  <!-- R15: a back control reads as one when it carries the arrow that means "back"; the text alone
+       made it look like one more button. -->
+  <button type="button" class="back" onclick={onBack}>
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+        stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12.5 8h-9" />
+        <path d="M7.5 4 3.5 8l4 4" />
+      </svg>
+    {t("category.back")}
+  </button>
 
   <h1>{categoryTitle(category, t)}</h1>
   <p class="definition">{categoryDefinition(category, t)}</p>
@@ -97,36 +106,40 @@
 
   h1 {
     margin: 0;
-    font-size: 1.35rem;
   }
 
   .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
     align-self: flex-start;
     padding: 0.35rem 0.6rem;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
-    background: #ffffff;
-    color: #24506b;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+    color: var(--fg-muted);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
     cursor: pointer;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
   }
 
   .back:hover {
-    background: #f0f2f5;
+    background: var(--surface-2);
+    color: var(--fg);
   }
 
   .definition,
   .state {
     margin: 0;
-    color: #5a6472;
+    color: var(--fg-muted);
   }
 
   .definition {
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
   }
 
   .state.error {
-    color: #a1301f;
+    color: var(--danger);
   }
 </style>

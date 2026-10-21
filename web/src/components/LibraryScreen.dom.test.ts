@@ -85,7 +85,8 @@ function authorSelect(): HTMLSelectElement | undefined {
 
 /** The screen's count sentence, which is one of the pieces of text that follows the narrowing. */
 function count(): string {
-  return window.document.querySelector(".count")?.textContent?.trim() ?? "";
+  // R15: the count is the line under the title now, not the tail of the controls row.
+  return window.document.querySelector(".lede")?.textContent?.trim() ?? "";
 }
 
 function searchBox(): HTMLInputElement {
@@ -154,7 +155,7 @@ describe("choosing an author in Biblioteca", () => {
     // the order the sort already chose for it.
     expect(select?.value).toBe("");
     expect(titles()).toEqual(["Anónimo", "Contact", "Cosmos", "Ficciones"]);
-    expect(count()).toBe(english("library.count", { shown: 4, total: 4 }));
+    expect(count()).toBe(english("library.countAll", { total: 4 }));
   });
 
   it("leaves only the chosen author's cards, and states the narrowed count", () => {
@@ -270,10 +271,18 @@ describe("the editor's author list on a paged library", () => {
   }
 
   /** The values the editor's author list is offering. */
+  /** R16: the field is a combobox now, so the list it opens is the dialog's own listbox. */
   function offeredAuthors(): string[] {
+    const field = window.document.querySelector<HTMLInputElement>(
+      '[role="dialog"] input[role="combobox"]',
+    );
+    field?.dispatchEvent(new FocusEvent("focus"));
+    flushSync();
     return [
-      ...window.document.querySelectorAll<HTMLOptionElement>('[role="dialog"] option'),
-    ].map((option) => option.value);
+      ...window.document.querySelectorAll<HTMLButtonElement>(
+        '[role="dialog"] #author-choices button[role="option"]',
+      ),
+    ].map((option) => option.textContent?.trim() ?? "");
   }
 
   it("offers the author of a document that sits on another page", () => {
@@ -414,9 +423,10 @@ describe("a page turn asks the shell for the top", () => {
     );
   }
 
+  /** R15: the pager's arrows carry no text any more, so the accessible name is what finds them. */
   function pagerButton(label: string): HTMLButtonElement {
     const button = [...window.document.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent?.trim() === label,
+      (candidate) => candidate.getAttribute("aria-label") === label,
     );
     if (button === undefined) {
       throw new Error(`the screen draws its "${label}" control`);

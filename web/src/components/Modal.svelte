@@ -57,6 +57,9 @@
 </div>
 
 <style>
+  /* The backdrop is the canvas pushed back, not a grey veil: 72 % black over an already black screen
+     darkens what is behind the dialog without tinting it, and the blur is what separates the dialog
+     from the cards underneath rather than the shadow alone. */
   .backdrop {
     position: fixed;
     inset: 0;
@@ -65,7 +68,8 @@
     align-items: center;
     justify-content: center;
     padding: 1rem;
-    background: rgba(16, 22, 28, 0.45);
+    background: rgba(0, 0, 0, 0.72);
+    backdrop-filter: blur(4px);
   }
 
   .dialog {
@@ -73,13 +77,19 @@
     max-width: 22rem;
     max-height: 100%;
     overflow-y: auto;
+    /* A dialog scrolls vertically and never sideways. CSS makes the other axis `auto` as soon as one
+       is not `visible`, so a single element that pokes out of the box — a tooltip, a long unbroken
+       word — turns the whole editor into a horizontally scrolling surface. `hidden` costs nothing and
+       removes the failure mode; the popover that caused it now grows inwards as well. */
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
     padding: 1rem;
-    background: #ffffff;
-    border-radius: 0.75rem;
-    box-shadow: 0 12px 32px rgba(16, 22, 28, 0.28);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-xl);
+    box-shadow: var(--shadow-modal);
   }
 
   /* The focus is moved here by the script, not by the reader's tab: a ring around the whole card would
@@ -90,6 +100,8 @@
 
   h3 {
     margin: 0;
-    font-size: 0.95rem;
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
+    color: var(--fg);
   }
 </style>

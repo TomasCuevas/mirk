@@ -116,6 +116,11 @@
             onclick={() => onOpenCategory(section.category)}
           >
             {t("home.openCategory")}
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3.5 8h9" />
+              <path d="M8.5 4l4 4-4 4" />
+            </svg>
           </button>
         </div>
 
@@ -162,38 +167,44 @@
     align-items: flex-start;
     gap: 0.5rem;
     padding: 0.85rem 1rem;
-    background: #f7f9fb;
-    border: 1px solid #e2e6eb;
-    border-radius: 0.6rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
   }
 
   .first-run h2 {
     margin: 0;
-    font-size: 1rem;
-    color: #17364a;
+    font-size: var(--text-base);
+    color: var(--fg);
   }
 
   .first-run p {
     margin: 0;
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
     line-height: 1.45;
-    color: #5a6472;
+    color: var(--fg-muted);
   }
 
   .first-run button {
     font: inherit;
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
     padding: 0.4rem 0.8rem;
-    color: #24506b;
-    background: #ffffff;
-    border: 1px solid #ccd2da;
-    border-radius: 0.5rem;
+    color: var(--fg);
+    background: var(--surface-1);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
     cursor: pointer;
+    transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
   }
 
+  .first-run button:hover {
+    background: var(--surface-2);
+    border-color: var(--line-strong);
+  }
+
+  /* The screen's title is the one the token file defines: no component states its own size. */
   h1 {
     margin: 0;
-    font-size: 1.35rem;
   }
 
   .carousel {
@@ -201,7 +212,7 @@
        strip and the empty slot below both read it as `--tile`. */
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.6rem;
   }
 
   .head {
@@ -213,7 +224,12 @@
 
   h2 {
     margin: 0;
-    font-size: 1rem;
+  }
+
+  .head h2 {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    color: var(--fg);
   }
 
   .head button,
@@ -221,52 +237,65 @@
     margin: 0;
   }
 
+  /* The way out of a carousel is a word, not a chip: a button beside a heading would compete with the
+     heading for the same glance, so it is drawn as text that says it can be clicked. */
   .head button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
     flex: none;
-    padding: 0.35rem 0.55rem;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
-    background: #ffffff;
-    color: #24506b;
+    padding: 0;
+    border: 0;
+    background: none;
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
+    color: var(--fg-muted);
     cursor: pointer;
+    transition: color var(--fast) var(--ease);
   }
 
   .head button:hover {
-    background: #f0f2f5;
+    color: var(--fg);
   }
 
   .state {
-    color: #5a6472;
+    color: var(--fg-muted);
   }
 
   /* The empty slot is the same rectangle as a real card: the same width, padding and border, a cover
      with the same 9/11 ratio, and the same fixed-height text block below it. They are the same size
      because they are built from the same numbers, not because two sets of numbers were tuned to agree —
      which is what the user asked for. */
-  /* The same chrome the real card has — white, solid border, same radius — so the empty slot reads as
-     a card-shaped slot rather than as a dashed box drawn around the cover placeholder. The first
+  /* The same chrome the real card has — one surface, one hairline, same radius — so the empty slot reads
+     as a card-shaped slot rather than as a dashed box drawn around the cover placeholder. The first
      attempt copied the card's measurements but kept a dashed translucent frame, and the result was a
      frame inside a frame (L31). */
   .empty {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 0.45rem;
     width: var(--tile);
-    padding: 0.7rem;
+    padding: 0.45rem;
     box-sizing: border-box;
-    background: #ffffff;
-    border: 1px solid #e2e6eb;
-    border-radius: 0.75rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
   }
 
+  /* The same cover the card draws, rule for rule: the placeholder and a real cover are one object. */
   .empty-cover {
     /* Same `border-box` ratio as the card's cover, so both are the same rectangle. */
     box-sizing: border-box;
-    border: 1px dashed #ccd2da;
-    border-radius: 0.4rem;
-    background: repeating-linear-gradient(45deg, #f6f7f9, #f6f7f9 8px, #eef0f3 8px, #eef0f3 16px);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent 0 9px,
+      rgba(255, 255, 255, 0.018) 9px 18px
+    );
+    color: var(--fg-subtle);
+    font-size: var(--text-xs);
   }
 
   .empty-body {
@@ -274,15 +303,15 @@
     align-items: center;
     justify-content: center;
     text-align: center;
-    color: #8b95a3;
-    font-size: 0.8rem;
   }
 
   .empty-body p {
     margin: 0;
+    color: var(--fg-subtle);
+    font-size: var(--text-xs);
   }
 
   .state.error {
-    color: #a1301f;
+    color: var(--danger);
   }
 </style>

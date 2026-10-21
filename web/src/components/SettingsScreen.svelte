@@ -56,13 +56,12 @@
 
   h1 {
     margin: 0;
-    font-size: 1.35rem;
   }
 
   .intro {
     margin: 0;
-    color: #5a6472;
-    font-size: 0.85rem;
+    color: var(--fg-muted);
+    font-size: var(--text-sm);
   }
 
   ul {
@@ -83,29 +82,30 @@
     gap: 0.15rem;
     width: 100%;
     box-sizing: border-box;
-    padding: 0.7rem 0.9rem;
-    background: #ffffff;
-    border: 1px solid #e2e6eb;
-    border-radius: 0.75rem;
+    padding: 0.8rem 0.9rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
     font: inherit;
     text-align: left;
-    color: #1c2024;
+    color: var(--fg);
     cursor: pointer;
+    transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
   }
 
   .section:hover {
-    border-color: #24506b;
-    background: #f7f9fb;
+    background: var(--surface-1);
+    border-color: var(--line-strong);
   }
 
   .name {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: #17364a;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    color: var(--fg);
   }
 
   .summary {
-    font-size: 0.8rem;
-    color: #5a6472;
+    font-size: var(--text-xs);
+    color: var(--fg-muted);
   }
 </style>

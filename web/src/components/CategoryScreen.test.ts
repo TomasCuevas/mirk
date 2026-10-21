@@ -42,7 +42,7 @@ describe("a category's own screen", () => {
     const { body } = render(CategoryScreen, { props: categoryProps() });
 
     const back = body.slice(body.indexOf("<button"), body.indexOf("</button>") + 9);
-    expect(back).toContain(`>${english("category.back")}<`);
+    expect(back).toContain(english("category.back"));
     // Above the heading, so it reads as a way back rather than another action on the list.
     expect(body.indexOf("<button")).toBeLessThan(body.indexOf("<h1"));
   });

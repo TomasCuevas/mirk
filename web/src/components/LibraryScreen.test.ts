@@ -66,7 +66,7 @@ describe("Biblioteca without the folder-action outcome", () => {
 
     // A real card, drawn through the shared grid, with no status passed down to it.
     expect(body).toMatch(/<article/g);
-    expect(body).toContain(english("library.count", { shown: 1, total: 1 }));
+    expect(body).toContain(english("library.countAll", { total: 1 }));
   });
 
   it("shows the loader, not the empty sentence, while work is in flight (L47)", () => {

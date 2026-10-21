@@ -33,7 +33,20 @@
 -->
 <section class="screen">
   <!-- R43/S2: a way back, named after the screen it returns to. -->
-  <button type="button" class="back" onclick={onBack}>{t("settings.back")}</button>
+  <!-- R15: the arrow is the affordance; the label names where it goes. -->
+  <button
+    type="button"
+    class="back"
+    aria-label={t("settings.backLabel")}
+    onclick={onBack}
+  >
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+        stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12.5 8h-9" />
+        <path d="M7.5 4 3.5 8l4 4" />
+      </svg>
+    {t("settings.back")}
+  </button>
 
   <h1>{settingsSectionTitle("reading", t)}</h1>
   <!-- R43/S4: one line saying what this screen is for. -->
@@ -70,53 +83,60 @@
 
   h1 {
     margin: 0;
-    font-size: 1.35rem;
   }
 
   .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
     align-self: flex-start;
     padding: 0.35rem 0.6rem;
-    border: 1px solid #ccd2da;
-    border-radius: 0.4rem;
-    background: #ffffff;
-    color: #24506b;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+    color: var(--fg-muted);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
     cursor: pointer;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
   }
 
   .back:hover {
-    background: #f0f2f5;
+    background: var(--surface-2);
+    color: var(--fg);
   }
 
   .purpose {
     margin: 0;
-    font-size: 0.85rem;
-    color: #5a6472;
+    font-size: var(--text-sm);
+    color: var(--fg-muted);
   }
 
+  /* The block's name, as an eyebrow: small caps is what tells a reader this line names the block below
+     it rather than starting a paragraph. */
   h2 {
     margin: 0 0 0.75rem;
-    font-size: 0.85rem;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #5a6472;
+    letter-spacing: var(--tracking-wide);
+    color: var(--fg);
   }
 
   .panel {
-    background: #ffffff;
-    border: 1px solid #e2e6eb;
-    border-radius: 0.75rem;
-    padding: 0.7rem 0.9rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: 0.8rem 0.9rem;
   }
 
   .state {
     margin: 0;
-    color: #5a6472;
+    color: var(--fg-muted);
   }
 
   .state.error {
-    color: #a1301f;
+    color: var(--danger);
   }
 
   ul {
@@ -132,15 +152,19 @@
     display: flex;
     flex-direction: column;
     gap: 0.1rem;
+    font-size: var(--text-sm);
+    color: var(--fg-muted);
   }
 
   .detail {
-    font-size: 0.8rem;
-    color: #5a6472;
+    font-size: var(--text-xs);
+    color: var(--fg-muted);
   }
 
+  /* The provider's stable id: metadata, not prose, so it is the quietest thing on the row — and it is
+     set in the only mono face the platform can be relied on to have. */
   .id {
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-    color: #8b95a3;
+    color: var(--fg-subtle);
   }
 </style>

@@ -101,6 +101,13 @@ export interface LibraryEntry {
    * Only a file name travels here: the application owns the copy inside its own directory.
    */
   coverImage?: string | null;
+  /**
+   * Which of the two cover sources is in force (R19): `"page"`, `"image"`, or `null`/absent for a
+   * library written before the choice existed (the old rule: an image if there is one). Both facts
+   * can be stored at the same time — one image and one page — and only this says which one the card
+   * shows.
+   */
+  coverSource?: "page" | "image" | null;
 }
 
 /** What the `open_containing_folder` command returns when the folder is opened. */
@@ -231,17 +238,24 @@ export interface ScanReport {
  * stop moving exactly where the last stretch of a long book lives, so the green keeps deepening instead
  * of flattening. The width already states how much is left; the colour no longer stops saying it.
  *
- * They are deliberately dark for their hue. The bar they are painted on is pale (#e8ebef) and the card
- * is white, so a light yellow would be a bar that disappears at exactly the moment it means "halfway".
- * `progressColor` interpolates in a perceptual space, which keeps the intermediate colours as dark as
- * the stops instead of muddying them the way naive RGB blending does.
+ * They were dark while the application was light. The restyle moved the canvas to #07080a and the
+ * track to 9 % white over it, so the same stops became a bar that vanished at the moment it meant
+ * "halfway" — the exact defect the old constraint forbade, only on the other side of the contrast.
+ * The landmarks are unchanged (red, orange, yellow, green, deeper green) and so is the direction; the
+ * stops were lifted until every point of the ramp clears 3:1 against the dark track, and the test
+ * that pins this now measures the contrast against the track instead of assuming a pale one. This is
+ * an amendment of R38 for a dark surface, recorded in `odd/tasks/mirk-ui.md` (L5), not a reversal of
+ * the rule: the ramp still never stands still, and green still appears at 70 %.
+ *
+ * `progressColor` interpolates in a perceptual space, which keeps the intermediate colours as vivid
+ * as the stops instead of muddying them the way naive RGB blending does.
  */
 const PROGRESS_STOPS: readonly { at: number; hex: string }[] = [
-  { at: 0, hex: "#b3261e" },
-  { at: 0.28, hex: "#c2410c" },
-  { at: 0.5, hex: "#a16207" },
-  { at: 0.7, hex: "#2e7d32" },
-  { at: 1, hex: "#1e5b22" },
+  { at: 0, hex: "#ff5a52" },
+  { at: 0.28, hex: "#ff8a3d" },
+  { at: 0.5, hex: "#f0b429" },
+  { at: 0.7, hex: "#6ee7a0" },
+  { at: 1, hex: "#2fbf71" },
 ];
 
 /** A colour in OKLab: perceptual lightness, then the two opponent axes. */
@@ -355,6 +369,14 @@ export interface ProgressView {
   readonly color: string;
   /** The provenance in words, or `null` when nothing is recorded — the one case with no sentence. */
   readonly provenance: string | null;
+  /**
+   * Whether the document is finished — the fraction reached 1.
+   *
+   * It is a fact, not a style: the card uses it to give the finished number a wider pill and the
+   * success colour, and a card that only compared `fraction === 1` itself would be deciding the same
+   * thing in a second place, free to disagree after a rounding change.
+   */
+  readonly complete: boolean;
 }
 
 /**
@@ -380,6 +402,7 @@ export function describeProgressView(entry: LibraryEntry, t: Translate): Progres
       markerAt: 0,
       color: progressColor(0),
       provenance: null,
+      complete: false,
     };
   }
 
@@ -393,6 +416,7 @@ export function describeProgressView(entry: LibraryEntry, t: Translate): Progres
       markerAt: 0,
       color: progressColor(0),
       provenance,
+      complete: false,
     };
   }
 
@@ -401,6 +425,7 @@ export function describeProgressView(entry: LibraryEntry, t: Translate): Progres
     marker: t("card.progressPercent", { percent: Math.round(fraction * 100) }),
     markerAt: fraction,
     color: progressColor(fraction),
+    complete: fraction >= 1,
     provenance,
   };
 }
@@ -788,11 +813,19 @@ export async function fetchCover(
  * control has anything to act on. It is a function rather than a condition inside the markup for the
  * same reason `titleEditor` is: a rule that nothing checks drifts, and a test cannot click a modal.
  */
-export function coverEditor(entry: LibraryEntry): { page: string; hasImage: boolean } {
+export function coverEditor(entry: LibraryEntry): {
+  page: string;
+  hasImage: boolean;
+  source: "page" | "image";
+} {
   // A blank image name is not an image, the same way a blank title is not a title: the store refuses
   // to write one, so this only matters for a value that arrived from somewhere less careful.
   const hasImage = entry.coverImage != null && entry.coverImage.trim() !== "";
-  return { page: coverPageInput(entry), hasImage };
+  // R19: the stored source decides, and an unknown one falls back to the old rule the same way the
+  // core does — an image if there is one, otherwise the page. The page FIELD is filled either way,
+  // because switching to it must not require retyping the number that is already stored.
+  const source = entry.coverSource ?? (hasImage ? "image" : "page");
+  return { page: coverPageInput(entry), hasImage, source };
 }
 
 /**
@@ -835,6 +868,40 @@ export function coverPageFromInput(input: unknown): CoverPageChoice {
   return { ok: true, page: oneBased - 1 };
 }
 
+/**
+ * The text the cover page field should show for a stored page (R20).
+ *
+ * One-based, canonical, and empty for the first page — the same spelling [`coverPageInput`] produces
+ * from a listing. After a save the field is rewritten with this, so `"03"` becomes `"3"` and a field
+ * left blank stays blank instead of jumping to `"1"`.
+ */
+export function coverPageText(page: number | null): string {
+  return page === null ? "" : String(page + 1);
+}
+
+/**
+ * Whether two page-field values mean the same cover (R20).
+ *
+ * Comparing the raw values was the bug the user hit: the field shows ONE-based pages, the stored
+ * value is ZERO-based, and `bind:value` on a number input can hand back a number where the last save
+ * stored a string. So `"3"` after saving page 3 never matched `"2"`, and the button stayed on screen
+ * for ever.
+ *
+ * Two spellings of the same page are the same page: `"03"` is `"3"`, and an empty field is the first
+ * page — the same cover as `"1"`, because the stored `null` and `0` both display page 1. An invalid
+ * draft is a change unless it is textually identical to what was saved; the error it produces is the
+ * form's to show, not a phantom difference.
+ */
+export function sameCoverPage(draft: unknown, saved: unknown): boolean {
+  const left = coverPageFromInput(draft);
+  const right = coverPageFromInput(saved);
+  if (!left.ok || !right.ok) {
+    return String(draft ?? "").trim() === String(saved ?? "").trim();
+  }
+  // `null` (blank) and `0` (explicit first page) are the same cover.
+  return (left.page ?? 0) === (right.page ?? 0);
+}
+
 // --- The editor's outcome (R31/R32) ---------------------------------------------------------
 
 /**
@@ -846,24 +913,6 @@ export function coverPageFromInput(input: unknown): CoverPageChoice {
 export type EditorCommit = "title" | "cover";
 
 /**
- * Whether the document editor closes once a commit succeeds (R32, corrected).
- *
- * The editor edits TWO things — the title (R31) and the cover (R32) — but only the title is decided by
- * the editor's own pair of controls: Save writes the draft the reader typed and Cancel throws it away,
- * and either ends the edit. A cover commit is not that. It decides the cover and NOTHING ELSE, so it
- * must leave the editor open: closing is exactly how an undecided title draft dies, and a cover action
- * that quietly eats what somebody was writing is the defect this rule exists to prevent. The draft
- * survives until the reader presses one of the two controls that mean "this is my title".
- *
- * It is a function rather than a branch inside an event handler for the same reason `titleEditor` is:
- * a rule nothing checks drifts, and the component test environment cannot type into a field, so this
- * is the one place the rule can be pinned.
- */
-export function editorClosesAfterCommit(commit: EditorCommit): boolean {
-  return commit === "title";
-}
-
-/**
  * Whether a successful commit asks the owner of the listing to re-read it (R32, corrected).
  *
  * A commit changes a fact the listing holds, and the interface does not re-read that listing by
@@ -873,8 +922,8 @@ export function editorClosesAfterCommit(commit: EditorCommit): boolean {
  * already changed. Both halves of the one editor must refresh, so the answer does not depend on which
  * half changed, and a rule that nothing checks does not drift.
  *
- * Like `editorClosesAfterCommit`, it is a function rather than a call inside an event handler because
- * the component test environment cannot click, and this is the one place the rule can be pinned.
+ * It is a function rather than a call inside an event handler because the component test environment
+ * cannot click, and this is the one place the rule can be pinned.
  */
 export function editorRefreshesLibrary(commit: EditorCommit): boolean {
   return commit === "title" || commit === "cover";
@@ -905,6 +954,44 @@ export function matchesQuery(entry: LibraryEntry, query: string): boolean {
     entry.path.toLowerCase().includes(needle) ||
     entry.authors.some((author) => author.toLowerCase().includes(needle))
   );
+}
+
+/**
+ * The names the author field offers while the reader types (R16).
+ *
+ * The rule the user asked for is a combobox, not an input beside a select: *"el mismo input de texto
+ * debe ser un selector donde se pueda escribir"*. This is its decision half — which names are worth
+ * offering for what has been typed — and it lives here so the field can only draw the answer.
+ *
+ * The order is the caller's: the screen already sorted the library's authors in the reader's locale,
+ * and re-sorting here would silently undo that with the default locale. A name already on the list is
+ * never offered again, because choosing it would be refused by `addAuthorChip` and the field would
+ * look broken. A blank query offers everything left, which is what makes focusing the empty field a
+ * useful gesture rather than a dead one.
+ */
+export function authorChoices(
+  authors: readonly string[],
+  query: string,
+  chosen: readonly string[] = [],
+): string[] {
+  const needle = query.trim().toLowerCase();
+  const taken = new Set(chosen);
+  const seen = new Set<string>();
+  const choices: string[] = [];
+
+  for (const author of authors) {
+    const name = author.trim();
+    if (name === "" || taken.has(name) || seen.has(name)) {
+      continue;
+    }
+    if (needle !== "" && !name.toLowerCase().includes(needle)) {
+      continue;
+    }
+    seen.add(name);
+    choices.push(name);
+  }
+
+  return choices;
 }
 
 /** The documents matching `query`, in the order they arrived. */
@@ -1189,6 +1276,52 @@ export function paginate<T>(
   const current = Math.min(Math.max(1, page), pageCount);
   const start = (current - 1) * pageSize;
   return { items: items.slice(start, start + pageSize), page: current, pageCount, total };
+}
+
+/** One slot of a paginator: a page number, or the gap that stands for the pages left out. */
+export type PageSlot = { readonly kind: "page"; readonly page: number } | { readonly kind: "gap" };
+
+/**
+ * The pages a paginator shows: the first, the last, and a window around the current one.
+ *
+ * The rule the reader asked for is the familiar one — `1 2 3 … 5` — and it is written here rather than
+ * in the screen because it is a decision about what a page list means, and the screen should only
+ * draw it. The current page is always included, the ends are always included (a paginator that hides
+ * the last page makes the end of the library feel unreachable), and a gap is emitted only when more
+ * than one page is missing: a gap that hides a single page is longer than the page it hides.
+ *
+ * Small listings are listed whole. Up to seven pages fit without an ellipsis, and an ellipsis that
+ * hides one number is noise rather than orientation.
+ */
+export function pageWindow(page: number, pageCount: number, span = 1): PageSlot[] {
+  const total = Math.max(1, Math.floor(pageCount));
+  const current = Math.min(Math.max(1, Math.floor(page)), total);
+  const reach = Math.max(0, Math.floor(span));
+
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, index) => ({
+      kind: "page" as const,
+      page: index + 1,
+    }));
+  }
+
+  const shown = new Set<number>([1, total]);
+  for (let candidate = current - reach; candidate <= current + reach; candidate += 1) {
+    if (candidate >= 1 && candidate <= total) {
+      shown.add(candidate);
+    }
+  }
+
+  const slots: PageSlot[] = [];
+  let previous = 0;
+  for (const number of [...shown].sort((a, b) => a - b)) {
+    if (previous !== 0 && number - previous > 1) {
+      slots.push({ kind: "gap" });
+    }
+    slots.push({ kind: "page", page: number });
+    previous = number;
+  }
+  return slots;
 }
 
 // --- Home categories ------------------------------------------------------------------------
