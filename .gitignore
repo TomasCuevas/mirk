@@ -23,7 +23,7 @@ Thumbs.db
 .env.local
 
 # --- Native pdfium library ----------------------------------------------
-# `oct-scan` counts pages with pdfium (see spike/parser/FINDINGS.md for the measured
+# `mirk-scan` counts pages with pdfium (see spike/parser/FINDINGS.md for the measured
 # comparison). The library is ~8 MB of platform-specific binary, so it is fetched
 # rather than committed:  scripts/fetch-pdfium.sh
 vendor/pdfium/

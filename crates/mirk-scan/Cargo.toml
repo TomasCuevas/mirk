@@ -1,0 +1,20 @@
+[package]
+name = "mirk-scan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Watched-folder PDF scanning for mirk"
+
+[dependencies]
+mirk-core = { workspace = true }
+mirk-store = { workspace = true }
+pdfium-render = { workspace = true }
+# The cover's PNG encoder (R32). See the workspace manifest for why this one crate and no more.
+png = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+# `lopdf` is here only to *build* the encrypted fixture in `tests/scanner.rs`, which `pdfium` must
+# then refuse. It is never used to count pages: page counting is pdfium's job
+# (see spike/parser/FINDINGS.md).
+lopdf = "0.36"

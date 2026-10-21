@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetches the pdfium native library that `oct-scan` loads at runtime.
+# Fetches the pdfium native library that `mirk-scan` loads at runtime.
 #
 # Why this exists: page counting needs a real PDF parser (risk R2), and the measured spike
 # (spike/parser/FINDINGS.md) showed that `pdfium` counts pages of real documents in <= 0.1 s with a
@@ -48,5 +48,5 @@ cp "${temporary}/LICENSE" "${destination}/LICENSE"
 echo "done:"
 ls -la "${destination}/lib"
 echo
-echo "oct-scan looks for the library at \$OCT_PDFIUM_LIB first, then in ${destination}/lib,"
+echo "mirk-scan looks for the library at \$MIRK_PDFIUM_LIB first, then in ${destination}/lib,"
 echo "then in the system library path. A packaged release bundles it beside the executable."

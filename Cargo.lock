@@ -2064,6 +2064,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirk-core"
+version = "0.0.1"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mirk-desktop"
+version = "0.0.1"
+dependencies = [
+ "mirk-core",
+ "mirk-platform",
+ "mirk-scan",
+ "mirk-store",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+]
+
+[[package]]
+name = "mirk-platform"
+version = "0.0.1"
+dependencies = [
+ "inotify",
+ "mirk-core",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "mirk-scan"
+version = "0.0.1"
+dependencies = [
+ "lopdf",
+ "mirk-core",
+ "mirk-store",
+ "pdfium-render",
+ "png 0.18.1",
+ "tempfile",
+]
+
+[[package]]
+name = "mirk-store"
+version = "0.0.1"
+dependencies = [
+ "mirk-core",
+ "rusqlite",
+ "tempfile",
+]
+
+[[package]]
 name = "muda"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2378,59 +2431,6 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
-]
-
-[[package]]
-name = "oct-core"
-version = "0.0.1"
-dependencies = [
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "oct-desktop"
-version = "0.0.1"
-dependencies = [
- "oct-core",
- "oct-platform",
- "oct-scan",
- "oct-store",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
-]
-
-[[package]]
-name = "oct-platform"
-version = "0.0.1"
-dependencies = [
- "inotify",
- "oct-core",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "oct-scan"
-version = "0.0.1"
-dependencies = [
- "lopdf",
- "oct-core",
- "oct-store",
- "pdfium-render",
- "png 0.18.1",
- "tempfile",
-]
-
-[[package]]
-name = "oct-store"
-version = "0.0.1"
-dependencies = [
- "oct-core",
- "rusqlite",
- "tempfile",
 ]
 
 [[package]]

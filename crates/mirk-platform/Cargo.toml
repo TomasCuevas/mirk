@@ -1,0 +1,20 @@
+[package]
+name = "mirk-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Operating-system backends for mirk"
+
+[dependencies]
+mirk-core = { workspace = true }
+sha2 = { workspace = true }
+
+# `inotify` is a Linux-only crate (it binds the Linux syscall), so it is declared for Linux
+# targets only. On every other platform it is not even compiled, which is what lets the
+# workspace build on macOS and Windows while the stub answers `NotSupported`.
+[target.'cfg(target_os = "linux")'.dependencies]
+inotify = { workspace = true }
+
+[dev-dependencies]
+# Temporary directories for the watcher tests. Never writes outside one.
+tempfile = "3"

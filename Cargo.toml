@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/oct-core",
-    "crates/oct-platform",
-    "crates/oct-store",
-    "crates/oct-scan",
-    "crates/oct-desktop",
+    "crates/mirk-core",
+    "crates/mirk-platform",
+    "crates/mirk-store",
+    "crates/mirk-scan",
+    "crates/mirk-desktop",
 ]
 
 [workspace.package]
@@ -17,10 +17,10 @@ description = "Cross-platform PDF reading-progress tracker"
 rust-version = "1.80"
 
 [workspace.dependencies]
-oct-core = { path = "crates/oct-core" }
-oct-platform = { path = "crates/oct-platform" }
-oct-store = { path = "crates/oct-store" }
-oct-scan = { path = "crates/oct-scan" }
+mirk-core = { path = "crates/mirk-core" }
+mirk-platform = { path = "crates/mirk-platform" }
+mirk-store = { path = "crates/mirk-store" }
+mirk-scan = { path = "crates/mirk-scan" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 # `bundled` compiles SQLite from source, so no system `libsqlite3` is required at build or
@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 # The PDF parser behind real page counting (risk R2) and document metadata (S3). `pdfium-render`
 # loads the native `libpdfium` at runtime, so `scripts/fetch-pdfium.sh` provides the library and
-# `oct_scan::resolve_pdfium_library` decides where to load it from. Default features are off to
+# `mirk_scan::resolve_pdfium_library` decides where to load it from. Default features are off to
 # avoid the `image` rendering stack, which page counting and metadata do not need.
 # License: MIT OR Apache-2.0, GPL-3.0 compatible.
 pdfium-render = { version = "0.8", default-features = false, features = ["pdfium_latest", "thread_safe"] }
@@ -40,7 +40,7 @@ pdfium-render = { version = "0.8", default-features = false, features = ["pdfium
 png = "0.18"
 sha2 = "0.10"
 serde_json = "1"
-# Linux file watching, used only by `oct-platform` behind `#[cfg(target_os = "linux")]`.
+# Linux file watching, used only by `mirk-platform` behind `#[cfg(target_os = "linux")]`.
 # License: **ISC** (not MIT as the brief assumed), which is permissive and GPL-3.0 compatible.
 # Default features are off on purpose: they pull in `tokio` and `futures-util` for the async
 # `EventStream`, and this workspace has no async runtime (S6).

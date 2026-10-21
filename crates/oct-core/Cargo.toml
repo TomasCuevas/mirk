@@ -1,9 +1,0 @@
-[package]
-name = "oct-core"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "Domain types and platform-facing traits for oct"
-
-[dependencies]
-thiserror = { workspace = true }
