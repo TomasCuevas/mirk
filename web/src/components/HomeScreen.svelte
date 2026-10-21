@@ -51,7 +51,7 @@
   // R34: an Inicio with nothing to show has exactly TWO possible reasons, and the screen has to tell them
   // apart because they call for different actions — nothing has been found yet (the answer is a watched
   // folder), or documents exist and no source has recorded a reading (the answer is to open one, because
-  // oct never opens a document itself: it observes reading done elsewhere). One vague sentence over three
+  // mirk never opens a document itself: it observes reading done elsewhere). One vague sentence over three
   // empty carousels was exactly what left the user asking whether the screen worked at all.
   const nothingToShow = $derived(sections.every((section) => section.items.length === 0));
 

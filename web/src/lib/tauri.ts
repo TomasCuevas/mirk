@@ -35,7 +35,7 @@ export async function listen<T>(event: string, handler: (payload: T) => void): P
   return api.listen<T>(event, (received) => handler(received.payload));
 }
 
-/** Calls a command exposed by `oct-desktop`, returning its deserialised value. */
+/** Calls a command exposed by `mirk-desktop`, returning its deserialised value. */
 export async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const api = await import("@tauri-apps/api/core");
   return api.invoke<T>(command, args);

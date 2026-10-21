@@ -16,7 +16,7 @@
  *
  * # Zero-based pages
  *
- * The store is zero-based (S4 in `oct-store`); people count pages from one. The conversion happens
+ * The store is zero-based (S4 in `mirk-store`); people count pages from one. The conversion happens
  * here, at the only boundary that renders a page to a person.
  */
 
@@ -74,7 +74,7 @@ export interface LibraryEntry {
    *
    * The reader's ordered list when it has any entry, otherwise the document's embedded author as a
    * single entry, otherwise empty. The precedence lives in ONE place —
-   * `oct_core::Document::display_authors`, in the Rust view this arrives in — so the card, the
+   * `mirk_core::Document::display_authors`, in the Rust view this arrives in — so the card, the
    * filter and the search cannot disagree about who wrote a document. Empty means nobody is named;
    * an embedded `"Sagan, Carl; Druyan, Ann"` is one entry, never split (R42/S6).
    */
@@ -677,7 +677,7 @@ function normalizeAuthorChips(names: readonly string[]): string[] {
  * inside the logic, and the Spanish interface would read like a translation nobody finished.
  *
  * It takes the DISPLAYED list — `entry.authors` — because the precedence is the core's
- * (`oct_core::Document::display_authors`): the interface states who wrote a document, it never
+ * (`mirk_core::Document::display_authors`): the interface states who wrote a document, it never
  * decides it.
  *
  * `null` for an empty list, and for a list of blanks, because a blank is not a name (R42/S2): the
@@ -1435,7 +1435,7 @@ export function startLibraryRefresh(reload: () => void): () => void {
  * a plain DOM event rather than a Tauri event, because it is the interface's own change and must
  * behave the same in the plain-browser development build, where there is no application to emit one.
  */
-export const LIBRARY_CHANGED_EVENT = "oct:library-changed";
+export const LIBRARY_CHANGED_EVENT = "mirk:library-changed";
 
 /** Announces that the library changed, so its owner can re-read it. */
 export function announceLibraryChanged(): void {

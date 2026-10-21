@@ -94,7 +94,7 @@ export type SuggestionOutcome =
 /**
  * The document's own file name, for a card's heading.
  *
- * It is deliberately NOT presented as the document's title: a suggestion is a file oct saw open, not a
+ * It is deliberately NOT presented as the document's title: a suggestion is a file mirk saw open, not a
  * document it has read, so nothing here claims an embedded title exists. This is the same fallback the
  * library already uses for a document nobody has named — the file's own name — and the full path stays
  * visible on the card beside it, so nothing about the document is hidden from the reader.

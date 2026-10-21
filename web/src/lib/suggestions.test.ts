@@ -156,7 +156,7 @@ describe("the section's words in both catalogues", () => {
  * The user's verdict on the first attempt was that a suggestion has to read like the other documents,
  * which means a heading rather than a path. What this returns is the file's OWN NAME — the same
  * fallback the library already uses for a document nobody has named — and not a title read out of the
- * document, which oct has never opened for reading. The full path stays on the card beside it.
+ * document, which mirk has never opened for reading. The full path stays on the card beside it.
  */
 describe("the answer about the document's first page", () => {
   it("shows the page that came back", () => {

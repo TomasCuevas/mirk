@@ -118,7 +118,7 @@ def kind_of(path: str) -> str:
 def fixture_run() -> None:
     """Cheap self-check of the harness on committed fixtures: no library access, no long work."""
     fixtures = os.path.join(
-        HERE, "..", "..", "crates", "oct-scan", "tests", "fixtures"
+        HERE, "..", "..", "crates", "mirk-scan", "tests", "fixtures"
     )
     for name, expected in (("pages-in-object-stream.pdf", 3), ("with-info-metadata.pdf", 4)):
         path = os.path.abspath(os.path.join(fixtures, name))

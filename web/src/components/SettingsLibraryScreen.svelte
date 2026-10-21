@@ -112,7 +112,7 @@
 <!--
   R43/S3 (L71). The Biblioteca sub-screen: watched folders, the queue of suggestions, and the scan.
 
-  These three blocks belong together because they answer one question — what oct reads — and they were
+  These three blocks belong together because they answer one question — what mirk reads — and they were
   three of the five flat blocks that made Ajustes unreadable. Nothing about them changed in the move:
   every action, its confirmation and its failure sentence came here with its tests.
 -->

@@ -9,7 +9,7 @@
 
 import { isLocale, type Locale } from "./i18n";
 
-/** Calls a command exposed by `oct-desktop`, returning its deserialised value. */
+/** Calls a command exposed by `mirk-desktop`, returning its deserialised value. */
 export type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 /**

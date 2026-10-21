@@ -6,7 +6,7 @@
  * Keeping them as data is what makes "there is no maximise control" testable instead of a promise:
  * the top bar renders exactly this list, and its test asserts the list has no such thing.
  *
- * The commands are the Tauri commands in `crates/oct-desktop`; each one performs the same
+ * The commands are the Tauri commands in `crates/mirk-desktop`; each one performs the same
  * [`ShellAction`] the tray menu performs.
  */
 

@@ -41,7 +41,7 @@ describe("the Spanish catalogue speaks with one voice", () => {
 
   // A third shape: the informal imperative. "Escanea una carpeta" is spelled like the third person of
   // the same verb, so an ending cannot give it away — but a command opens a sentence, and a descriptive
-  // third person ("oct mira por dentro", "nunca copia ni mueve nada") does not sit there.
+  // third person ("mirk mira por dentro", "nunca copia ni mueve nada") does not sit there.
   const informalImperatives = [
     "escanea", "agrega", "añade", "selecciona", "elige", "abre", "arrastra", "marca",
     "quita", "cambia", "guarda", "escribe", "usa", "pulsa", "busca", "cierra", "mueve",

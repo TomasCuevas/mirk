@@ -339,7 +339,7 @@
      value fits the tallest realistic content: two title lines (2.94rem), an author line (1.23rem),
      the page line (1.23rem), the progress block with a TWO-line provenance (bar 1.6 + gap 0.25 +
      2×1.125 = 4.1rem) and three 0.35rem gaps (1.05rem) = 10.55rem, rounded up to 11rem. A one-line
-     provenance — `recorded by oct`, `recorded by Evince` — simply leaves slack at the top, which the
+     provenance — `recorded by mirk`, `recorded by Evince` — simply leaves slack at the top, which the
      progress block's `margin: auto 0 0` spends before the bar. The reserve is two provenance lines
      rather than one because a close-time viewer says `recorded when Evince closed`, which wraps at
      this width; a fixed height that a real string can overflow is not fixed.
