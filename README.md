@@ -86,6 +86,27 @@ page counting parse actual PDFs: without the library they **fail** with a messag
 remedies rather than passing without checking anything. Set `MIRK_PDFIUM_LIB` to point at a specific
 library file or directory instead.
 
+## Looking at the interface
+
+The desktop window is a fixed 430×844 shape (`resizable: false`), so the interface is judged at
+that size and no other. `scripts/capture-ui.mjs` starts the dev server when it is not already up,
+opens Chrome headless at 430×844 with a device scale factor of 2, seeds a small library, and writes
+one PNG per screen plus one per scroll of the screen's own container:
+
+```bash
+node scripts/capture-ui.mjs                  # → .impeccable/screenshots/<timestamp>/
+node scripts/capture-ui.mjs --out /tmp/ux    # somewhere else
+```
+
+The seed is injected as a fake `window.__TAURI_INTERNALS__` before the app boots. The application's
+IPC bridge (`web/src/lib/tauri.ts`) is not modified: the app still renders honestly in a plain
+browser, and the fixtures live in the capture script. A JavaScript exception during capture exits
+non-zero, because a screenshot of a crashed page is not evidence about design.
+
+Chrome is close enough to judge layout, hierarchy and spacing; it is **not** WebKitGTK, so a
+capture does not prove paint fidelity on Linux. The output directory is gitignored: captures are
+evidence for a review, not artifacts the repository ships.
+
 ## Status and roadmap
 
 | Phase | Scope | State |
