@@ -28,7 +28,7 @@
     type WatchedFolder,
   } from "./lib/screens";
   import { OPEN_SCREEN_EVENT, invoke, listen, runningInTauri, type Unlisten } from "./lib/tauri";
-  import { loadLanguage, saveLanguage } from "./lib/settings";
+  import { loadLanguage, loadWindowLayout, saveLanguage, saveWindowLayout } from "./lib/settings";
   // L56. The suggestion queue's pure decisions live in their own module: what the section says in
   // each of its three states, what a decision does to the list, and what to do when one fails.
   import {
@@ -40,7 +40,12 @@
     type DetectorBelief,
     type Suggestion,
   } from "./lib/suggestions";
-  import { type WindowControl } from "./lib/window";
+  import {
+    DEFAULT_WINDOW_LAYOUT,
+    gridColumns,
+    type WindowControl,
+    type WindowLayout,
+  } from "./lib/window";
   import CategoryScreen from "./components/CategoryScreen.svelte";
   import HomeScreen from "./components/HomeScreen.svelte";
   import LibraryScreen from "./components/LibraryScreen.svelte";
@@ -49,12 +54,20 @@
   import SettingsAppScreen from "./components/SettingsAppScreen.svelte";
   import SettingsLibraryScreen from "./components/SettingsLibraryScreen.svelte";
   import SettingsReadingScreen from "./components/SettingsReadingScreen.svelte";
+  import SettingsWindowScreen from "./components/SettingsWindowScreen.svelte";
   import WindowBar from "./components/WindowBar.svelte";
 
   const inTauri = runningInTauri();
 
   let locale = $state<Locale>("en");
   const t = $derived(translate(locale));
+
+  // S2–S4 of `odd/tasks/window-layout.md`. The layout is the reader's stored choice, and the shell is
+  // where it becomes the grid's column count: every screen hands its entries to the same grid, so the
+  // value is published here once instead of being threaded through each screen. The desktop process
+  // sizes the window from the same stored value, which is what keeps "three per row" from meaning a
+  // narrow window with three squeezed cards.
+  let windowLayout = $state<WindowLayout>(DEFAULT_WINDOW_LAYOUT);
 
   // Navigation is a hash so a reload keeps the reader on the screen they were looking at. The
   // initial value is Inicio; `onMount` reads the real hash and a `hashchange` listener keeps
@@ -139,6 +152,35 @@
       await saveLanguage(invoke, next);
     } catch (error) {
       console.error("the language could not be stored", error);
+    }
+  }
+
+  // S3: the stored layout is read at startup so the grid matches the window the desktop process already
+  // sized. A failed read is reported and the default stands, the same way a failed language read is.
+  async function loadStoredWindowLayout(): Promise<void> {
+    try {
+      const stored = await loadWindowLayout(invoke);
+      if (stored) {
+        windowLayout = stored;
+      }
+    } catch (error) {
+      console.error("the stored window layout could not be read", error);
+    }
+  }
+
+  // Choosing a layout is one command: the desktop process stores it and sizes its window from it. The
+  // grid changes at once, because the reader pressed a choice and must see it; a failure then re-reads
+  // the store rather than leaving the grid claiming a layout the window never took.
+  async function chooseWindowLayout(next: WindowLayout): Promise<void> {
+    windowLayout = next;
+    if (!inTauri) {
+      return;
+    }
+    try {
+      await saveWindowLayout(invoke, next);
+    } catch (error) {
+      console.error("the window layout could not be applied", error);
+      await loadStoredWindowLayout();
     }
   }
 
@@ -463,6 +505,7 @@
 
     if (inTauri) {
       void loadStoredLanguage();
+      void loadStoredWindowLayout();
       void loadLibrary();
       void loadProviders();
       void loadFolders();
@@ -512,7 +555,7 @@
   });
 </script>
 
-<div class="app">
+<div class="app" style:--grid-columns={gridColumns(windowLayout)}>
   <WindowBar {t} {inTauri} onAction={runWindowAction} onDrag={startDrag} />
 
   <main bind:this={scroller}>
@@ -570,6 +613,13 @@
       />
     {:else if view.kind === "settings" && view.section === "reading"}
       <SettingsReadingScreen {providers} {providerError} {t} onBack={() => selectScreen("settings")} />
+    {:else if view.kind === "settings" && view.section === "window"}
+      <SettingsWindowScreen
+        layout={windowLayout}
+        {t}
+        onLayout={chooseWindowLayout}
+        onBack={() => selectScreen("settings")}
+      />
     {:else if view.kind === "settings"}
       <SettingsAppScreen {locale} {t} onLocale={chooseLocale} onBack={() => selectScreen("settings")} />
     {:else if view.kind === "screen" && view.screen === "settings"}
@@ -595,9 +645,10 @@
 </div>
 
 <style>
-  /* The window is a fixed phone shape, so the layout fills it exactly: the top bar and the navbar
-     stay put and only the screen between them scrolls. The canvas, the font and the base type now
-     live in `styles/tokens.css`, which is the single place a theme is decided. */
+  /* The window is a phone shape chosen from Ajustes → Ventana (S2), and the layout fills it exactly:
+     the top bar and the navbar stay put and only the screen between them scrolls. `--grid-columns` is
+     the layout published to the document grid; the canvas, the font and the base type live in
+     `styles/tokens.css`, which is the single place a theme is decided. */
   .app {
     height: 100vh;
     display: flex;

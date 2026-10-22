@@ -31,8 +31,9 @@
 <!--
   The custom top bar (A2). The application is undecorated on purpose, so this is the only title bar
   there is: pressing it moves the window, and it draws exactly the three controls the user asked
-  for — minimise, hide and close. There is no maximise control, and the window itself is fixed, so
-  there is no other route to the thing the user refused.
+  for — minimise, hide and close. There is no maximise control: the window's size is a stored choice
+  in Ajustes → Ventana, so nothing here can grow it behind the reader's back — and it stays visible in
+  full screen, which is what keeps closing and hiding reachable there.
 -->
 <!-- The bar is a drag handle, not a control; its own buttons carry the interactive semantics. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->

@@ -23,7 +23,7 @@ function indexProps(locale: "en" | "es" = "en") {
  *
  * The user's report was *"no es nada intuitiva actualmente"*: five flat blocks — Language, Providers,
  * Watched folders, Suggestions, Scan — of equal weight, and nothing saying which one holds what. What is
- * pinned here is the shape they chose when asked: three rows, each with its name and ONE plain sentence,
+ * pinned here is the shape they chose when asked: one row per section, each with its name and ONE plain sentence,
  * and none of the five blocks left behind on this page.
  *
  * The sub-screens' own tests live beside them (`SettingsLibraryScreen.test.ts`,
@@ -31,15 +31,15 @@ function indexProps(locale: "en" | "es" = "en") {
  * to be in this file went: they moved with the contents rather than being rewritten.
  */
 describe("Ajustes as an index", () => {
-  it("shows three rows, each with its name and one sentence about what lives inside", () => {
+  it("shows four rows, each with its name and one sentence about what lives inside", () => {
     const { body } = render(SettingsScreen, { props: indexProps() });
 
     for (const section of settingsSections) {
       expect(body).toContain(settingsSectionTitle(section, english));
       expect(body).toContain(settingsSectionSummary(section, english));
     }
-    // Exactly three choices: an index of three, not a list that grew a fourth.
-    expect((body.match(/<button/g) ?? []).length).toBe(3);
+    // Exactly four choices, one per section: the index renders `settingsSections` and nothing else.
+    expect((body.match(/<button/g) ?? []).length).toBe(settingsSections.length);
   });
 
   // The point of the round: the five blocks are moved, not duplicated. A page that still held the folder

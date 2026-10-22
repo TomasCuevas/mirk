@@ -58,16 +58,22 @@ export type View =
   | { readonly kind: "settings"; readonly section: SettingsSection };
 
 /**
- * The three sections Ajustes is an index of (R43/S1).
+ * The sections Ajustes is an index of (R43/S1, plus S5 of `odd/tasks/window-layout.md`).
  *
  * The user's report was that Ajustes was *"nada intuitiva"*, and the shape they chose when asked was an
  * index of three sub-screens rather than five unrelated blocks on one page. The order is theirs —
- * Biblioteca, Lectura, Aplicación — and it is the order the index renders in.
+ * Biblioteca, Lectura, Aplicación — and it is the order the index renders in. Ventana was appended last
+ * when the window's size became a stored choice, so the three rows the reader chose keep their order.
  */
-export type SettingsSection = "library" | "reading" | "app";
+export type SettingsSection = "library" | "reading" | "app" | "window";
 
 /** Every settings section, in the index's order. */
-export const settingsSections: readonly SettingsSection[] = ["library", "reading", "app"];
+export const settingsSections: readonly SettingsSection[] = [
+  "library",
+  "reading",
+  "app",
+  "window",
+];
 
 /** Whether a string names a settings section. Anything else is not a sub-screen. */
 export function isSettingsSection(value: string): value is SettingsSection {

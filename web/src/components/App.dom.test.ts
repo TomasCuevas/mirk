@@ -1,6 +1,7 @@
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import App from "../App.svelte";
+import { DEFAULT_WINDOW_LAYOUT, gridColumns } from "../lib/window";
 
 /**
  * The scroll position of the shell, exercised in a simulated browser.
@@ -90,5 +91,37 @@ describe("a new screen starts at its own top", () => {
     flushSync();
 
     expect(scroller().scrollTop).toBe(240);
+  });
+});
+
+/**
+ * S4: the grid's column count is a property of the shell, not of each screen.
+ *
+ * Every screen that lists documents hands its entries to the same grid, so the layout is published once
+ * on the shell's own element and the grid reads it. Without this test the rule would live only in a CSS
+ * file, where nothing can fail when the wiring is forgotten and the window widens while the cards stay
+ * at two per row.
+ */
+describe("the window layout reaches the grid", () => {
+  let component: ReturnType<typeof mount> | null = null;
+
+  afterEach(() => {
+    if (component !== null) {
+      unmount(component);
+      component = null;
+    }
+    window.document.body.innerHTML = "";
+    window.location.hash = "";
+  });
+
+  it("publishes the layout in force as the grid's column count", () => {
+    component = shell.mount();
+    flushSync();
+
+    const app = window.document.querySelector(".app");
+    expect(app).not.toBeNull();
+    expect((app as HTMLElement).style.getPropertyValue("--grid-columns")).toBe(
+      gridColumns(DEFAULT_WINDOW_LAYOUT),
+    );
   });
 });

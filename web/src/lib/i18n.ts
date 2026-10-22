@@ -179,7 +179,7 @@ recorded is not claimed here.",
   // R43/S1–S4. Ajustes is an index of three sub-screens, so each one needs its name, the one sentence
   // the index says under it, and the one line the sub-screen says about itself. Nothing here is a new
   // setting: it is the same five blocks, named, grouped and explained.
-  "settings.intro": "Three sections, one subject each.",
+  "settings.intro": "Four sections, one subject each.",
   "settings.back": "Settings",
   "settings.backLabel": "Back to Settings",
   "settings.library.title": "Library",
@@ -194,6 +194,18 @@ recorded is not claimed here.",
   "settings.app.summary": "The language of every word in the app.",
   "settings.app.purpose":
     "The interface and the tray are written in the language you choose.",
+  "settings.window.title": "Window",
+  "settings.window.summary": "How many documents a row holds, and the size of the window.",
+  "settings.window.purpose":
+    "The window is shaped by the grid: how many documents a row holds, and how much room they take.",
+  "settings.window.heading": "Documents per row",
+  "settings.window.label": "Window layout",
+  "settings.window.columns2": "2 per row",
+  "settings.window.columns3": "3 per row",
+  "settings.window.columns4": "4 per row",
+  "settings.window.auto": "Full screen",
+  "settings.window.hint":
+    "The window widens to fit the row you pick, and remembers it. Full screen uses whatever fits the screen.",
   "settings.language.heading": "Language",
   // R1: the choice is not the screen's private state — the desktop process builds the tray's words from
   // the same stored value — so the selector says so instead of leaving the reader to discover it.
@@ -385,7 +397,7 @@ fuente registró nunca no se listan acá.",
   "provider.reason.unknown": "no está presente en esta máquina",
 
   "settings.heading": "Ajustes",
-  "settings.intro": "Tres secciones, un tema cada una.",
+  "settings.intro": "Cuatro secciones, un tema cada una.",
   "settings.back": "Ajustes",
   "settings.backLabel": "Volver a Ajustes",
   "settings.library.title": "Biblioteca",
@@ -400,6 +412,18 @@ fuente registró nunca no se listan acá.",
   "settings.app.summary": "El idioma de todas las palabras de la app.",
   "settings.app.purpose":
     "La interfaz y la bandeja se escriben en el idioma que elija.",
+  "settings.window.title": "Ventana",
+  "settings.window.summary": "Cuántos documentos entran en una fila y el tamaño de la ventana.",
+  "settings.window.purpose":
+    "La ventana se adapta a la grilla: cuántos documentos entran en una fila y cuánto lugar ocupan.",
+  "settings.window.heading": "Documentos por fila",
+  "settings.window.label": "Disposición de la ventana",
+  "settings.window.columns2": "2 por fila",
+  "settings.window.columns3": "3 por fila",
+  "settings.window.columns4": "4 por fila",
+  "settings.window.auto": "Pantalla completa",
+  "settings.window.hint":
+    "La ventana se ensancha para que entre la fila que se elija, y lo recuerda. Pantalla completa usa lo que entre en la pantalla.",
   "settings.language.heading": "Idioma",
   "settings.language.hint": "El menú de la bandeja cambia al instante, y la interfaz con él.",
   "settings.folders.heading": "Carpetas vigiladas",

@@ -918,7 +918,11 @@
     margin: 0;
     padding: 0;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+    /* S4: the shell publishes the reader's layout as `--grid-columns` — an exact count for a preset, or
+       `auto-fill` for full screen, where the width decides how many cards fit. The fallback is the rule
+       the grid had before the choice existed, which is what a grid rendered on its own (a test, the
+       carousel's own measuring) still gets. */
+    grid-template-columns: repeat(var(--grid-columns, auto-fill), minmax(8.5rem, 1fr));
     column-gap: 0.6rem;
     row-gap: 0.6rem;
   }

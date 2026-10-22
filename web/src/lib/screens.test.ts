@@ -84,21 +84,25 @@ function sentenceCount(value: string): number {
  * honest fallback, and the words: a section with no name, or with three sentences doing one job, is the
  * wall the round was opened about.
  */
-describe("Ajustes as an index of three sub-screens", () => {
-  // S1: three rows, in the reader's order — Biblioteca, Lectura, Aplicación.
-  it("names the three sections in the order the reader chose", () => {
-    expect(settingsSections).toEqual(["library", "reading", "app"]);
+describe("Ajustes as an index of four sub-screens", () => {
+  // S1: the reader's three rows — Biblioteca, Lectura, Aplicación — plus Ventana, appended by the
+  // window-layout request (S5 of `odd/tasks/window-layout.md`). The new row goes last: the three the
+  // reader chose keep the order they chose.
+  it("names the four sections in the order the reader chose", () => {
+    expect(settingsSections).toEqual(["library", "reading", "app", "window"]);
   });
 
   // S2: a sub-screen is addressable by hash, so a reload keeps the reader where they were.
-  it("is reachable at the three addresses the spec names", () => {
+  it("is reachable at the four addresses the spec names", () => {
     expect(hashForView({ kind: "settings", section: "library" })).toBe("#/settings/library");
     expect(hashForView({ kind: "settings", section: "reading" })).toBe("#/settings/reading");
     expect(hashForView({ kind: "settings", section: "app" })).toBe("#/settings/app");
+    expect(hashForView({ kind: "settings", section: "window" })).toBe("#/settings/window");
 
     expect(viewFromHash("#/settings/library")).toEqual({ kind: "settings", section: "library" });
     expect(viewFromHash("#/settings/reading")).toEqual({ kind: "settings", section: "reading" });
     expect(viewFromHash("#/settings/app")).toEqual({ kind: "settings", section: "app" });
+    expect(viewFromHash("#/settings/window")).toEqual({ kind: "settings", section: "window" });
   });
 
   it("round-trips every sub-screen through its hash, like every category", () => {
