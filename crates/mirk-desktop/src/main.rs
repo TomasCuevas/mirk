@@ -8,11 +8,16 @@
 //!
 //! # The window shape is a product statement
 //!
-//! The window is `430x844` logical pixels — a phone's logical viewport, widened from 390 in R5 —
-//! undecorated, fixed-size and not fullscreen. This is not a limitation to apologise for: `mirk` is
-//! meant to read as a phone-shaped companion that lives in the tray, not as a small desktop window
+//! The window starts as `430x844` logical pixels — a phone's logical viewport, widened from 390 in R5 —
+//! undecorated, and never resized by dragging an edge. This is not a limitation to apologise for: `mirk`
+//! is meant to read as a phone-shaped companion that lives in the tray, not as a small desktop window
 //! that happens to render a mobile layout. The custom top bar exists for the same reason — a native
 //! title bar would bring a maximise button the user explicitly refused.
+//!
+//! Its size is a stored choice instead (`odd/tasks/window-layout.md`, S2): Ajustes → Ventana offers two,
+//! three or four documents per row, and full screen. [`layout`] is the only place that turns those
+//! choices into pixels, [`apply_window_layout`] applies one, and the same value is what the interface
+//! reads to draw the grid — so the window and its cards cannot disagree about how many fit.
 //!
 //! The first-party reader, covers and the suggestion queue arrive in later tasks.
 
@@ -30,10 +35,11 @@ use mirk_store::{database_path, Store};
 use shell::{action_for_menu_id, dispatch, ShellAction, ShellActions};
 use tauri::menu::{Menu, MenuBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, WebviewWindow, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
 mod commands;
+mod layout;
 mod shell;
 mod track;
 
@@ -424,6 +430,29 @@ fn set_language(locale: String, app: AppHandle) -> Result<(), String> {
     rebuild_tray(&app, None)
 }
 
+/// The stored window layout, when it is one this build knows (S3).
+#[tauri::command]
+fn get_window_layout() -> Result<Option<String>, String> {
+    stored_layout()
+}
+
+/// Stores the chosen layout and sizes the window from it.
+///
+/// One command rather than two so the store and the window cannot disagree: the value is validated and
+/// written first, and only then does the window take its new size. A failure leaves both as they were,
+/// and the tray is untouched — the window's size is not something the tray says.
+#[tauri::command]
+fn set_window_layout(layout: String, window: WebviewWindow) -> Result<(), String> {
+    let chosen = self::layout::WindowLayout::parse(&layout).ok_or_else(|| {
+        format!("`{layout}` is not a window layout this build knows")
+    })?;
+    let store = open_store()?;
+    // The canonical key is stored, never the caller's spelling: `parse` accepted it as one of the four,
+    // and the store keeps the one the build names.
+    commands::set_window_layout(&store, chosen.key()).map_err(error_message)?;
+    apply_window_layout(&window, chosen)
+}
+
 /// Opens the document the card names, in the system's own application for it.
 ///
 /// The document is identified by its row id, not by a path the interface hands over: the store
@@ -555,6 +584,16 @@ fn data_directory() -> Result<PathBuf, String> {
 fn stored_language() -> Result<Option<String>, String> {
     let store = open_store()?;
     commands::get_language(&store).map_err(error_message)
+}
+
+/// The window layout stored in the production database, or an error naming the failure.
+///
+/// It stands beside [`stored_language`] for the same reason: `setup` reads it before the window is
+/// shown, so a restart restores the size the reader chose instead of opening at the default and jumping
+/// once the interface mounts.
+fn stored_layout() -> Result<Option<String>, String> {
+    let store = open_store()?;
+    commands::get_window_layout(&store).map_err(error_message)
 }
 
 /// Renders an error into the string the frontend shows. `MirkError` is not `Serialize`, and the
@@ -750,19 +789,77 @@ fn setup_tray(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Makes the window a fixed size for real.
+/// Sizes the window from `layout`: a pinned logical size, or full screen.
 ///
-/// `tauri.conf.json` declares `resizable: false`, and the configuration test asserts it, but on this
-/// Wayland/GTK host that value does not survive window creation: the live GTK window reports itself
-/// resizable even though the configuration says otherwise, which would let the window manager
-/// stretch it and would keep the double-click resize inset armed. Re-applying the flag after the
-/// window exists is what makes it stick, and it is applied to the window whose size is already
-/// pinned by equal minimum and maximum bounds, so the shape holds even if a window manager ignores
-/// the flag.
-fn enforce_fixed_shape(window: &WebviewWindow) {
-    if let Err(error) = window.set_resizable(false) {
-        eprintln!("the window could not be made non-resizable: {error}");
+/// `tauri.conf.json` declares the window non-resizable, and on this Wayland/GTK host that value does not
+/// survive window creation — so a resize request reaches a window the window manager will not let grow.
+/// The flag is therefore lifted only for the one call that needs a new size and put back immediately:
+/// the reader's window stays fixed between layouts, and choosing a layout is the one moment its size is
+/// supposed to change. Centering after the change keeps a widened window on screen instead of letting it
+/// grow off the right edge; a window manager that refuses to center is not an error, because the size
+/// already reached the window.
+/// Sizes the window from `layout`: a row's own width, or the work area.
+///
+/// Two properties of this host (Wayland/GNOME with WebKitGTK) decide the shape of this function, and
+/// both were measured rather than guessed:
+///
+/// - `resizable: false` is a promise the window manager enforces. While it is in force, a programmatic
+///   `set_size` is ignored, which is why the first attempt left three and four per row squeezing their
+///   cards into the shipped 430 px window. The flag is therefore left `true`, and the window is made
+///   fixed by pinning its minimum and maximum size to the same value: that is what stops an edge drag,
+///   not the flag, and it can be re-pinned whenever the reader chooses another layout.
+/// - Native full screen is ignored here: `set_fullscreen(true)` returns `Ok` and `is_fullscreen()`
+///   reports `true` while the window keeps its size. The compositor's own maximise does fill the work
+///   area, so "Pantalla completa" is carried by `maximize()` and the grid's `auto-fill` does the rest —
+///   the request asks for the documents that fit, and this is the state in which the width decides.
+fn apply_window_layout(
+    window: &WebviewWindow,
+    layout: layout::WindowLayout,
+) -> Result<(), String> {
+    // A pin from the previous layout would clamp the size being asked for, so both hints are released
+    // before anything else. The order matters: setting the maximum below a still-pinned minimum is
+    // refused by GTK, and clearing them first is what makes every transition work in both directions.
+    window
+        .set_min_size(None::<tauri::Size>)
+        .map_err(|error| format!("the window's minimum size could not be released: {error}"))?;
+    window
+        .set_max_size(None::<tauri::Size>)
+        .map_err(|error| format!("the window's maximum size could not be released: {error}"))?;
+    window
+        .set_resizable(true)
+        .map_err(|error| format!("the window could not be resized: {error}"))?;
+
+    let Some((width, height)) = layout.window_size() else {
+        if window.is_maximized().unwrap_or(false) {
+            return Ok(());
+        }
+        return window
+            .maximize()
+            .map_err(|error| format!("the window could not fill the screen: {error}"));
+    };
+
+    // Leaving a maximized window for a preset needs the maximize state cleared first, or the
+    // compositor keeps the work-area size and ignores the requested one.
+    if window.is_maximized().unwrap_or(false) {
+        window
+            .unmaximize()
+            .map_err(|error| format!("the window could not leave the work area: {error}"))?;
     }
+
+    let size = LogicalSize::new(width, height);
+    window
+        .set_size(size)
+        .map_err(|error| format!("the window could not take its {width}x{height} size: {error}"))?;
+    // The pin is what makes the window fixed at the size the layout names: equal minimum and maximum
+    // leave the window manager no room to stretch it and no reason to ignore the next requested size,
+    // because the next apply releases both before asking.
+    window
+        .set_min_size(Some(size))
+        .map_err(|error| format!("the window's minimum size could not be pinned: {error}"))?;
+    window
+        .set_max_size(Some(size))
+        .map_err(|error| format!("the window's maximum size could not be pinned: {error}"))?;
+    Ok(())
 }
 
 /// Starts the ingestion loop: one catch-up sweep at launch, then a tick every
@@ -854,7 +951,22 @@ fn main() {
             let window = app
                 .get_webview_window(MAIN_WINDOW)
                 .expect("the main window is declared in tauri.conf.json");
-            enforce_fixed_shape(&window);
+            // S3: the size is restored before the window is first shown, so a restart opens where the
+            // reader left it. A store that cannot be read is reported and the default stands; a size is
+            // worth a warning, never a launch that refuses to open.
+            let restored = match stored_layout() {
+                Ok(stored) => stored
+                    .as_deref()
+                    .and_then(layout::WindowLayout::parse)
+                    .unwrap_or(layout::DEFAULT_LAYOUT),
+                Err(error) => {
+                    eprintln!("the stored window layout could not be read: {error}");
+                    layout::DEFAULT_LAYOUT
+                }
+            };
+            if let Err(error) = apply_window_layout(&window, restored) {
+                eprintln!("the stored window layout could not be applied: {error}");
+            }
 
             // The tray's menu is built from the stored language and the window's real visibility;
             // `current_tray_menu` reports a database it cannot read and falls back to English, so a
@@ -897,6 +1009,8 @@ fn main() {
             remove_folder,
             get_language,
             set_language,
+            get_window_layout,
+            set_window_layout,
             open_containing_folder,
             open_folder,
             open_document,
@@ -908,7 +1022,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{authored, LibraryEntryView};
+    use super::{authored, layout, LibraryEntryView};
 
     /// R42/S5, corrected after a native review: a caller that still sends the pre-list `author` must not
     /// lose its edit in silence.
@@ -975,13 +1089,16 @@ mod tests {
         );
     }
 
-    /// The phone-shaped window, asserted from the configuration the application actually loads.
+    /// The window's shape, asserted from the configuration the application actually loads.
     ///
     /// A tray icon and a window's decorations are visual and cannot be asserted here; what can be
-    /// asserted is that the window is declared undecorated, fixed and not maximisable, and that
-    /// its proportions read as a phone rather than a small desktop window (A1, A2).
+    /// asserted is that the window is declared undecorated, still not resizable by hand and still
+    /// without a maximise control, and that its launch size is the phone shape. What changed with
+    /// S2/S6 is the ceiling: the four layouts widen the window to 430, 460 or 605 px, so only the
+    /// minimum stays pinned and the desktop process is the one that resizes it. `fullscreen: false` is
+    /// only the launch state — full screen is one of the choices.
     #[test]
-    fn the_window_is_phone_shaped_fixed_and_undecorated() {
+    fn the_window_is_undecorated_and_sized_only_by_its_layouts() {
         // The runtime parameter is explicit because the test never builds an app; it reads the
         // same compiled-in configuration `main` hands to the builder.
         let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
@@ -993,26 +1110,46 @@ mod tests {
             .expect("a window is declared");
 
         assert!(!window.decorations, "A1: the window must be undecorated");
-        assert!(!window.resizable, "A1: the window must be a fixed size");
-        assert!(!window.fullscreen, "A1: the window must not go fullscreen");
+        assert!(
+            !window.resizable,
+            "A1: dragging an edge must not resize the window; the layouts are the only way"
+        );
         assert!(!window.maximizable, "A2: the window must not be maximisable");
         assert!(window.minimizable, "A2: the window must be minimisable");
-
-        // The size is pinned in both directions, so neither the user nor the window manager can
-        // stretch it into a desktop window.
-        assert_eq!(window.min_width, Some(window.width));
-        assert_eq!(window.max_width, Some(window.width));
-        assert_eq!(window.min_height, Some(window.height));
-        assert_eq!(window.max_height, Some(window.height));
+        assert!(
+            !window.fullscreen,
+            "S2: the application launches in a window, not full screen"
+        );
 
         // R5: the width widened from 390 to 430; the height and the shape did not move.
         assert_eq!(window.width, 430.0, "R5: the window width");
         assert_eq!(window.height, 844.0, "R5: the window height");
 
+        // The floor is still pinned — no layout shrinks the window below the shape the reader chose —
+        // while the ceiling is gone, because a preset has to be able to widen it.
+        assert_eq!(window.min_width, Some(430.0));
+        assert_eq!(window.min_height, Some(844.0));
+        assert_eq!(
+            window.max_width, None,
+            "S2: a layout must be able to widen the window past 430"
+        );
+        assert_eq!(
+            window.max_height, None,
+            "S2: full screen needs the height the screen has"
+        );
+
         let ratio = window.height / window.width;
         assert!(
             (1.9..=2.4).contains(&ratio),
             "the window must have phone proportions, but its height/width ratio is {ratio}"
+        );
+
+        // The three windowed layouts are what the desktop process will apply, so the pinned initial
+        // size must be one of them rather than a number no layout ever names.
+        assert_eq!(
+            layout::WindowLayout::Columns2.window_size(),
+            Some((window.width, window.height)),
+            "the launch size is the two-per-row layout"
         );
     }
 

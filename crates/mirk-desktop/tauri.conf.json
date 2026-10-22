@@ -18,8 +18,6 @@
         "height": 844,
         "minWidth": 430,
         "minHeight": 844,
-        "maxWidth": 430,
-        "maxHeight": 844,
         "resizable": false,
         "maximizable": false,
         "minimizable": true,

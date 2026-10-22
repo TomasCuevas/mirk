@@ -1033,6 +1033,34 @@ pub fn set_language(store: &Store, locale: &str) -> Result<(), MirkError> {
     store.set_setting(LANGUAGE_SETTING, locale)
 }
 
+/// The stored window layout, but only when it is one this build knows.
+///
+/// The same rule as [`get_language`], for the same reason: the database accepts any string under
+/// `settings`, and a value this build cannot size a window with must not reach a caller as a choice. It
+/// is reported as absent, which the interface and the desktop process both read as "keep the default".
+pub fn get_window_layout(store: &Store) -> Result<Option<String>, MirkError> {
+    Ok(store
+        .get_setting(crate::layout::LAYOUT_SETTING)?
+        .filter(|layout| crate::layout::WindowLayout::parse(layout).is_some()))
+}
+
+/// Stores the chosen window layout, refusing a value this build does not know.
+///
+/// Refusing rather than storing is what keeps a restart honest: a typo written once would otherwise be
+/// read back as "no layout stored" forever, and the reader would wonder why their choice vanished. The
+/// window is sized by the command wrapper in `main.rs`, not here, so this decision stays testable
+/// without a display — and a refused value never reaches the store, so a stored choice survives it.
+pub fn set_window_layout(store: &Store, layout: &str) -> Result<(), MirkError> {
+    if crate::layout::WindowLayout::parse(layout).is_none() {
+        return Err(MirkError::InvalidInput {
+            field: "layout",
+            value: layout.to_string(),
+            expected: crate::layout::LAYOUT_KEYS.join(", "),
+        });
+    }
+    store.set_setting(crate::layout::LAYOUT_SETTING, layout)
+}
+
 /// Opens a document with the platform launcher, at the page the reader last reached.
 ///
 /// This is the card's own action: the reader asks for a document and the document goes to the
@@ -2179,6 +2207,70 @@ mod tests {
             None,
             "an unknown stored value is reported as no language, not as one"
         );
+    }
+
+    // --- S2/S3: the stored window layout -------------------------------------------------------
+
+    #[test]
+    fn the_window_layout_is_stored_and_read_back() {
+        let store = in_memory_store();
+        assert_eq!(
+            get_window_layout(&store).expect("read"),
+            None,
+            "a fresh store has no layout, so the interface keeps the default"
+        );
+
+        set_window_layout(&store, "columns-3").expect("store three per row");
+        assert_eq!(
+            get_window_layout(&store).expect("read"),
+            Some("columns-3".to_string())
+        );
+
+        set_window_layout(&store, "auto").expect("store full screen");
+        assert_eq!(
+            get_window_layout(&store).expect("read"),
+            Some("auto".to_string())
+        );
+    }
+
+    #[test]
+    fn a_layout_this_build_does_not_know_is_refused_and_not_stored() {
+        let store = in_memory_store();
+        set_window_layout(&store, "columns-3").expect("store a known layout");
+
+        match set_window_layout(&store, "columns-5") {
+            Err(MirkError::InvalidInput {
+                field,
+                value,
+                expected,
+            }) => {
+                assert_eq!(field, "layout");
+                assert_eq!(value, "columns-5");
+                assert!(
+                    expected.contains("columns-2") && expected.contains("auto"),
+                    "the refusal names what is accepted instead: {expected}"
+                );
+            }
+            other => panic!("an unknown layout must be an invalid argument, got {other:?}"),
+        }
+
+        assert_eq!(
+            get_window_layout(&store).expect("read"),
+            Some("columns-3".to_string()),
+            "a refused choice must leave the stored one in force"
+        );
+    }
+
+    #[test]
+    fn a_stored_layout_this_build_does_not_know_is_reported_as_no_choice() {
+        // A newer build, a hand-edited database or a typo can leave anything under this key. A caller
+        // must see "no choice" rather than a value it cannot size a window with.
+        let store = in_memory_store();
+        store
+            .set_setting(crate::layout::LAYOUT_SETTING, "columns-9")
+            .expect("write a value the build does not know");
+
+        assert_eq!(get_window_layout(&store).expect("read"), None);
     }
 
     // --- R32: the cover's data URL and its file name ------------------------------------------
