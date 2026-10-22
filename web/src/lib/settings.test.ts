@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { loadLanguage, saveLanguage, type Invoke } from "./settings";
+import {
+  loadLanguage,
+  loadWindowLayout,
+  saveLanguage,
+  saveWindowLayout,
+  type Invoke,
+} from "./settings";
 
 /** One recorded call to the desktop process. */
 interface Recorded {
@@ -67,5 +73,60 @@ describe("the stored language", () => {
     }) as Invoke;
 
     await expect(loadLanguage(invoke)).rejects.toThrow("the database could not be opened");
+  });
+});
+
+/**
+ * The stored window layout (S3). Same shape as the language: one stored value, read at startup so the
+ * window and the grid agree, written when the reader chooses. The desktop process applies the size; the
+ * interface only has to pass the choice through and never invent one.
+ */
+describe("the stored window layout", () => {
+  function layoutInvoke(stored: unknown): { invoke: Invoke; calls: Recorded[] } {
+    const calls: Recorded[] = [];
+    const invoke = (async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+      calls.push({ command, args });
+      return (command === "get_window_layout" ? stored : undefined) as T;
+    }) as Invoke;
+    return { invoke, calls };
+  }
+
+  it("reads the stored layout at startup", async () => {
+    const { invoke, calls } = layoutInvoke("columns-3");
+
+    expect(await loadWindowLayout(invoke)).toBe("columns-3");
+    expect(calls.map((call) => call.command)).toEqual(["get_window_layout"]);
+  });
+
+  it("reports nothing stored when nothing is stored", async () => {
+    const { invoke } = layoutInvoke(null);
+
+    expect(await loadWindowLayout(invoke)).toBeNull();
+  });
+
+  // The store is a file another process can write. A value that is not one of the four layouts must not
+  // reach the grid as one: "unknown" is not the same fact as "two per row", and the caller keeps the
+  // default only because the answer is null.
+  it("does not take an unknown value for a layout", async () => {
+    const { invoke } = layoutInvoke("columns-9");
+
+    expect(await loadWindowLayout(invoke)).toBeNull();
+    expect(await loadWindowLayout(layoutInvoke(4).invoke)).toBeNull();
+  });
+
+  it("writes the chosen layout, which is what sizes the window", async () => {
+    const { invoke, calls } = layoutInvoke(null);
+
+    await saveWindowLayout(invoke, "auto");
+
+    expect(calls).toEqual([{ command: "set_window_layout", args: { layout: "auto" } }]);
+  });
+
+  it("lets a failed read fail instead of passing it off as the default", async () => {
+    const invoke = (async () => {
+      throw new Error("the database could not be opened");
+    }) as Invoke;
+
+    await expect(loadWindowLayout(invoke)).rejects.toThrow("the database could not be opened");
   });
 });
