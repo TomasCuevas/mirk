@@ -12,7 +12,9 @@
  * theirs is the information palette: in mirk, colour states a fact about a document, so the
  * chrome stays achromatic and the progress ramp is the only saturated thing on a screen.
  *
- * The window is a fixed 430 × 844 (A2), so the scale is sized for that width, not for a browser.
+ * The window starts at 430 × 844 and can be widened by the reader's layout choice (Ajustes → Ventana,
+ * two/three/four per row, or full screen), so the scale is sized for the narrowest window, not for a
+ * browser.
  */
 
 @font-face {

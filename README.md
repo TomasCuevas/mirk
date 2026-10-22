@@ -105,14 +105,16 @@ isolation, `bun run dev` in a browser is enough — see “Looking at the interf
 
 ## Looking at the interface
 
-The desktop window is a fixed 430×844 shape (`resizable: false`), so the interface is judged at
-that size and no other. `scripts/capture-ui.mjs` starts the dev server when it is not already up,
-opens Chrome headless at 430×844 with a device scale factor of 2, seeds a small library, and writes
-one PNG per screen plus one per scroll of the screen's own container:
+The desktop window's size is a stored choice (Ajustes → Ventana): two, three or four documents per
+row, or full screen. `scripts/capture-ui.mjs` starts the dev server when it is not already up, opens
+Chrome headless at the size that layout names with a device scale factor of 2, seeds a small library
+and a stored layout, and writes one PNG per screen plus one per scroll of the screen's own container:
 
 ```bash
-node scripts/capture-ui.mjs                  # → .impeccable/screenshots/<timestamp>/
-node scripts/capture-ui.mjs --out /tmp/ux    # somewhere else
+node scripts/capture-ui.mjs                     # 2 per row (430×844), the default
+node scripts/capture-ui.mjs --layout columns-4  # 4 per row (838×844)
+node scripts/capture-ui.mjs --layout auto       # full screen (1440×900)
+node scripts/capture-ui.mjs --out /tmp/ux       # somewhere else
 ```
 
 The seed is injected as a fake `window.__TAURI_INTERNALS__` before the app boots. The application's

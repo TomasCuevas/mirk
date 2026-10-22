@@ -52,7 +52,7 @@ recorded decisions in the source, each with the reader's own words behind it. Re
 product decision, not a defect fix, and this feature does not make it.
 
 **S4 — the capture matrix is the shipped window, quoted from `crates/mirk-desktop/tauri.conf.json`.**
-Width 430, height 844, `resizable: false`, `maxWidth`/`maxHeight` equal. Captures are 430×844 at
+Width 430, height 844, `resizable: false`. **Superseded in part** by `odd/tasks/window-layout.md`: the window's size is the reader's layout choice, so the capture script takes `--layout` and opens the size that layout names. Captures are 430×844 at
 device scale factor 2. No other viewport is a target, and "responsive" is out of scope: the window
 cannot be resized, so a layout judged at 1440 px invents defects the user never sees.
 

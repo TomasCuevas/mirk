@@ -60,7 +60,7 @@ crates, the Tauri identifier, the data directory, the environment variable and t
 - The continuous progress ramp red→orange→yellow→green (R38) stays exactly as it is, and its
   computed color is still pinned by `BookCard.test.ts`.
 - Colour is never the only channel: the number on the bar stays (R7, R38).
-- The window stays fixed at 430×844 (A2).
+- The window stays fixed at 430×844 (A2). **Superseded in part** by `odd/tasks/window-layout.md`: the window's size became a stored choice (2/3/4 per row, or full screen), and edge-dragging still does not resize it.
 - Every sentence keeps stating provenance; no number gains a source it does not have.
 - Both catalogues (`en`, `es`) stay complete; no string is invented in one language only.
 - The cover placeholder keeps `aspect-ratio: 9 / 11` and the carousel keeps `--tile: 13rem`

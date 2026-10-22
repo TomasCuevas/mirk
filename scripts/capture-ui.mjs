@@ -2,9 +2,10 @@
 /**
  * Capture mirk's interface so an agent can look at it, instead of a person taking screenshots.
  *
- * The desktop window is a fixed 430×844 shape (`crates/mirk-desktop/tauri.conf.json`), so every
- * capture is that size at device scale factor 2. Nothing here reviews "responsive" behaviour,
- * because the window cannot be resized: a layout judged at 1440 px invents defects nobody sees.
+ * The desktop window's size is the reader's stored layout choice (Ajustes → Ventana, S2 of
+ * `odd/tasks/window-layout.md`): two, three or four documents per row, or full screen. Every capture is
+ * taken at the size that layout names, at device scale factor 2, because judging a four-per-row grid at
+ * the two-per-row window would invent defects nobody sees.
  *
  * The app renders honestly in a plain browser — it says nothing is connected — but with no data it
  * only shows the empty state, which is not the product. So this script injects a fake
@@ -15,6 +16,8 @@
  *   node scripts/capture-ui.mjs                 # start the dev server if needed, capture, exit
  *   node scripts/capture-ui.mjs --out /tmp/ux  # choose the output directory
  *   node scripts/capture-ui.mjs --port 5173    # another dev server port
+ *   node scripts/capture-ui.mjs --layout columns-4
+ *                                              # the size that layout names, and its grid
  *
  * Exit code is non-zero when the page threw: a screenshot of a crashed page is not evidence.
  */
@@ -39,8 +42,28 @@ const CHROME = value("--chrome", process.env.CHROME_PATH ?? "google-chrome");
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const OUT = value("--out", join(".impeccable", "screenshots", stamp));
 
-/** The shipped window: `width`, `height` and `maxWidth`/`maxHeight` are all this. */
-const WINDOW = { width: 430, height: 844, deviceScaleFactor: 2 };
+/**
+ * The size each layout pins, mirroring `crates/mirk-desktop/src/layout.rs` (S2).
+ *
+ * The desktop process is the authority; these numbers are what a browser can reproduce without it. Full
+ * screen has no window of its own, so the capture uses a common laptop screen and lets `auto-fill` decide
+ * the columns.
+ */
+const LAYOUTS = {
+  "columns-2": { width: 430, height: 844 },
+  "columns-3": { width: 634, height: 844 },
+  "columns-4": { width: 838, height: 844 },
+  auto: { width: 1440, height: 900 },
+};
+
+const LAYOUT = value("--layout", "columns-2");
+if (!(LAYOUT in LAYOUTS)) {
+  console.error(`--layout must be one of ${Object.keys(LAYOUTS).join(", ")}, not "${LAYOUT}"`);
+  process.exit(2);
+}
+
+/** The window being captured: the chosen layout's size at device scale factor 2. */
+const WINDOW = { ...LAYOUTS[LAYOUT], deviceScaleFactor: 2 };
 
 /** One entry per screen the navbar can reach, in the order a reader meets them. */
 const SCREENS = [
@@ -121,6 +144,7 @@ const SEED = `
   const covers = ${JSON.stringify(covers)};
   const answers = {
     "get_language": "en",
+    "get_window_layout": ${JSON.stringify(LAYOUT)},
     "list_library": ${JSON.stringify(entries)},
     "progress_providers": [
       { id: "native", capability: "position", availability: "available" },
@@ -409,6 +433,7 @@ async function main() {
   const manifest = {
     capturedAt: new Date().toISOString(),
     url: URL_UNDER_TEST,
+    layout: LAYOUT,
     window: WINDOW,
     screens: {},
     problems: cdp.problems,
@@ -420,6 +445,14 @@ async function main() {
     manifest.screens[screen.name] = files.map((f) => f.slice(OUT.length + 1));
     console.log(`  ${screen.name}: ${files.length} capture(s)`);
   }
+
+  // S5: the window layout's own sub-screen. Settings sub-screens are addressable by hash (R43/S2), so
+  // this is the same view a reload at `#/settings/window` lands on, not a click path the capture invents.
+  await cdp.evaluate(`window.location.hash = "#/settings/window"`);
+  await sleep(600);
+  const windowScreen = await captureScreen(cdp, "settings-window", WINDOW.height);
+  manifest.screens["settings-window"] = windowScreen.map((f) => f.slice(OUT.length + 1));
+  console.log(`  settings-window: ${windowScreen.length} capture(s)`);
 
   await goTo(cdp, "Home"); // leave the app where a reader starts
 
