@@ -419,9 +419,10 @@
     display: flex;
     flex-direction: column;
     gap: 0.7rem;
-    background: var(--surface);
-    border: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018));
+    border: 1px solid var(--glass-border);
     border-radius: var(--r-lg);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
     padding: 0.8rem 0.9rem;
   }
 
@@ -580,7 +581,7 @@
   }
 
   input {
-    height: 2rem;
+    height: 2.5rem;
     padding: 0 0.55rem;
     border: 1px solid var(--line);
     border-radius: var(--r-sm);

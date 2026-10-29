@@ -73,3 +73,19 @@ describe("Ajustes as an index", () => {
     expect(body).toContain(spanish("settings.intro"));
   });
 });
+
+/**
+ * S3 of `odd/tasks/desktop-chrome.md`: every row of the index has a drawing, and the drawings are
+ * decoration — the row's name remains the accessible content, so they are hidden from assistive
+ * technology.
+ */
+describe("the index's icons", () => {
+  it("gives every section exactly one decorative drawing", () => {
+    const { body } = render(SettingsScreen, { props: indexProps() });
+
+    expect((body.match(/<svg/g) ?? []).length).toBe(settingsSections.length);
+    for (const icon of body.match(/<svg[^>]*>/g) ?? []) {
+      expect(icon).toContain('aria-hidden="true"');
+    }
+  });
+});

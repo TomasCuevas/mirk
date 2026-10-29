@@ -5,11 +5,14 @@
   let {
     t,
     inTauri,
+    maximized,
     onAction,
     onDrag,
   }: {
     t: Translate;
     inTauri: boolean;
+    /** Whether the full-screen layout is in force, which flips the maximise control to restore. */
+    maximized: boolean;
     onAction: (control: WindowControl) => void;
     onDrag: () => void;
   } = $props();
@@ -21,7 +24,11 @@
     if (!inTauri || event.button !== 0) {
       return;
     }
-    if (event.target instanceof HTMLElement && event.target.closest("button") !== null) {
+    // R5: `Element`, not `HTMLElement`. The target of a press on a control is usually the <svg> or a
+    // <path> inside it, and asking an HTMLElement swallowed the press into `start_dragging` — the
+    // gesture took the pointer, the click never completed, and the control only answered on the
+    // presses that happened to land on its padding.
+    if (event.target instanceof Element && event.target.closest("button") !== null) {
       return;
     }
     onDrag();
@@ -30,10 +37,11 @@
 
 <!--
   The custom top bar (A2). The application is undecorated on purpose, so this is the only title bar
-  there is: pressing it moves the window, and it draws exactly the three controls the user asked
-  for — minimise, hide and close. There is no maximise control: the window's size is a stored choice
-  in Ajustes → Ventana, so nothing here can grow it behind the reader's back — and it stays visible in
-  full screen, which is what keeps closing and hiding reachable there.
+  there is: pressing it moves the window, and it draws exactly the four controls the user asked
+  for — minimise, maximise/restore, hide and close (S4 of `odd/tasks/desktop-chrome.md`). Maximise is
+  not a second size authority: it chooses the same stored layout Ajustes → Ventana does, which keeps the
+  button and the selected option in agreement, and the bar stays visible in full screen so closing and
+  hiding remain reachable there.
 -->
 <!-- The bar is a drag handle, not a control; its own buttons carry the interactive semantics. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -42,11 +50,16 @@
 
   <div class="controls" role="group" aria-label={t("window.controls")}>
     {#each windowControls as control (control.action)}
+      {@const restore = control.action === "maximize" && maximized}
+      {@const labelKey = restore ? "window.restore" : control.labelKey}
+      {@const icon = restore ? "restore" : control.icon}
       <button
         type="button"
         class:close={control.action === "close"}
-        title={t(control.labelKey)}
-        aria-label={t(control.labelKey)}
+        class:pressed={restore}
+        title={t(labelKey)}
+        aria-label={t(labelKey)}
+        aria-pressed={control.action === "maximize" ? maximized : undefined}
         disabled={!inTauri}
         onclick={() => onAction(control)}
       >
@@ -62,9 +75,16 @@
           aria-hidden="true"
           focusable="false"
         >
-          {#if control.icon === "minimize"}
+          {#if icon === "minimize"}
             <path d="M6 12h12" />
-          {:else if control.icon === "hide"}
+          {:else if icon === "maximize"}
+            <rect x="6" y="6" width="12" height="12" rx="1.6" />
+          {:else if icon === "restore"}
+            <!-- The state the window is in when the control is pressed: stacked panes, the shape the
+                 platform uses for "restore". -->
+            <rect x="5.5" y="8" width="9.5" height="9.5" rx="1.4" />
+            <path d="M9 8V6.5A1.5 1.5 0 0 1 10.5 5h7A1.5 1.5 0 0 1 19 6.5v7a1.5 1.5 0 0 1-1.5 1.5H16" />
+          {:else if icon === "hide"}
             <!-- R16: the first drawing was an arrow into a tray, and the user read it as "download" —
                  which it is, in every icon set. Hiding a window is hiding it, so this is an eye with
                  a slash: the one metaphor that cannot be mistaken for a transfer. -->
@@ -82,16 +102,26 @@
 </header>
 
 <style>
+  /* The bar's words are rem-sized, so its drawings are too: at the full-screen root the bar is taller and
+     a 16 px glyph would read as an undersized control. */
+  button svg {
+    width: 1rem;
+    height: 1rem;
+  }
+
   header {
     flex: none;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)), var(--glass);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
+    border-bottom: 1px solid var(--glass-border);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
     height: 2.75rem;
     padding: 0 0.35rem 0 1rem;
-    background: var(--canvas);
-    border-bottom: 1px solid var(--line);
     color: var(--fg);
     user-select: none;
   }
@@ -114,7 +144,26 @@
     height: 0.4rem;
     border-radius: 50%;
     background: var(--brand);
-    box-shadow: 0 0 10px rgba(255, 99, 99, 0.55);
+    box-shadow: 0 0 14px var(--brand-glow), 0 0 3px var(--brand);
+    /* L4: the one moving glint in the interface — slow enough to read as a reflection rather than a
+       notification, and still for anyone who asked for less motion. */
+    animation: brand-glint 7s ease-in-out infinite;
+  }
+
+  @keyframes brand-glint {
+    0%,
+    100% {
+      box-shadow: 0 0 12px var(--brand-glow), 0 0 3px var(--brand);
+    }
+    50% {
+      box-shadow: 0 0 22px var(--brand-glow), 0 0 5px var(--brand);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .brand::before {
+      animation: none;
+    }
   }
 
   .controls {
@@ -141,6 +190,13 @@
   }
 
   button:hover:not(:disabled) {
+    background: var(--surface-2);
+    color: var(--fg);
+  }
+
+  /* The maximised state is a state, not only a label: the control stays lifted while the window is
+     full screen, the same way a pressed toggle does. */
+  button.pressed:not(:disabled) {
     background: var(--surface-2);
     color: var(--fg);
   }

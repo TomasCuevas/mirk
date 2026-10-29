@@ -46,6 +46,8 @@ const english: Catalogue = {
 
   "window.controls": "Window controls",
   "window.minimize": "Minimise",
+  "window.maximize": "Maximise",
+  "window.restore": "Restore the window",
   "window.hide": "Hide to the tray",
   "window.close": "Close Mirk",
 
@@ -115,6 +117,7 @@ recorded is not claimed here.",
   "card.openFolder": "Open containing folder",
   "card.openDocument": "Open {title}",
   "card.editDocument": "Edit the document {title}",
+  "card.editTip": "Edit the document's details",
   "card.documentEditor": "Edit the document",
   // R16: the editor has two groups, and each says which kind of change it holds.
   "card.editorText": "Text and authors",
@@ -276,6 +279,8 @@ const spanish: Catalogue = {
 
   "window.controls": "Controles de la ventana",
   "window.minimize": "Minimizar",
+  "window.maximize": "Maximizar",
+  "window.restore": "Restaurar la ventana",
   "window.hide": "Ocultar en la bandeja",
   "window.close": "Cerrar Mirk",
 
@@ -342,6 +347,7 @@ fuente registró nunca no se listan acá.",
   "card.openFolder": "Abrir la carpeta contenedora",
   "card.openDocument": "Abrir {title}",
   "card.editDocument": "Editar el documento {title}",
+  "card.editTip": "Editar los datos del documento",
   "card.documentEditor": "Editar el documento",
   "card.editorText": "Texto y autores",
   "card.titleLabel": "Título",

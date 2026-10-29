@@ -119,9 +119,10 @@
   }
 
   .panel {
-    background: var(--surface);
-    border: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018));
+    border: 1px solid var(--glass-border);
     border-radius: var(--r-lg);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
     padding: 0.8rem 0.9rem;
   }
 
@@ -138,7 +139,7 @@
 
   .segmented button {
     flex: 1 1 0;
-    height: 1.9rem;
+    height: 2.25rem;
     border: 0;
     border-radius: var(--r-sm);
     background: transparent;
@@ -154,7 +155,7 @@
   }
 
   .segmented button.current {
-    background: var(--surface-3);
+    background: linear-gradient(180deg, rgba(196, 122, 168, 0.26), rgba(196, 122, 168, 0.12));
     color: var(--fg);
     font-weight: var(--weight-semibold);
   }

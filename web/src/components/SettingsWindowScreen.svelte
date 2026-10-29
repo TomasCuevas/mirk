@@ -109,9 +109,10 @@
   }
 
   .panel {
-    background: var(--surface);
-    border: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018));
+    border: 1px solid var(--glass-border);
     border-radius: var(--r-lg);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
     padding: 0.8rem 0.9rem;
   }
 
@@ -129,7 +130,7 @@
 
   .choices button {
     width: 100%;
-    height: 2.1rem;
+    height: 2.4rem;
     padding: 0 0.6rem;
     border: 1px solid transparent;
     border-radius: var(--r-sm);
@@ -147,8 +148,8 @@
   }
 
   .choices button.current {
-    background: var(--surface-3);
-    border-color: var(--line-strong);
+    background: linear-gradient(180deg, rgba(196, 122, 168, 0.26), rgba(196, 122, 168, 0.12));
+    border-color: rgba(196, 122, 168, 0.45);
     color: var(--fg);
     font-weight: var(--weight-semibold);
   }

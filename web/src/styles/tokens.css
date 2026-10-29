@@ -35,30 +35,48 @@
 
 :root {
   /* Canvas and surfaces: the Raycast greys, by role rather than by number. */
-  --canvas: #07080a;
-  --surface: #0c0d0f;
-  --surface-1: #111214;
-  --surface-2: #18191a;
-  --surface-3: #1b1c1e;
+  /* L4: a quieter field. The wallpaper's near-black indigo, unfilled surfaces as translucent whites so
+     whatever is behind them — the aurora, a cover — shows through, and four steps that stay
+     distinguishable without ever looking like paint. */
+  --canvas: #0a0714;
+  --surface: rgba(255, 255, 255, 0.035);
+  --surface-1: rgba(255, 255, 255, 0.05);
+  --surface-2: rgba(255, 255, 255, 0.075);
+  --surface-3: rgba(255, 255, 255, 0.11);
 
-  /* Lines. Never a hard grey on a dark canvas: 8% white is an edge, 14% is a deliberate border. */
-  --line: rgba(255, 255, 255, 0.08);
-  --line-strong: rgba(255, 255, 255, 0.14);
-  --line-focus: #56c2ff;
+  /* Liquid glass: the tint a blurred pane gets over the canvas, the light it catches on its top edge,
+     and the blur itself. Components that float over the screen (the top bar, the navigation, the dialog)
+     use these; panels use the translucent surfaces and a sheen instead, because a blur behind every row
+     is a cost with no visible gain. */
+  --glass: rgba(18, 13, 32, 0.5);
+  --glass-strong: rgba(24, 18, 40, 0.68);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-highlight: rgba(255, 255, 255, 0.12);
+  --glass-blur: 20px;
+
+  /* Lines. A lavender-tinted white reads as an edge on this field; 13% is a deliberate border. */
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.13);
+  --line-focus: #a9b8f0;
 
   /* Text. `--fg-subtle` is for non-essential marks only (4.0:1); body text is `--fg` or `--fg-muted`. */
-  --fg: #f4f4f6;
-  --fg-muted: #9c9c9d;
-  --fg-subtle: #6a6b6c;
-  --fg-on-loud: #07080a;
+  --fg: #f2eef9;
+  --fg-muted: #a79fbb;
+  --fg-subtle: #7b7391;
+  --fg-on-loud: #0b0714;
 
   /* Semantic. `--brand` is the mark and nothing else: it is not an action colour, and it must not
      compete with the progress ramp, which is the only place a hue means something about reading. */
-  --brand: #ff6363;
-  --danger: #ff6363;
-  --success: #59d499;
-  --warning: #ff9217;
-  --info: #56c2ff;
+  --brand: #e6a3c9;
+  --brand-glow: rgba(230, 163, 201, 0.35);
+  /* The wallpaper's mid-pink, between the field and the crest: it fills the active choices and the
+     current page, so the reader's "where am I" is stated in the image's own colour. */
+  --brand-mid: #c47aa8;
+  --brand-mid-soft: rgba(196, 122, 168, 0.22);
+  --danger: #e58a95;
+  --success: #8fd6b4;
+  --warning: #e0b78d;
+  --info: #a9b8f0;
 
   /* Type. Inter is the interface; Instrument Serif is the screen's own voice, used once per screen
      so it stays a voice and not a costume. */
@@ -97,7 +115,7 @@
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --fast: 120ms;
 
-  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.65), 0 0 0 1px var(--line);
+  --shadow-modal: 0 30px 80px rgba(4, 2, 10, 0.55), 0 0 0 1px var(--glass-border);
 
   color-scheme: dark;
 }
