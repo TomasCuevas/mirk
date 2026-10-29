@@ -1,7 +1,7 @@
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import App from "../App.svelte";
-import { DEFAULT_WINDOW_LAYOUT, gridColumns } from "../lib/window";
+import { DEFAULT_WINDOW_LAYOUT, gridColumns, WINDOW_LAYOUT_CHANGED_EVENT } from "../lib/window";
 import { translate } from "../lib/i18n";
 
 const english = translate("en");
@@ -156,6 +156,7 @@ describe("the navigation follows the window layout", () => {
     const answers: Record<string, unknown> = {
       get_language: null,
       get_window_layout: layout,
+      get_window_preset: null,
       list_library: [],
       progress_providers: [],
       watched_folders: [],
@@ -256,6 +257,7 @@ describe("the window controls", () => {
     const answers: Record<string, unknown> = {
       get_language: null,
       get_window_layout: null,
+      get_window_preset: null,
       list_library: [],
       progress_providers: [],
       watched_folders: [],
@@ -346,5 +348,189 @@ describe("the window controls", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     flushSync();
     expect(calls).toContainEqual({ command: "set_window_layout", args: { layout: "columns-4" } });
+  });
+});
+
+/**
+ * S2 and S4: the window's own gestures change the layout, and the interface follows.
+ *
+ * Two gestures live outside the interface's buttons. A double click on the top bar is the reader asking
+ * for the other window state, and dragging the window out of full screen is the compositor unmaximising
+ * it — the desktop process rewrites the stored layout in both cases, so the grid must follow either one
+ * instead of drawing a layout the window has left.
+ *
+ * The fakes are the ones this file already uses, with one addition: `transformCallback` keeps the handler
+ * the event plugin registers, which is how a test hands the shell the event the process would emit. The
+ * `plugin:event|listen` answer was already there for the tray's screen requests.
+ */
+describe("the layout the window's own gestures change", () => {
+  let component: ReturnType<typeof mount> | null = null;
+  const calls: { command: string; args?: unknown }[] = [];
+  const stored: { layout: string | null; preset: string | null } = { layout: null, preset: null };
+  const callbacks = new Map<number, (event: { payload: unknown }) => void>();
+  const listeners: { event: string; handler: (event: { payload: unknown }) => void }[] = [];
+  let nextCallback = 0;
+
+  afterEach(() => {
+    if (component !== null) {
+      unmount(component);
+      component = null;
+    }
+    calls.length = 0;
+    stored.layout = null;
+    stored.preset = null;
+    callbacks.clear();
+    listeners.length = 0;
+    nextCallback = 0;
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    delete (window as unknown as Record<string, unknown>).__TAURI_EVENT_PLUGIN_INTERNALS__;
+    window.document.body.innerHTML = "";
+    window.location.hash = "";
+  });
+
+  function fakeDesktop(layout: string | null, preset: string | null = null): void {
+    stored.layout = layout;
+    stored.preset = preset;
+    const answers: Record<string, unknown> = {
+      get_language: null,
+      list_library: [],
+      progress_providers: [],
+      watched_folders: [],
+      list_suggestions: [],
+      suggestion_detector: { id: "none", availability: "unsupported" },
+      "plugin:event|listen": 1,
+      "plugin:event|unlisten": null,
+    };
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
+      invoke: (command: string, args?: Record<string, unknown>) => {
+        calls.push({ command, args });
+        // The store is read on every ask, so a test can change it the way the desktop process does.
+        if (command === "get_window_layout") {
+          return Promise.resolve(stored.layout);
+        }
+        // The preset is a second stored fact, resolved by the process: it never answers `auto`.
+        if (command === "get_window_preset") {
+          return Promise.resolve(stored.preset);
+        }
+        if (command === "plugin:event|listen") {
+          const handler = callbacks.get(Number(args?.handler));
+          if (handler !== undefined) {
+            listeners.push({ event: String(args?.event), handler });
+          }
+        }
+        return Promise.resolve(command in answers ? answers[command] : null);
+      },
+      transformCallback: (callback: (event: { payload: unknown }) => void) => {
+        nextCallback += 1;
+        callbacks.set(nextCallback, callback);
+        return nextCallback;
+      },
+      unregisterCallback: () => {},
+      unregisterListener: () => {},
+      convertFileSrc: (path: string) => path,
+    };
+    (window as unknown as Record<string, unknown>).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+      unregisterListener: () => {},
+    };
+  }
+
+  async function settle(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    flushSync();
+  }
+
+  /** The grid's column count, which is what the shell publishes from the layout it believes in. */
+  function columns(): string {
+    const app = window.document.querySelector(".app") as HTMLElement | null;
+    if (app === null) {
+      throw new Error("the shell publishes the layout in force");
+    }
+    return app.style.getPropertyValue("--grid-columns");
+  }
+
+  /** A press on the bar, with the click count a browser reports after a second press. */
+  function pressBar(detail: number): void {
+    const header = window.document.querySelector("header");
+    if (header === null) {
+      throw new Error("the bar is the window's handle");
+    }
+    header.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, detail }));
+    flushSync();
+  }
+
+  /** Announces the layout the desktop process stored, the way it does after a drag out of full screen. */
+  function emitLayoutChanged(layout: string): void {
+    for (const listener of listeners) {
+      if (listener.event === WINDOW_LAYOUT_CHANGED_EVENT) {
+        listener.handler({ payload: layout });
+      }
+    }
+  }
+
+  // S4: with nothing stored the window opens full screen, so the double click asks for the restore
+  // default — three per row — and it goes through the same stored choice the maximise control makes.
+  it("toggles to three per row on a double press while full screen", async () => {
+    fakeDesktop(null);
+    component = shell.mount();
+    await settle();
+    expect(columns()).toBe(gridColumns("auto"));
+
+    pressBar(2);
+    await settle();
+
+    expect(calls).toContainEqual({ command: "set_window_layout", args: { layout: "columns-3" } });
+    expect(columns()).toBe("3");
+    // The second press asks for the toggle, so nothing hands the window to the drag loop.
+    expect(calls.map((call) => call.command)).not.toContain("start_drag");
+  });
+
+  // S3: the layout and the preset are different facts, and the interface reads both. A reader whose
+  // stored layout is full screen and whose preset is four per row must get four from the double press,
+  // because that is the value the process's own drag would use. Reading only the layout gave three here
+  // and four there — the two halves of one gesture disagreeing after a restart.
+  it("toggles to the stored preset on a double press while full screen", async () => {
+    fakeDesktop("auto", "columns-4");
+    component = shell.mount();
+    await settle();
+    expect(columns()).toBe(gridColumns("auto"));
+
+    pressBar(2);
+    await settle();
+
+    expect(calls).toContainEqual({ command: "set_window_layout", args: { layout: "columns-4" } });
+    expect(columns()).toBe("4");
+  });
+
+  // S4/S5: a preset is in force, so the same gesture asks for full screen.
+  it("toggles to full screen on a double press when a preset is in force", async () => {
+    fakeDesktop("columns-4");
+    component = shell.mount();
+    await settle();
+    expect(columns()).toBe("4");
+
+    pressBar(2);
+    await settle();
+
+    expect(calls).toContainEqual({ command: "set_window_layout", args: { layout: "auto" } });
+    expect(columns()).toBe(gridColumns("auto"));
+  });
+
+  // S2/T3: dragging the window out of full screen is the compositor's gesture, so the process rewrites
+  // the stored layout and announces it. The interface re-reads the store rather than guessing, and a key
+  // this build does not know is ignored instead of taken as a layout.
+  it("follows a layout the desktop process changed behind the interface", async () => {
+    fakeDesktop("auto");
+    component = shell.mount();
+    await settle();
+    expect(columns()).toBe(gridColumns("auto"));
+
+    emitLayoutChanged("columns-9");
+    await settle();
+    expect(columns()).toBe(gridColumns("auto"));
+
+    stored.layout = "columns-4";
+    emitLayoutChanged("columns-4");
+    await settle();
+    expect(columns()).toBe("4");
   });
 });

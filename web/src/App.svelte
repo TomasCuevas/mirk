@@ -45,8 +45,11 @@
     gridCardMinimum,
     gridColumns,
     interfaceFontSize,
+    isWindowLayout,
+    loadWindowPreset,
     navMode,
     RESTORE_WINDOW_LAYOUT,
+    WINDOW_LAYOUT_CHANGED_EVENT,
     type WindowControl,
     type WindowLayout,
   } from "./lib/window";
@@ -181,6 +184,21 @@
       }
     } catch (error) {
       console.error("the stored window layout could not be read", error);
+    }
+  }
+
+  // S3: the layout says what the window is now; the preset says which rows it comes back to when it
+  // leaves full screen. The process resolves its own fallback, so a non-null answer is the value its own
+  // drag would use — the two halves must not answer that question differently. A failed read is reported
+  // and the fallback stands, the same way a failed layout read is.
+  async function loadStoredWindowPreset(): Promise<void> {
+    try {
+      const remembered = await loadWindowPreset(invoke);
+      if (remembered) {
+        lastPreset = remembered;
+      }
+    } catch (error) {
+      console.error("the stored window preset could not be read", error);
     }
   }
 
@@ -447,6 +465,13 @@
     window.location.hash = hashForView(next);
   }
 
+  // S4: the double click on the top bar and the maximise control are one gesture with two triggers, so
+  // both call this. It switches the stored layout rather than a geometry of its own, which is what keeps
+  // the gesture, the button and the option selected in Ajustes → Ventana from disagreeing.
+  async function toggleWindowLayout(): Promise<void> {
+    await chooseWindowLayout(maximized ? lastPreset : "auto");
+  }
+
   // Window chrome actions are fire-and-forget: the top bar has nowhere to render an error, and a
   // failed window operation is a program error rather than user state. It goes to the console
   // instead of being silently discarded.
@@ -457,7 +482,7 @@
     // S4: the maximise control is not a window command of its own — it chooses the same stored layout
     // Ajustes → Ventana does, so the button, the window size and the selected option cannot disagree.
     if (control.action === "maximize") {
-      await chooseWindowLayout(maximized ? lastPreset : "auto");
+      await toggleWindowLayout();
       return;
     }
     try {
@@ -531,6 +556,7 @@
     // screen through the same path — the hash listener above is what actually moves. A request that
     // names no screen is ignored rather than guessed at: it comes from outside the interface.
     let stopListening: Unlisten | null = null;
+    let stopLayoutChanges: Unlisten | null = null;
     let stopLibraryRefresh: (() => void) | null = null;
     let cancelled = false;
 
@@ -546,6 +572,7 @@
     if (inTauri) {
       void loadStoredLanguage();
       void loadStoredWindowLayout();
+      void loadStoredWindowPreset();
       void loadLibrary();
       void loadProviders();
       void loadFolders();
@@ -580,6 +607,30 @@
           // missing, and nothing anywhere said so. Reported, never dropped.
           console.error("the tray's screen requests will not be received", error);
         });
+      // S2/T3: the window's own gesture can change the stored layout behind the interface — dragging it
+      // out of full screen unmaximises it, and the desktop process rewrites the layout to the reader's
+      // preset. It announces the key and the store is re-read here rather than the payload being
+      // trusted: what the store says is the one fact the window, Ajustes and the grid can agree on.
+      void listen<string>(WINDOW_LAYOUT_CHANGED_EVENT, (layout) => {
+        // A key this build does not know is ignored rather than guessed at: it comes from outside the
+        // interface, and full screen is not a preset to come back to.
+        if (isWindowLayout(layout) && layout !== "auto") {
+          lastPreset = layout;
+        }
+        void loadStoredWindowLayout();
+      })
+        .then((stop) => {
+          if (cancelled) {
+            stop();
+          } else {
+            stopLayoutChanges = stop;
+          }
+        })
+        .catch((error) => {
+          // Same failure as the tray's requests, and the same consequence: without this listener the
+          // interface keeps drawing the layout the window has already left.
+          console.error("the window layout changes will not be received", error);
+        });
     } else {
       // Outside the shell there is nothing to ask, and saying the library is empty would be a lie.
       libraryLoading = false;
@@ -590,6 +641,7 @@
       window.removeEventListener("hashchange", sync);
       window.removeEventListener(LIBRARY_CHANGED_EVENT, onLibraryChanged);
       stopListening?.();
+      stopLayoutChanges?.();
       stopLibraryRefresh?.();
     };
   });
@@ -604,7 +656,14 @@
        never interactive; the panes above blur it, so the interface reads as layered rather than painted. -->
   <div class="aurora" aria-hidden="true"></div>
 
-  <WindowBar {t} {inTauri} {maximized} onAction={runWindowAction} onDrag={startDrag} />
+  <WindowBar
+    {t}
+    {inTauri}
+    {maximized}
+    onAction={runWindowAction}
+    onDrag={startDrag}
+    onToggle={toggleWindowLayout}
+  />
 
   <!-- The shell's body is what the layout arranges: a column (screen, then bottom bar) in a window, a
        row (sidebar, then screen) in full screen. It is the same screen element either way, so the

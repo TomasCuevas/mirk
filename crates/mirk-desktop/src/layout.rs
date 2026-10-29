@@ -28,18 +28,25 @@ pub enum WindowLayout {
 /// The layout in force when nothing is stored: full screen (R7 of `desktop-chrome.md`).
 pub const DEFAULT_LAYOUT: WindowLayout = WindowLayout::Auto;
 
-/// The windowed layout the interface's restore control returns to (R7).
+/// The windowed layout a window comes back to when nothing usable is stored: three per row (R7, S3).
 ///
-/// The decision itself lives in the interface — it is the shell that remembers what the reader chose —
-/// so nothing here reads this at runtime. It exists to keep the declared launch size in
-/// `tauri.conf.json` tied to a real layout: the window is created at the size "restore" comes back to,
-/// and `setup` then fills the work area. A test asserts the two numbers are one, so they cannot drift
-/// apart into a launch frame the reader can never recover.
-#[cfg(test)]
+/// It is the reader's own answer to "three per row if there is none", and it is read at runtime now: it
+/// is what [`preset`] falls back to, and so what a window that leaves full screen takes when the reader
+/// never chose a preset. It also keeps the declared launch size in `tauri.conf.json` tied to a real
+/// layout — the window is created at the size "restore" comes back to, and `setup` then fills the work
+/// area — and a test asserts the two numbers are one, so they cannot drift apart into a launch frame the
+/// reader can never recover.
 pub const RESTORE_LAYOUT: WindowLayout = WindowLayout::Columns3;
 
 /// The key the choice is stored under in the `settings` table. Both halves read this value.
 pub const LAYOUT_SETTING: &str = "window_layout";
+
+/// The key the reader's last windowed layout is stored under (S3).
+///
+/// It is a second setting beside [`LAYOUT_SETTING`] because full screen is not a preset: choosing it
+/// must leave the rows the reader last chose untouched, or dragging out of full screen would have
+/// nothing to come back to. Only `columns-2`, `columns-3` and `columns-4` are ever written here.
+pub const PRESET_SETTING: &str = "window_preset";
 
 /// Every layout key, in the order the interface offers them.
 pub const LAYOUT_KEYS: [&str; 4] = ["columns-2", "columns-3", "columns-4", "auto"];
@@ -106,6 +113,45 @@ impl WindowLayout {
     }
 }
 
+/// The preset a stored `window_preset` value names, or [`RESTORE_LAYOUT`] when it names none.
+///
+/// A value this build does not know and a stored `auto` are both *nothing stored*: full screen is not a
+/// preset, so it cannot be the answer to "which rows do I come back to", and neither can a word an older
+/// or a newer build left behind. Three per row is what is left, which is the default the reader asked
+/// for. `None` is an absent key, the same answer as an unusable value.
+pub fn preset(stored: Option<&str>) -> WindowLayout {
+    stored
+        .and_then(WindowLayout::parse)
+        .filter(|layout| layout.columns().is_some())
+        .unwrap_or(RESTORE_LAYOUT)
+}
+
+/// What the stored layout must become when the window's real shape disagrees with it, if anything.
+///
+/// The window manager's own drag gesture changes the window behind the application's back (S2): a
+/// maximised window dragged by its bar is unmaximised by the compositor while the stored layout still
+/// says `auto`, so the interface goes on drawing the sidebar, the pressed maximise control and the
+/// auto-filling grid over a window that is no longer full screen. The rule is that the window's shape
+/// wins — when the window is not maximised and the store still says full screen, the layout becomes the
+/// reader's `preset` — and `None` says the two already agree, so the caller does nothing.
+///
+/// `preset` is an argument rather than something read here, so the rule is a comparison and nothing else:
+/// its four cases can be asserted without a store or a window. Only the `auto` direction moves. A
+/// maximised window whose store names a preset is not corrected, because the window manager is allowed to
+/// be briefly out of step while a layout is being applied, and a rule that fought that would turn every
+/// apply into a loop.
+pub fn reconcile(
+    stored: WindowLayout,
+    maximised: bool,
+    preset: WindowLayout,
+) -> Option<WindowLayout> {
+    if stored == WindowLayout::Auto && !maximised {
+        Some(preset)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +185,80 @@ mod tests {
     fn the_window_that_restore_returns_to_is_three_per_row() {
         assert_eq!(RESTORE_LAYOUT, WindowLayout::Columns3);
         assert_eq!(RESTORE_LAYOUT.window_size(), Some((634.0, WINDOW_HEIGHT)));
+        assert_eq!(preset(None), RESTORE_LAYOUT, "nothing stored is the fallback");
+    }
+
+    // --- S3: the stored preset -----------------------------------------------------------------
+
+    #[test]
+    fn a_stored_preset_is_the_windowed_layout_it_names() {
+        for (stored, expected) in [
+            ("columns-2", WindowLayout::Columns2),
+            ("columns-3", WindowLayout::Columns3),
+            ("columns-4", WindowLayout::Columns4),
+        ] {
+            assert_eq!(preset(Some(stored)), expected, "`{stored}` names {expected:?}");
+        }
+    }
+
+    #[test]
+    fn full_screen_is_never_a_preset() {
+        assert_eq!(
+            preset(Some("auto")),
+            RESTORE_LAYOUT,
+            "full screen cannot be the rows a window comes back to, so it reads as nothing stored"
+        );
+        assert!(preset(Some("auto")).columns().is_some(), "a preset always counts its columns");
+    }
+
+    #[test]
+    fn a_stored_preset_this_build_does_not_know_and_a_missing_one_both_fall_back_to_three() {
+        for stored in [None, Some(""), Some("columns-5"), Some("Columns-3"), Some("auto-fill")] {
+            assert_eq!(
+                preset(stored),
+                RESTORE_LAYOUT,
+                "`{stored:?}` is not a preset this build knows, so three per row stands"
+            );
+        }
+    }
+
+    // --- S2: the rule that reconciles the window's shape with the store -------------------------
+
+    #[test]
+    fn a_preset_that_the_window_agrees_with_is_not_reconciled() {
+        assert_eq!(
+            reconcile(WindowLayout::Columns4, true, RESTORE_LAYOUT),
+            None,
+            "a maximised window over a stored preset is the window manager settling, not a drag"
+        );
+        assert_eq!(
+            reconcile(WindowLayout::Columns4, false, RESTORE_LAYOUT),
+            None,
+            "a windowed window over a stored preset already agrees with itself"
+        );
+    }
+
+    #[test]
+    fn full_screen_that_the_window_still_fills_is_not_reconciled() {
+        assert_eq!(
+            reconcile(WindowLayout::Auto, true, RESTORE_LAYOUT),
+            None,
+            "full screen over a maximised window is exactly what was asked for"
+        );
+    }
+
+    #[test]
+    fn a_window_that_left_full_screen_takes_the_preset_that_was_passed_in() {
+        assert_eq!(
+            reconcile(WindowLayout::Auto, false, WindowLayout::Columns4),
+            Some(WindowLayout::Columns4),
+            "the reader's last windowed choice is what the store must become"
+        );
+        assert_eq!(
+            reconcile(WindowLayout::Auto, false, RESTORE_LAYOUT),
+            Some(RESTORE_LAYOUT),
+            "with no preset stored, three per row is the answer"
+        );
     }
 
     #[test]

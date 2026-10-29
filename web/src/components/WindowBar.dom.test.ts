@@ -26,9 +26,10 @@ const bar = {
     inTauri?: boolean;
     onAction?: (control: WindowControl) => void;
     onDrag?: () => void;
-  } = {}): { actions: string[]; drags: number; destroy: () => void } {
+    onToggle?: () => void;
+  } = {}): { actions: string[]; drags: number; toggles: number; destroy: () => void } {
     const actions: string[] = [];
-    const calls = { drags: 0 };
+    const calls = { drags: 0, toggles: 0 };
     const component = mount(WindowBar, {
       target: window.document.body,
       props: {
@@ -43,6 +44,10 @@ const bar = {
           calls.drags += 1;
           props.onDrag?.();
         },
+        onToggle: () => {
+          calls.toggles += 1;
+          props.onToggle?.();
+        },
       },
     });
     flushSync();
@@ -50,6 +55,9 @@ const bar = {
       actions,
       get drags() {
         return calls.drags;
+      },
+      get toggles() {
+        return calls.toggles;
       },
       destroy: () => unmount(component),
     };
@@ -62,6 +70,18 @@ afterEach(() => {
 
 function controls(): HTMLButtonElement[] {
   return Array.from(window.document.querySelectorAll("header button"));
+}
+
+/** A press on the bar, with the click count a browser reports — which is how a double click says so. */
+function press(
+  detail: number,
+  target: Element | null = window.document.querySelector("header"),
+): void {
+  if (target === null) {
+    throw new Error("the bar is the drag handle");
+  }
+  target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, detail }));
+  flushSync();
 }
 
 describe("pressing a window control", () => {
@@ -85,15 +105,42 @@ describe("pressing a window control", () => {
 
   it("still lets the bar itself be the window's drag handle", () => {
     const mounted = bar.mount();
-    const header = window.document.querySelector("header");
-    if (header === null) {
-      throw new Error("the bar is the drag handle");
-    }
 
-    header.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-    flushSync();
+    press(1);
 
     expect(mounted.drags).toBe(1);
+    expect(mounted.toggles).toBe(0);
+    expect(mounted.actions).toEqual([]);
+    mounted.destroy();
+  });
+
+  // S4: the first press of a double click already handed the window to the compositor's drag loop, and
+  // that loop is what would swallow the second one — so the second press asks for the toggle instead of
+  // dragging again. The bar only reports the gesture; the parent decides what it means.
+  it("asks for the toggle on the second press of a double click instead of dragging", () => {
+    const mounted = bar.mount();
+
+    press(2);
+
+    expect(mounted.toggles).toBe(1);
+    expect(mounted.drags).toBe(0);
+    expect(mounted.actions).toEqual([]);
+    mounted.destroy();
+  });
+
+  // S5: the controls keep their meaning. A second press aimed at one of them is still a press on a
+  // control, so it neither drags nor toggles.
+  it("neither drags nor toggles on a second press aimed at a control", () => {
+    const mounted = bar.mount();
+    const glyph = controls()[1].querySelector("svg path");
+    if (glyph === null) {
+      throw new Error("every control draws a glyph");
+    }
+
+    press(2, glyph);
+
+    expect(mounted.drags).toBe(0);
+    expect(mounted.toggles).toBe(0);
     expect(mounted.actions).toEqual([]);
     mounted.destroy();
   });

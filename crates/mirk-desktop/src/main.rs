@@ -25,6 +25,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use commands::{
     FolderRemovalView, LibraryEntryView, OpenedDocumentView, OpenedFolderView, ProviderView,
@@ -63,6 +64,18 @@ const OPEN_SCREEN_EVENT: &str = "open-screen";
 
 /// The screen the tray's settings entry asks for, as the interface's own vocabulary spells it.
 const SETTINGS_SCREEN: &str = "settings";
+
+/// The event the desktop process emits when it changes the stored window layout without the interface
+/// having asked (S2 of `odd/tasks/window-drag.md`). The interface spells the same name in `web/src`; the
+/// payload is the layout key as a plain string, because the keys are the vocabulary both halves already
+/// share — this process does not keep a second list of layouts to translate between.
+const WINDOW_LAYOUT_EVENT: &str = "window-layout-changed";
+
+/// How often the window's real shape is compared with the stored layout (S2).
+///
+/// One second, and two consecutive disagreeing ticks are needed before anything is done about them — see
+/// [`start_reconciling`] for why both numbers are what they are.
+const RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Performs a [`shell`] action on the real window and application.
 struct AppShell {
@@ -443,20 +456,35 @@ fn get_window_layout() -> Result<Option<String>, String> {
     stored_layout()
 }
 
-/// Stores the chosen layout and sizes the window from it.
+/// The reader's remembered windowed layout, always one of the three presets (S3).
+///
+/// It is a second read beside [`get_window_layout`] because the two are different facts: the layout says
+/// what the window is now — `auto` for full screen — and the preset says which rows a window that leaves
+/// full screen comes back to. The interface needs the second one at startup, or its double click and the
+/// process's own drag answer the same question with different values. The answer is never `auto`:
+/// [`preset_from`] resolves through [`layout::preset`], so an absent key, an unusable value and a stored
+/// `auto` all come back as three per row, and a store that cannot be read is the command's error.
+#[tauri::command]
+fn get_window_preset() -> Result<String, String> {
+    stored_preset().map(|preset| preset.key().to_string())
+}
+
+/// Stores the chosen layout, remembers it as the preset when it is a windowed one, and sizes the window
+/// from it.
 ///
 /// One command rather than two so the store and the window cannot disagree: the value is validated and
-/// written first, and only then does the window take its new size. A failure leaves both as they were,
-/// and the tray is untouched — the window's size is not something the tray says.
+/// written first, and only then does the window take its new size. A refused value never reaches the
+/// store and the window is untouched; a write that fails leaves the window as it was too, so what is read
+/// and what is drawn stay one answer either way. The tray is not touched at all — the window's size is not
+/// something the tray says. The preset is written by [`remember_layout`], which is also what the
+/// reconciliation loop calls, so the two cannot remember different things.
 #[tauri::command]
 fn set_window_layout(layout: String, window: WebviewWindow) -> Result<(), String> {
     let chosen = self::layout::WindowLayout::parse(&layout).ok_or_else(|| {
         format!("`{layout}` is not a window layout this build knows")
     })?;
     let store = open_store()?;
-    // The canonical key is stored, never the caller's spelling: `parse` accepted it as one of the four,
-    // and the store keeps the one the build names.
-    commands::set_window_layout(&store, chosen.key()).map_err(error_message)?;
+    remember_layout(&store, chosen).map_err(error_message)?;
     apply_window_layout(&window, chosen)
 }
 
@@ -601,6 +629,43 @@ fn stored_language() -> Result<Option<String>, String> {
 fn stored_layout() -> Result<Option<String>, String> {
     let store = open_store()?;
     commands::get_window_layout(&store).map_err(error_message)
+}
+
+/// The windowed layout `store` remembers, or [`layout::RESTORE_LAYOUT`] when nothing usable is stored.
+///
+/// It reads the same `settings` table [`stored_layout`] reads, one key over, and [`layout::preset`] is
+/// where *nothing usable* is decided: an absent key, a value this build does not know and a stored `auto`
+/// all come back as three per row, because full screen is not a preset. A store that cannot be read is an
+/// error rather than the fallback, so the caller can say so and try again instead of quietly changing the
+/// reader's rows. Taking the store as an argument is what lets a test assert the read without a database
+/// on disk; the reconciliation loop and the command both come through here.
+fn preset_from(store: &Store) -> Result<layout::WindowLayout, String> {
+    let stored = store
+        .get_setting(layout::PRESET_SETTING)
+        .map_err(error_message)?;
+    Ok(layout::preset(stored.as_deref()))
+}
+
+/// The windowed layout the reader last chose, read from the production database.
+fn stored_preset() -> Result<layout::WindowLayout, String> {
+    let store = open_store()?;
+    preset_from(&store)
+}
+
+/// Stores `chosen` as the window layout, and as the reader's preset when it is a windowed one (S3).
+///
+/// The preset is what a window that leaves full screen comes back to, so only a windowed choice writes it:
+/// `auto` is full screen, not a preset, and choosing it must leave the rows the reader last chose in
+/// force. The layout itself is written by [`commands::set_window_layout`], the same call the command has
+/// always made, so there is one write path and one place that refuses a value this build does not know.
+fn remember_layout(store: &Store, chosen: layout::WindowLayout) -> Result<(), MirkError> {
+    // The canonical key is stored, never the caller's spelling: `parse` accepted it as one of the four,
+    // and the store keeps the one the build names.
+    commands::set_window_layout(store, chosen.key())?;
+    match chosen.columns() {
+        Some(_) => store.set_setting(layout::PRESET_SETTING, chosen.key()),
+        None => Ok(()),
+    }
 }
 
 /// Renders an error into the string the frontend shows. `MirkError` is not `Serialize`, and the
@@ -1018,6 +1083,102 @@ fn start_watching() {
     });
 }
 
+/// Keeps the stored layout and the window's real shape from disagreeing (S2).
+///
+/// The window manager's drag gesture changes the window behind everyone's back: dragging a maximised
+/// window by its bar unmaximises it, while the store still says `auto`, so the interface goes on drawing
+/// the sidebar, the pressed maximise control and the auto-filling grid over a window that is no longer
+/// full screen. This host tells the process nothing reliable about that — `set_fullscreen` is accepted and
+/// ignored here and `is_minimized` never becomes true — so the question is asked once a second instead:
+/// the window's real maximise state against what the store says, compared by [`layout::reconcile`]. When
+/// the rule fires, the reader's preset becomes the stored layout, the window takes it through
+/// [`apply_window_layout`], and [`WINDOW_LAYOUT_EVENT`] tells the interface to redraw now rather than at
+/// its next read.
+///
+/// **Two consecutive disagreeing ticks, not one.** A single disagreement can be a state in flight: the
+/// maximize `setup` asks for, or a layout being applied, is a moment when the window and the store are
+/// honestly mid-sentence. It can also be the middle of the drag itself, and acting there would pin the
+/// window's size while the compositor still holds it under the pointer. A second tick a second later
+/// cannot be any of those, because each settles within one tick; the cost is one second before the
+/// correction the reader is watching for, which is cheaper than a layout fighting the gesture that
+/// caused it.
+///
+/// A store that cannot be read is reported and retried, never fatal — the same rule as the two loops
+/// above, and for the same reason: an application that stopped reconciling because a database was
+/// briefly busy would go on drawing full screen over a windowed window for the rest of the session.
+/// The task is deliberately never joined: the process ending is its stop signal.
+fn start_reconciling(app: AppHandle) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut disagreed = false;
+
+        loop {
+            std::thread::sleep(RECONCILE_INTERVAL);
+            let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
+                // The window is the whole subject here, so there is nothing to compare without it.
+                disagreed = false;
+                continue;
+            };
+            let stored = match stored_layout() {
+                Ok(stored) => stored
+                    .as_deref()
+                    .and_then(layout::WindowLayout::parse)
+                    .unwrap_or(layout::DEFAULT_LAYOUT),
+                Err(error) => {
+                    eprintln!("the stored window layout could not be read: {error}");
+                    disagreed = false;
+                    continue;
+                }
+            };
+            let maximised = match window.is_maximized() {
+                Ok(maximised) => maximised,
+                Err(error) => {
+                    eprintln!("the window's maximise state could not be read: {error}");
+                    disagreed = false;
+                    continue;
+                }
+            };
+            let preset = match stored_preset() {
+                Ok(preset) => preset,
+                Err(error) => {
+                    eprintln!("the stored window preset could not be read: {error}");
+                    disagreed = false;
+                    continue;
+                }
+            };
+
+            let Some(reconciled) = layout::reconcile(stored, maximised, preset) else {
+                disagreed = false;
+                continue;
+            };
+            if !disagreed {
+                disagreed = true;
+                continue;
+            }
+            disagreed = false;
+
+            // The store goes first, so the interface reads the layout the window is about to take even
+            // if applying it fails; a failure is reported and the next tick tries again, because the
+            // two still disagree.
+            let remembered = open_store()
+                .and_then(|store| remember_layout(&store, reconciled).map_err(error_message));
+            if let Err(error) = remembered {
+                eprintln!("the reconciled window layout could not be stored: {error}");
+                continue;
+            }
+            if let Err(error) = apply_window_layout(&window, reconciled) {
+                eprintln!("the reconciled window layout could not be applied: {error}");
+                continue;
+            }
+            // The interface's layout changed without it asking, so it is told rather than left to notice
+            // on its next read: the grid, the sidebar and the maximise control are all drawn from this
+            // one value.
+            if let Err(error) = app.emit(WINDOW_LAYOUT_EVENT, reconciled.key()) {
+                eprintln!("the interface could not be told the layout changed: {error}");
+            }
+        }
+    });
+}
+
 /// Writes one pass's outcome to stderr.
 ///
 /// Missing capabilities and failures are logged apart, because they are different facts: one says
@@ -1069,6 +1230,9 @@ fn main() {
             // this, a PDF that appeared after the reader added the folder was invisible forever,
             // because re-scanning that folder is refused as already covered.
             start_watching();
+            // S2: the window manager's drag gesture can change the window's real shape without telling
+            // anyone, so the stored layout is compared with it while the application runs.
+            start_reconciling(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1104,6 +1268,7 @@ fn main() {
             get_language,
             set_language,
             get_window_layout,
+            get_window_preset,
             set_window_layout,
             open_containing_folder,
             open_folder,
@@ -1116,7 +1281,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{authored, layout, LibraryEntryView};
+    use super::{authored, commands, layout, preset_from, remember_layout, LibraryEntryView, Store};
 
     /// R42/S5, corrected after a native review: a caller that still sends the pre-list `author` must not
     /// lose its edit in silence.
@@ -1252,6 +1417,96 @@ mod tests {
             Some((window.width, window.height)),
             "the launch size is the window restore returns to"
         );
+    }
+
+    // --- S2/S3: the preset the layout command remembers ----------------------------------------
+    //
+    // The command's other half sizes a real window, which no test can do without a display, so what is
+    // asserted here is the writing it delegates to: `set_window_layout` calls `remember_layout` and then
+    // `apply_window_layout`, and these are the store's side of that one call.
+
+    fn in_memory_store() -> Store {
+        Store::open_in_memory().expect("open an in-memory store")
+    }
+
+    #[test]
+    fn a_windowed_layout_is_stored_and_remembered_as_the_preset() {
+        let store = in_memory_store();
+        remember_layout(&store, layout::WindowLayout::Columns4).expect("store four per row");
+
+        assert_eq!(
+            commands::get_window_layout(&store).expect("read the layout"),
+            Some("columns-4".to_string()),
+            "the layout itself is stored, as it always was"
+        );
+        assert_eq!(
+            store.get_setting(layout::PRESET_SETTING).expect("read the preset"),
+            Some("columns-4".to_string()),
+            "the windowed choice is what a window leaving full screen comes back to"
+        );
+    }
+
+    #[test]
+    fn full_screen_leaves_the_remembered_preset_alone() {
+        let store = in_memory_store();
+        remember_layout(&store, layout::WindowLayout::Columns2).expect("store two per row");
+        remember_layout(&store, layout::WindowLayout::Auto).expect("store full screen");
+
+        assert_eq!(
+            commands::get_window_layout(&store).expect("read the layout"),
+            Some("auto".to_string()),
+            "full screen is the layout in force"
+        );
+        assert_eq!(
+            store.get_setting(layout::PRESET_SETTING).expect("read the preset"),
+            Some("columns-2".to_string()),
+            "full screen is not a preset, so the rows the reader chose survive it"
+        );
+        assert_eq!(
+            layout::preset(
+                store
+                    .get_setting(layout::PRESET_SETTING)
+                    .expect("read the preset")
+                    .as_deref()
+            ),
+            layout::WindowLayout::Columns2,
+            "and reading it back names the layout the reader chose"
+        );
+    }
+
+    // S3/T1: the interface reads the preset through `get_window_preset`, whose whole answer is this
+    // resolution and its key — `auto` is not one of the answers it can give.
+    #[test]
+    fn the_preset_read_path_answers_three_per_row_when_nothing_is_stored() {
+        let store = in_memory_store();
+        assert_eq!(
+            preset_from(&store).expect("read the preset").key(),
+            "columns-3",
+            "a fresh store has no preset, so the build's fallback is the answer the interface gets"
+        );
+    }
+
+    #[test]
+    fn the_preset_read_path_answers_the_stored_key() {
+        let store = in_memory_store();
+        remember_layout(&store, layout::WindowLayout::Columns4).expect("store four per row");
+
+        assert_eq!(
+            preset_from(&store).expect("read the preset").key(),
+            "columns-4",
+            "the interface must set its preset from the rows the reader chose, not from three"
+        );
+    }
+
+    #[test]
+    fn a_store_with_no_preset_reads_as_three_per_row() {
+        let store = in_memory_store();
+        assert_eq!(
+            store.get_setting(layout::PRESET_SETTING).expect("read the preset"),
+            None,
+            "a fresh store has no preset, so the build's own fallback decides"
+        );
+        assert_eq!(layout::preset(None), layout::RESTORE_LAYOUT);
     }
 
     // --- R11: the folder chooser's frozen contract --------------------------------------------

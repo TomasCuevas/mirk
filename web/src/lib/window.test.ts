@@ -8,10 +8,13 @@ import {
   isWindowLayout,
   layoutLabelKey,
   libraryPageSize,
+  loadWindowPreset,
   navMode,
   RESTORE_WINDOW_LAYOUT,
+  WINDOW_LAYOUT_CHANGED_EVENT,
   windowControls,
   windowLayouts,
+  type PresetInvoke,
 } from "./window";
 
 describe("the window controls", () => {
@@ -165,5 +168,70 @@ describe("the window layouts", () => {
     expect(isWindowLayout("")).toBe(false);
     expect(isWindowLayout(null)).toBe(false);
     expect(isWindowLayout(3)).toBe(false);
+  });
+
+  // T3: the desktop process emits this name and the interface listens for it, so the literal is pinned
+  // here — the two halves live in different languages and a rename on one side would be silent.
+  it("names the event the desktop process emits when it changes the layout", () => {
+    expect(WINDOW_LAYOUT_CHANGED_EVENT).toBe("window-layout-changed");
+  });
+});
+
+/**
+ * S3: the preset the interface reads at startup, beside the stored layout.
+ *
+ * The desktop process resolves its own fallback, so a windowed key is the whole answer, and the same key
+ * is what its drag gesture uses. `auto` or a word from another build is not a preset this build can
+ * come back to: the caller keeps its own fallback rather than adopting a value the two halves disagree
+ * about. A failed read is not "nothing remembered" either — it is handed on so the caller can report it.
+ */
+describe("the remembered window preset", () => {
+  function presetInvoke(answer: unknown): { invoke: PresetInvoke; commands: string[] } {
+    const commands: string[] = [];
+    const invoke = (async <T,>(command: string): Promise<T> => {
+      commands.push(command);
+      return answer as T;
+    }) as PresetInvoke;
+    return { invoke, commands };
+  }
+
+  it("reads a windowed preset through", async () => {
+    for (const layout of ["columns-2", "columns-3", "columns-4"] as const) {
+      const { invoke } = presetInvoke(layout);
+      expect(await loadWindowPreset(invoke)).toBe(layout);
+    }
+  });
+
+  it("asks the desktop process for the preset, once", async () => {
+    const { invoke, commands } = presetInvoke("columns-4");
+
+    await loadWindowPreset(invoke);
+
+    expect(commands).toEqual(["get_window_preset"]);
+  });
+
+  // Full screen is not a preset: the process never stores `auto` here, so an answer of `auto` means the
+  // halves have drifted and the interface must not treat it as the rows to come back to.
+  it("does not take full screen for a preset", async () => {
+    const { invoke } = presetInvoke("auto");
+
+    expect(await loadWindowPreset(invoke)).toBeNull();
+  });
+
+  it("does not take an unknown value for a preset", async () => {
+    for (const answer of ["columns-9", "", 4, null, undefined]) {
+      const { invoke } = presetInvoke(answer);
+      expect(await loadWindowPreset(invoke), String(answer)).toBeNull();
+    }
+  });
+
+  // The same rule the stored layout is read under: a broken store must not look like a reader who never
+  // chose a preset, or the interface would silently fall back to three per row over a real answer.
+  it("lets a failed read fail instead of passing it off as nothing remembered", async () => {
+    const invoke = (async () => {
+      throw new Error("the database could not be opened");
+    }) as PresetInvoke;
+
+    await expect(loadWindowPreset(invoke)).rejects.toThrow("the database could not be opened");
   });
 });

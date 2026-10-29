@@ -103,6 +103,37 @@ export function isWindowLayout(value: unknown): value is WindowLayout {
   return typeof value === "string" && (windowLayouts as readonly string[]).includes(value);
 }
 
+/** The shape of `tauri.ts`'s `invoke`, so a test can hand the loader a fake instead of a webview. */
+export type PresetInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+/**
+ * The reader's remembered windowed layout, or `null` when the process answers something this build does
+ * not know (S3).
+ *
+ * The stored layout and the preset are two facts: the layout says what the window is now — `auto` for
+ * full screen — and the preset says which rows a window that leaves full screen comes back to. The
+ * desktop process resolves its own fallback, so a key arriving here is the same value its own drag uses;
+ * it is still validated rather than trusted, because `auto` or a word from another build would mean the
+ * two halves had drifted, and the caller keeps its own fallback instead of adopting that. A failed call
+ * is handed on as an error, exactly as the neighbouring stored reads do: "nothing remembered" and "the
+ * store could not be read" must not look alike.
+ */
+export async function loadWindowPreset(invoke: PresetInvoke): Promise<WindowLayout | null> {
+  const stored = await invoke<unknown>("get_window_preset");
+  return isWindowLayout(stored) && stored !== "auto" ? stored : null;
+}
+
+/**
+ * The event the desktop process emits when it changes the stored layout behind the interface (S2).
+ *
+ * Dragging the window out of full screen is the compositor's gesture, not a choice made in Ajustes →
+ * Ventana: the process unmaximises the window, rewrites the stored layout to the reader's preset and
+ * announces the key, and the interface re-reads the store rather than guessing which layout a geometry
+ * means. Both halves must spell the name the same way, which is why it lives here beside the payload's
+ * type.
+ */
+export const WINDOW_LAYOUT_CHANGED_EVENT = "window-layout-changed";
+
 /**
  * The `grid-template-columns` count a layout asks the document grid for (S4).
  *

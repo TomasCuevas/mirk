@@ -8,6 +8,7 @@
     maximized,
     onAction,
     onDrag,
+    onToggle,
   }: {
     t: Translate;
     inTauri: boolean;
@@ -15,11 +16,17 @@
     maximized: boolean;
     onAction: (control: WindowControl) => void;
     onDrag: () => void;
+    /**
+     * The double click on the bar. The parent decides what a toggle means — the stored layout, exactly
+     * as the maximise control does — so the bar only reports the gesture.
+     */
+    onToggle?: () => void;
   } = $props();
 
-  // The bar is the window's drag handle. Pressing it (but not one of its buttons) starts the move
-  // gesture through an application command. There is deliberately no double-click behaviour: a
-  // double-click must not be a second route to maximise (A2), so this handler ignores it.
+  // The bar is the window's drag handle: pressing it (but not one of its buttons) starts the move
+  // gesture through an application command. The second press of a double click asks the parent to
+  // toggle the window instead, and `detail` is what says so — the first press has already handed the
+  // window to the compositor's drag loop, and that loop is what would eat a `dblclick`.
   function handleMouseDown(event: MouseEvent): void {
     if (!inTauri || event.button !== 0) {
       return;
@@ -31,17 +38,21 @@
     if (event.target instanceof Element && event.target.closest("button") !== null) {
       return;
     }
+    if (event.detail >= 2) {
+      onToggle?.();
+      return;
+    }
     onDrag();
   }
 </script>
 
 <!--
   The custom top bar (A2). The application is undecorated on purpose, so this is the only title bar
-  there is: pressing it moves the window, and it draws exactly the four controls the user asked
-  for — minimise, maximise/restore, hide and close (S4 of `odd/tasks/desktop-chrome.md`). Maximise is
-  not a second size authority: it chooses the same stored layout Ajustes → Ventana does, which keeps the
-  button and the selected option in agreement, and the bar stays visible in full screen so closing and
-  hiding remain reachable there.
+  there is: pressing it moves the window, a double click toggles the two window states, and it draws
+  exactly the four controls the user asked for — minimise, maximise/restore, hide and close (S4 of
+  `odd/tasks/desktop-chrome.md`). Maximise is not a second size authority: it chooses the same stored
+  layout Ajustes → Ventana does, which keeps the button, the double click and the selected option in
+  agreement, and the bar stays visible in full screen so closing and hiding remain reachable there.
 -->
 <!-- The bar is a drag handle, not a control; its own buttons carry the interactive semantics. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
