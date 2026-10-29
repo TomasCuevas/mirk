@@ -1,6 +1,6 @@
 # Feature: the window's own gestures agree with the layout it is in
 
-Status: **in progress** — implemented and green; the two gestures wait for the user's manual check.
+Status: **done** — verified on the running window by the user, and committed in `980902f`.
 Created: 2026-10-29
 Engram mirror: `odd/window-drag/tasks`
 
@@ -55,11 +55,11 @@ drag. Closing, hiding and minimising are untouched. Nothing about a stored libra
 
 | ID | Task | Specs | Route | Commit |
 | --- | --- | --- | --- | --- |
-| T1 | The stored preset, and reading it | S3 | worker | uncommitted (done) |
-| T2 | The rule that reconciles the window's real shape with the stored layout, and the tick that applies it | S2 | worker | uncommitted (done) |
-| T3 | The event that tells the interface the layout changed behind it | S2 | worker | uncommitted (done) |
-| T4 | The double click on the bar, and its press that must not drag | S4 | worker | uncommitted (done) |
-| T5 | Verification: suites, and the two gestures on the running window | S1–S5 | parent + user | manual check pending |
+| T1 | The stored preset, and reading it | S3 | worker | `980902f` |
+| T2 | The rule that reconciles the window's real shape with the stored layout, and the tick that applies it | S2 | worker | `980902f` |
+| T3 | The event that tells the interface the layout changed behind it | S2 | worker | `980902f` |
+| T4 | The double click on the bar, and its press that must not drag | S4 | worker | `980902f` |
+| T5 | Verification: suites, and the two gestures on the running window | S1–S5 | parent + user | verified by the user |
 
 ---
 
@@ -132,3 +132,13 @@ second `mousedown` reaching the DOM at all. Both are the user's manual check (T5
 misbehaves, the premise to revisit is stated here rather than rediscovered: the loop trusts
 `is_maximized()`, and the gesture trusts `detail >= 2` arriving after a drag was already handed to the
 compositor.
+
+**L5 — the user's verification, in their own words.**
+> "Si, funciona todo correctamente. Puedes proceder con el commit"
+
+Both gestures were checked on the running window: dragging out of full screen takes the selected rows
+and drops the sidebar and the pressed state with it, and the double click toggles between the two
+states. That closes the only two questions the suites could not answer — what this compositor reports
+through `is_maximized()` after unmaximising a dragged window, and whether the second press of a double
+click survives the drag the first one started. Both hold on this host, which is also the reason the two
+decisions in L2 are now measured rather than argued.
