@@ -323,8 +323,11 @@ impl<'a> Scanner<'a> {
 
     /// Resolves and binds the pdfium native library for this scanner.
     ///
-    /// Crate-visible so [`WatchBridge`] can bind once before it starts watching, turning a missing
-    /// library into one actionable error instead of one failure per event.
+    /// Crate-visible so [`WatchBridge`] can probe the library before it starts watching, turning a
+    /// missing library into one actionable error instead of one failure per event. The instance this
+    /// returns must not outlive the work it was bound for: pdfium is single-threaded behind a
+    /// process-wide lock that is held while any instance is alive, so a binding that stayed alive
+    /// would block every other pdfium caller in the process (see `watch`'s module documentation).
     pub(crate) fn pdfium(&self) -> Result<Pdfium, MirkError> {
         bind_pdfium_specifying(self.explicit_pdfium.as_deref())
     }
@@ -472,7 +475,9 @@ impl<'a> Scanner<'a> {
 
     /// The per-path loop behind [`Scanner::count_and_persist`], with pdfium already loaded.
     ///
-    /// Crate-visible so [`WatchBridge`] can reuse one bound library across many events.
+    /// Crate-visible so [`WatchBridge`] can bind the library for one event, call this with that
+    /// binding, and release it before the watcher waits for the next event: a binding kept across
+    /// events would hold pdfium's process-wide lock for as long as the watch ran.
     pub(crate) fn count_and_persist_with(&self, pdfium: &Pdfium, paths: &[PathBuf]) -> ScanOutcome {
         let mut outcome = ScanOutcome::default();
 

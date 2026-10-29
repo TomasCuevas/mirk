@@ -11,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use mirk_core::{
@@ -530,4 +531,69 @@ fn setting_the_stop_flag_ends_the_watch_and_returns() {
 
     assert!(stop.load(Ordering::SeqCst), "the stop flag reached the watcher");
     assert_eq!(outcomes.len(), 1, "the one scripted event was handled before the loop ended");
+}
+
+// --- S7: the watch must not hold pdfium's process-wide lock ----------------------------------
+
+/// The build enables `pdfium-render`'s `thread_safe` feature, which marshals *all* pdfium access in
+/// the process behind one mutex taken by `FPDF_InitLibrary` and released by the matching
+/// `FPDF_DestroyLibrary`. A `Pdfium` instance therefore holds that lock
+/// for as long as it lives, so a watcher that kept one alive would block every other pdfium caller
+/// in the process — page counting during a scan, cover rendering for a card the reader is looking
+/// at — for the whole life of the watch. This test pins that: while the bridge is watching, another
+/// thread must be able to bind the library and answer.
+#[test]
+fn another_thread_can_bind_pdfium_while_the_bridge_is_watching() {
+    let (dir, root) = temp_root();
+    let store = temp_store(&dir);
+    let identity = FakeIdentity;
+    let path = root.join("doc.pdf");
+    write_file(&path, OBJECT_STREAM_FIXTURE);
+
+    let expected = format!("counted:{}", path.display());
+    let watcher = FakeWatcher::new(vec![event(&path, WatchEventKind::Added)]).blocking();
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let (seen_tx, seen_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let bridge_stop = Arc::clone(&stop);
+
+    std::thread::spawn(move || {
+        let bridge = WatchBridge::new(&watcher, Scanner::new(&store, &identity));
+        let mut sink = |outcome: WatchOutcome| {
+            let _ = seen_tx.send(describe(&outcome));
+        };
+        let outcome = bridge.watch(&[target(&root)], &bridge_stop, &mut sink);
+        let _ = done_tx.send(outcome);
+    });
+
+    // The bridge has reported its first outcome, so its loop is running and the fake watcher is
+    // about to block like a real one. Every wait here is bounded: a wiring bug fails the test
+    // instead of hanging the suite.
+    let first = seen_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the bridge reported the scripted event before the binding attempt");
+    assert_eq!(first, expected, "the scripted event was processed");
+
+    // Meanwhile another thread wants pdfium for its own work.
+    let (bound_tx, bound_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        // The binding is created, used and dropped on this thread, so nothing it holds can outlive
+        // the answer it sends.
+        let answer = mirk_scan::bind_pdfium_library()
+            .map(|_pdfium| ())
+            .map_err(|error| error.to_string());
+        let _ = bound_tx.send(answer);
+    });
+
+    let answer = bound_rx.recv_timeout(Duration::from_secs(5)).expect(
+        "a second thread must be able to bind pdfium while the bridge is watching",
+    );
+    answer.expect("binding pdfium outside the watch succeeds");
+
+    stop.store(true, Ordering::SeqCst);
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the watch ends once the stop flag is set")
+        .expect("the watch reports no error");
 }

@@ -42,6 +42,7 @@ mod commands;
 mod layout;
 mod shell;
 mod track;
+mod watch;
 
 /// The label of the window declared in `tauri.conf.json`. Referenced rather than repeated so the
 /// tray and the commands always act on the same window.
@@ -113,6 +114,12 @@ impl ShellActions for AppShell {
 }
 
 /// Minimises the window, the way the top bar's minimise control asks.
+///
+/// R5: this is a true minimise and nothing else. An earlier version hid the window when the platform
+/// had not reported the minimised state within 250 ms, to work around a measured no-op; the user's
+/// report that "minimise works like a tray button" is that workaround firing, so it is gone. The
+/// iconify request is the whole command, and if the compositor refuses it the tray's Hide remains the
+/// separate, explicit way to take the window off the screen.
 #[tauri::command]
 fn minimize_window(window: WebviewWindow) -> Result<(), String> {
     let app = window.app_handle().clone();
@@ -928,6 +935,89 @@ fn start_tracking() {
     });
 }
 
+/// Keeps the reader's folders watched while the application runs (S3–S4 of `odd/tasks/live-watch.md`).
+///
+/// A folder was previously read exactly once — at the moment it was added — so a PDF that appeared
+/// afterwards never entered the library, and re-scanning that folder is refused on purpose because a
+/// second watch would discover every document in it twice. The firing and the writing are not this
+/// function's business: the comparison lives on [`tauri::async_runtime::spawn_blocking`]'s thread
+/// because it is one indexed read every [`watch::REARM_INTERVAL`], and the watch itself runs on a
+/// blocking thread of its own because [`mirk_scan::WatchBridge::watch`] blocks by contract.
+///
+/// Every time the watch is (re)armed, [`watch::catch_up`] counts the documents that arrived while the
+/// application was closed. That is the other half of the same wire (S6): a watch reports changes from
+/// the moment it arms, so without the pass a PDF added between two launches stays invisible forever.
+///
+/// The task is deliberately never joined, for the same reason the ingestion loop is not: it is the
+/// application's background job, and the process ending is its stop signal.
+fn start_watching() {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut armed: Option<watch::Armed> = None;
+
+        loop {
+            // A store that cannot be read is reported and retried: an application that stopped
+            // watching because a database was briefly busy would go stale without saying so.
+            match open_store().and_then(|store| {
+                let folders = store.folders().map_err(error_message)?;
+                Ok((store, folders))
+            }) {
+                Ok((store, folders)) => {
+                    let current = watch::targets(&folders);
+                    let stale = armed
+                        .as_ref()
+                        .map(|previous| watch::is_stale(previous.targets(), &current))
+                        .unwrap_or(true);
+                    if stale {
+                        // Stopping joins the old thread, so the store it owned is closed before the
+                        // next watch opens its own. No folder means no thread to run.
+                        if let Some(previous) = armed.take() {
+                            previous.stop();
+                        }
+                        if current.is_empty() {
+                            // A silent "nothing to watch" is indistinguishable from a broken
+                            // watcher, and this feature already failed twice by being silent. One
+                            // line when the set becomes empty is the trace that says which of the
+                            // two the reader is looking at.
+                            eprintln!(
+                                "watching nothing: the library has no enabled folder to watch, so a \
+                                 document added while the application runs will not be seen"
+                            );
+                        } else {
+                            for target in &current {
+                                eprintln!(
+                                    "watching: {} ({})",
+                                    target.path.display(),
+                                    if target.recursive {
+                                        "recursive"
+                                    } else {
+                                        "this folder only"
+                                    }
+                                );
+                            }
+                            armed = Some(watch::Armed::start(store, current));
+                            // S6: the watch only sees changes from the moment it arms, so the
+                            // documents that arrived while the application was closed are counted
+                            // here. After the watch is armed, never before: a document created
+                            // while this pass runs is then reported by the watch instead of
+                            // falling into the gap between the two. It runs on its own connection
+                            // because the armed thread owns the store it was given.
+                            match open_store() {
+                                Ok(store) => watch::catch_up(&store, &folders),
+                                Err(error) => eprintln!(
+                                    "the launch catch-up pass could not open the store: {error}"
+                                ),
+                            }
+                        }
+                    }
+                }
+                Err(error) => eprintln!("the watched folders could not be read: {error}"),
+            }
+
+            std::thread::sleep(watch::REARM_INTERVAL);
+        }
+    });
+}
+
 /// Writes one pass's outcome to stderr.
 ///
 /// Missing capabilities and failures are logged apart, because they are different facts: one says
@@ -975,6 +1065,10 @@ fn main() {
             // The ingestion loop is what connects the detector and the providers to the store; it
             // runs for the life of the process and reports everything it cannot do to stderr.
             start_tracking();
+            // S3 of `odd/tasks/live-watch.md`: a folder is not read once and forgotten. Without
+            // this, a PDF that appeared after the reader added the folder was invisible forever,
+            // because re-scanning that folder is refused as already covered.
+            start_watching();
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1121,12 +1215,15 @@ mod tests {
             "S2: the application launches in a window, not full screen"
         );
 
-        // R5: the width widened from 390 to 430; the height and the shape did not move.
-        assert_eq!(window.width, 430.0, "R5: the window width");
+        // S2 of `desktop-chrome.md`: the window is created at the size the restore control returns to
+        // — three per row, 634 px — and `setup` then fills the work area, because R7 made full screen
+        // the stored default. Declaring the restore size rather than a number no layout names is what
+        // keeps the frame before the maximise from being a size the reader can never get back to.
+        assert_eq!(window.width, 634.0, "S2: the launch width is three per row");
         assert_eq!(window.height, 844.0, "R5: the window height");
 
-        // The floor is still pinned — no layout shrinks the window below the shape the reader chose —
-        // while the ceiling is gone, because a preset has to be able to widen it.
+        // The floor is still pinned — no layout shrinks the window below the phone shape — while the
+        // ceiling is gone, because a preset has to be able to widen it.
         assert_eq!(window.min_width, Some(430.0));
         assert_eq!(window.min_height, Some(844.0));
         assert_eq!(
@@ -1138,18 +1235,22 @@ mod tests {
             "S2: full screen needs the height the screen has"
         );
 
-        let ratio = window.height / window.width;
+        // The phone proportion belongs to the two-per-row window, which is the narrowest one; the default
+        // three-per-row window is deliberately wider than that shape (S2 of `desktop-chrome.md`).
+        let (narrow_width, narrow_height) =
+            layout::WindowLayout::Columns2.window_size().expect("a windowed layout");
+        let ratio = narrow_height / narrow_width;
         assert!(
             (1.9..=2.4).contains(&ratio),
-            "the window must have phone proportions, but its height/width ratio is {ratio}"
+            "the narrow window must keep phone proportions, but its height/width ratio is {ratio}"
         );
 
-        // The three windowed layouts are what the desktop process will apply, so the pinned initial
-        // size must be one of them rather than a number no layout ever names.
+        // The declared launch size is the restore layout's own size, so the one frame the window has
+        // before `setup` fills the work area is a size the restore control really returns to.
         assert_eq!(
-            layout::WindowLayout::Columns2.window_size(),
+            layout::RESTORE_LAYOUT.window_size(),
             Some((window.width, window.height)),
-            "the launch size is the two-per-row layout"
+            "the launch size is the window restore returns to"
         );
     }
 

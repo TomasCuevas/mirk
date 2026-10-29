@@ -12,6 +12,19 @@
 //! own — [`WatchBridge::watch`] blocks on the caller's thread until the caller sets the stop flag,
 //! exactly as [`FolderWatcher::watch`] does.
 //!
+//! # The library is bound per event, never held
+//!
+//! `pdfium` is single-threaded, and this build enables `pdfium-render`'s `thread_safe` feature,
+//! which enforces that with one process-wide mutex: the lock is taken by the first
+//! `FPDF_InitLibrary` and released only by the matching `FPDF_DestroyLibrary`, so it is held for as
+//! long as any [`Pdfium`] instance is alive. A bridge that kept one instance would therefore block
+//! every other pdfium caller in the process — page counting during a scan, cover rendering for a
+//! card the reader is looking at — for the whole life of the watch. So the bridge binds the library
+//! once as a probe before installing any watch and releases it immediately, and then binds one
+//! instance per event, uses it, and drops it before the loop waits for the next event. The probe is
+//! what keeps the failure contract: a library that cannot be loaded is one actionable error before
+//! any watch exists, rather than one identical failure per event.
+//!
 //! # What each event does
 //!
 //! | Event | Reaction |
@@ -84,8 +97,11 @@ impl<'a> WatchBridge<'a> {
     /// Blocks on the calling thread and returns when the watcher's loop ends — normally because
     /// `stop` was set, or with the watcher's own error (for example a kernel watch limit, which
     /// T7a reports as one honest failure rather than a silently partial watch). The pdfium native
-    /// library is bound once, before watching starts, so a missing or unloadable library is one
-    /// actionable error instead of one identical failure per event.
+    /// library is probed once, before watching starts, so a missing or unloadable library is one
+    /// actionable error instead of one identical failure per event — but the probe is released
+    /// before the loop begins, and each event binds its own instance, because an instance that
+    /// outlived the event would hold pdfium's process-wide lock for the whole life of the watch
+    /// (see the module documentation).
     ///
     /// Every processed event produces a [`WatchOutcome`] delivered to `on_outcome`. The sink is
     /// called from this thread, so it should not block for long.
@@ -95,32 +111,33 @@ impl<'a> WatchBridge<'a> {
         stop: &AtomicBool,
         on_outcome: &mut dyn FnMut(WatchOutcome),
     ) -> Result<(), MirkError> {
-        // Bind before the loop installs any watch: if page counting cannot run at all, the caller
+        // Probe before the loop installs any watch: if page counting cannot run at all, the caller
         // gets one honest error rather than a stream of per-event failures, and no watch is left
-        // running behind a broken wiring.
-        let pdfium = self.scanner.pdfium()?;
+        // running behind a broken wiring. The binding is released at once, because holding it here
+        // is exactly what used to block every other pdfium caller in the process.
+        let probe = self.scanner.pdfium()?;
+        drop(probe);
 
         self.watcher.watch(targets, stop, &mut |event| {
-            self.handle_event(event, &pdfium, on_outcome);
+            self.handle_event(event, on_outcome);
         })
     }
 
     /// Applies one event's reaction and reports every outcome it produces.
-    fn handle_event(
-        &self,
-        event: WatchEvent,
-        pdfium: &Pdfium,
-        on_outcome: &mut dyn FnMut(WatchOutcome),
-    ) {
+    ///
+    /// The pdfium binding an event needs lives inside [`WatchBridge::count_and_report`], so it is
+    /// gone before this returns to the watcher's loop. `Removed` and `Unwatchable` parse nothing and
+    /// therefore never bind the library at all.
+    fn handle_event(&self, event: WatchEvent, on_outcome: &mut dyn FnMut(WatchOutcome)) {
         match event.kind {
             WatchEventKind::Added | WatchEventKind::Changed => {
-                self.count_and_report(&event.path, pdfium, on_outcome);
+                self.count_and_report(&event.path, on_outcome);
             }
             WatchEventKind::Lost => {
                 // The library's view of this path may be stale because events were dropped, so the
                 // rescan is the recovery. Both the drop and the rescan's result reach the sink.
                 on_outcome(WatchOutcome::Lost(event.path.clone()));
-                self.count_and_report(&event.path, pdfium, on_outcome);
+                self.count_and_report(&event.path, on_outcome);
             }
             WatchEventKind::Removed => on_outcome(WatchOutcome::Removed(event.path)),
             // Deliberately no rescan: a path that cannot be watched does not become watchable by
@@ -130,14 +147,28 @@ impl<'a> WatchBridge<'a> {
     }
 
     /// Counts and persists one path, reporting each counted document and failure to the sink.
-    fn count_and_report(
-        &self,
-        path: &Path,
-        pdfium: &Pdfium,
-        on_outcome: &mut dyn FnMut(WatchOutcome),
-    ) {
+    ///
+    /// The binding is created here, used here, and released before the outcomes are reported, so
+    /// the process-wide pdfium lock is free again while the watcher waits for its next event. A
+    /// library that cannot be bound at this point is reported as this path's failure: it is the
+    /// same shape as any other path that cannot be counted, and nothing is swallowed.
+    fn count_and_report(&self, path: &Path, on_outcome: &mut dyn FnMut(WatchOutcome)) {
+        let pdfium: Pdfium = match self.scanner.pdfium() {
+            Ok(pdfium) => pdfium,
+            Err(error) => {
+                on_outcome(WatchOutcome::Failed(ScanFailure {
+                    path: path.to_path_buf(),
+                    reason: error.to_string(),
+                }));
+                return;
+            }
+        };
+
         let paths = [path.to_path_buf()];
-        let outcome = self.scanner.count_and_persist_with(pdfium, &paths);
+        let outcome = self.scanner.count_and_persist_with(&pdfium, &paths);
+        // Drop the binding before reporting, so a sink that itself wants pdfium — or another
+        // thread that does — never waits behind this event's work.
+        drop(pdfium);
 
         for document in outcome.counted {
             on_outcome(WatchOutcome::Counted(document));

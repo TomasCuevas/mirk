@@ -25,8 +25,18 @@ pub enum WindowLayout {
     Auto,
 }
 
-/// The layout in force when nothing is stored: the window the application already had.
-pub const DEFAULT_LAYOUT: WindowLayout = WindowLayout::Columns2;
+/// The layout in force when nothing is stored: full screen (R7 of `desktop-chrome.md`).
+pub const DEFAULT_LAYOUT: WindowLayout = WindowLayout::Auto;
+
+/// The windowed layout the interface's restore control returns to (R7).
+///
+/// The decision itself lives in the interface — it is the shell that remembers what the reader chose —
+/// so nothing here reads this at runtime. It exists to keep the declared launch size in
+/// `tauri.conf.json` tied to a real layout: the window is created at the size "restore" comes back to,
+/// and `setup` then fills the work area. A test asserts the two numbers are one, so they cannot drift
+/// apart into a launch frame the reader can never recover.
+#[cfg(test)]
+pub const RESTORE_LAYOUT: WindowLayout = WindowLayout::Columns3;
 
 /// The key the choice is stored under in the `settings` table. Both halves read this value.
 pub const LAYOUT_SETTING: &str = "window_layout";
@@ -116,9 +126,19 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_the_window_that_already_shipped() {
-        assert_eq!(DEFAULT_LAYOUT, WindowLayout::Columns2);
-        assert_eq!(DEFAULT_LAYOUT.window_size(), Some((430.0, WINDOW_HEIGHT)));
+    fn the_default_is_full_screen() {
+        assert_eq!(DEFAULT_LAYOUT, WindowLayout::Auto);
+        assert_eq!(
+            DEFAULT_LAYOUT.window_size(),
+            None,
+            "R7: full screen is the work area, not a size table entry"
+        );
+    }
+
+    #[test]
+    fn the_window_that_restore_returns_to_is_three_per_row() {
+        assert_eq!(RESTORE_LAYOUT, WindowLayout::Columns3);
+        assert_eq!(RESTORE_LAYOUT.window_size(), Some((634.0, WINDOW_HEIGHT)));
     }
 
     #[test]
