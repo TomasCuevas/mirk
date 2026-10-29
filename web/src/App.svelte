@@ -42,7 +42,11 @@
   } from "./lib/suggestions";
   import {
     DEFAULT_WINDOW_LAYOUT,
+    gridCardMinimum,
     gridColumns,
+    interfaceFontSize,
+    navMode,
+    RESTORE_WINDOW_LAYOUT,
     type WindowControl,
     type WindowLayout,
   } from "./lib/window";
@@ -68,6 +72,15 @@
   // sizes the window from the same stored value, which is what keeps "three per row" from meaning a
   // narrow window with three squeezed cards.
   let windowLayout = $state<WindowLayout>(DEFAULT_WINDOW_LAYOUT);
+  // S3 of `odd/tasks/navigation.md`: full screen has the room for a left sidebar, so the navigation
+  // changes place with the layout. A windowed layout — however wide — keeps the bottom bar.
+  const sidebar = $derived(navMode(windowLayout) === "side");
+  // R7 of `odd/tasks/desktop-chrome.md`: full screen is the layout a store that has never chosen
+  // opens with, so "restore" cannot fall back to the default — it returns to three per row, which
+  // the user named. A reader who chose a preset still gets that preset back while the application
+  // runs, because the choice is remembered below.
+  let lastPreset = $state<WindowLayout>(RESTORE_WINDOW_LAYOUT);
+  const maximized = $derived(windowLayout === "auto");
 
   // Navigation is a hash so a reload keeps the reader on the screen they were looking at. The
   // initial value is Inicio; `onMount` reads the real hash and a `hashchange` listener keeps
@@ -162,6 +175,9 @@
       const stored = await loadWindowLayout(invoke);
       if (stored) {
         windowLayout = stored;
+        if (stored !== "auto") {
+          lastPreset = stored;
+        }
       }
     } catch (error) {
       console.error("the stored window layout could not be read", error);
@@ -172,6 +188,9 @@
   // grid changes at once, because the reader pressed a choice and must see it; a failure then re-reads
   // the store rather than leaving the grid claiming a layout the window never took.
   async function chooseWindowLayout(next: WindowLayout): Promise<void> {
+    if (next !== "auto") {
+      lastPreset = next;
+    }
     windowLayout = next;
     if (!inTauri) {
       return;
@@ -435,6 +454,12 @@
     if (!inTauri) {
       return;
     }
+    // S4: the maximise control is not a window command of its own — it chooses the same stored layout
+    // Ajustes → Ventana does, so the button, the window size and the selected option cannot disagree.
+    if (control.action === "maximize") {
+      await chooseWindowLayout(maximized ? lastPreset : "auto");
+      return;
+    }
     try {
       await invoke(control.command);
     } catch (error) {
@@ -471,6 +496,21 @@
       scroller.scrollTop = 0;
     }
   }
+
+  // L15: full screen is read from farther away, so the interface is drawn on a larger root. It is one
+  // value and not a dozen per-component overrides: the token layer is written in `rem`, so this scales
+  // the type, the spacing, the control heights and the sidebar together and they cannot drift apart.
+  $effect(() => {
+    const size = `${interfaceFontSize(windowLayout)}px`;
+    if (typeof document === "undefined") {
+      return;
+    }
+    const root = document.documentElement;
+    root.style.fontSize = size;
+    return () => {
+      root.style.fontSize = "";
+    };
+  });
 
   $effect(() => {
     // Reading `view` is what subscribes this effect to navigation; every navigation replaces it.
@@ -555,10 +595,26 @@
   });
 </script>
 
-<div class="app" style:--grid-columns={gridColumns(windowLayout)}>
-  <WindowBar {t} {inTauri} onAction={runWindowAction} onDrag={startDrag} />
+<div
+    class="app"
+    style:--grid-columns={gridColumns(windowLayout)}
+    style:--grid-card-min={`${gridCardMinimum(windowLayout)}px`}
+  >
+  <!-- L4: the light the glass is made of. Two soft blooms and a whisper of sheen, behind everything and
+       never interactive; the panes above blur it, so the interface reads as layered rather than painted. -->
+  <div class="aurora" aria-hidden="true"></div>
 
-  <main bind:this={scroller}>
+  <WindowBar {t} {inTauri} {maximized} onAction={runWindowAction} onDrag={startDrag} />
+
+  <!-- The shell's body is what the layout arranges: a column (screen, then bottom bar) in a window, a
+       row (sidebar, then screen) in full screen. It is the same screen element either way, so the
+       listing keeps its state and its scroll container while the navigation changes place. -->
+  <div class="body" class:side={sidebar}>
+    {#if sidebar}
+      <Navbar mode="side" screen={navbarScreen(view)} {t} onSelect={selectScreen} />
+    {/if}
+
+    <main bind:this={scroller}>
     {#if !inTauri}
       <p class="state">{t("app.outsideTauri")}</p>
     {/if}
@@ -581,6 +637,7 @@
         inFlight={libraryInFlight}
         error={libraryError}
         locale={locale}
+        layout={windowLayout}
         {t}
         onOpenFolder={openContainingFolder}
         onOpenDocument={openDocument}
@@ -641,7 +698,10 @@
 
   <!-- A category list belongs to Inicio and a settings sub-screen belongs to Ajustes, so the navbar
        keeps the parent screen marked while the reader is inside one, rather than marking nothing. -->
-  <Navbar screen={navbarScreen(view)} {t} onSelect={selectScreen} />
+    {#if !sidebar}
+      <Navbar mode="bottom" screen={navbarScreen(view)} {t} onSelect={selectScreen} />
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -650,10 +710,45 @@
      the layout published to the document grid; the canvas, the font and the base type live in
      `styles/tokens.css`, which is the single place a theme is decided. */
   .app {
+    position: relative;
     height: 100vh;
     display: flex;
     flex-direction: column;
     background: var(--canvas);
+  }
+
+  .aurora {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(48rem 32rem at 88% -8%, rgba(230, 163, 201, 0.14), transparent 62%),
+      radial-gradient(44rem 30rem at -12% 18%, rgba(140, 126, 224, 0.16), transparent 65%),
+      radial-gradient(38rem 26rem at 46% 112%, rgba(126, 112, 200, 0.12), transparent 62%),
+      radial-gradient(30rem 14rem at 50% -4%, rgba(255, 255, 255, 0.035), transparent 70%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent 28%);
+  }
+
+  /* The aurora is positioned, so the shell's own layers are lifted above it explicitly. */
+  .app > :global(header),
+  .app > .body {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* The body owns the room under the top bar. A window stacks the screen above the bottom bar, which is
+     why the bar needs no fixed positioning (S2); full screen turns the same box into a row, with the
+     sidebar taking its own width from the screen (S3). */
+  .body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .body.side {
+    flex-direction: row;
   }
 
   .state {
@@ -665,6 +760,9 @@
   main {
     flex: 1 1 auto;
     min-height: 0;
+    /* A row's second child must be allowed to be narrower than its content, or a wide listing would
+       push the sidebar off the window instead of scrolling inside itself. */
+    min-width: 0;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
