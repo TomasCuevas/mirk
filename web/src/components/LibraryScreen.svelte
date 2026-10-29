@@ -17,6 +17,7 @@
     type LibraryEntry,
     type SortKey,
   } from "../lib/library";
+  import { libraryPageSize, type WindowLayout } from "../lib/window";
   import BookGrid from "./BookGrid.svelte";
 
   let {
@@ -24,6 +25,7 @@
     inFlight,
     error,
     locale,
+    layout,
     t,
     onOpenFolder,
     onOpenDocument,
@@ -33,6 +35,8 @@
     inFlight: boolean;
     error: string | null;
     locale: string;
+    /** The window's layout, which decides the page size, the pager's place and the filters' row (L11). */
+    layout: WindowLayout;
     t: Translate;
     onOpenFolder: (entry: LibraryEntry) => void;
     /** Opens the document itself, in the system's own application for it (R37). */
@@ -80,8 +84,9 @@
     sortEntries(filterByAuthor(filterEntries(entries, query), chosenAuthor), sort, locale),
   );
   // R10: the page is cut from the whole filtered, sorted listing, and the helper clamps the page into
-  // range when a filter shrinks the listing under the reader.
-  const paged = $derived(paginate(visible, page));
+  // range when a filter shrinks the listing under the reader. L11: the cut is the row's own size, so a
+  // page never ends halfway through a row.
+  const paged = $derived(paginate(visible, page, libraryPageSize(layout)));
 
   // One way to turn a page, so the scroll reset cannot be forgotten on one of the two controls — the
   // pager is rendered twice (above and below the grid) and both go through here.
@@ -116,7 +121,7 @@
   {:else if view === "empty"}
     <p class="state">{emptyMessage}</p>
   {:else}
-    <div class="controls">
+    <div class="controls" class:row={layout === "auto"}>
       <label>
         <span>{t("library.filterLabel")}</span>
         <input type="search" bind:value={query} placeholder={t("library.filterPlaceholder")} />
@@ -181,7 +186,12 @@
          instead of two sentences ("previous page", "next page") that made pagination the ugliest part
          of the screen. The numbers come from `pageWindow`, which decides which pages are worth
          showing; this snippet only draws what it decides. -->
-    <nav class="pager" aria-label={t("library.pagination")}>
+    <nav
+      class="pager"
+      class:right={layout !== "columns-2"}
+      class:large={layout === "auto"}
+      aria-label={t("library.pagination")}
+    >
       <button
         type="button"
         class="step"
@@ -279,13 +289,26 @@
     flex: 1 0 100%;
   }
 
+  /* L11: full screen has the width for the three filters side by side, which saves the two extra rows
+     the stacked layout costs — the height a maximised listing would rather give to documents. The query
+     keeps twice the room of each selector, because it is the one a reader types into. */
+  .controls.row {
+    flex-wrap: nowrap;
+  }
+
+  .controls.row > label:first-of-type {
+    flex: 2 1 0;
+  }
+
+  /* L17: one control height for the whole application, tall enough to read and to hit. It is a single
+     value because the search field and the two selectors are one row of one toolbar. */
   input,
   select {
-    height: 2rem;
+    height: 2.5rem;
     padding: 0 0.55rem;
-    border: 1px solid var(--line);
+    border: 1px solid var(--line-strong);
     border-radius: var(--r-sm);
-    background-color: var(--surface-1);
+    background-color: rgba(255, 255, 255, 0.06);
     font: inherit;
     font-size: var(--text-sm);
     color: var(--fg);
@@ -295,6 +318,13 @@
 
   input::placeholder {
     color: var(--fg-subtle);
+  }
+
+  input:focus-visible,
+  select:focus-visible {
+    outline: none;
+    border-color: var(--line-focus);
+    box-shadow: 0 0 0 3px rgba(169, 184, 240, 0.16);
   }
 
   input {
@@ -313,6 +343,29 @@
     font-size: var(--text-sm);
     color: var(--fg-muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* L11: from three per row the grid fills the window, so the strip follows the content and ends at the
+     right edge instead of floating in the middle of a wide screen. */
+  .pager.right {
+    justify-content: flex-end;
+  }
+
+  /* Full screen's controls are read from farther away, so its page numbers and arrows are larger. */
+  .pager.large {
+    gap: 0.25rem;
+    font-size: var(--text-base);
+  }
+
+  .pager.large button {
+    min-width: 2.4rem;
+    height: 2.4rem;
+    padding: 0 0.5rem;
+    font-size: var(--text-sm);
+  }
+
+  .pager.large .gap {
+    min-width: 1.4rem;
   }
 
   /* A page number is a quiet button until it is the page you are on; the current one is a filled
@@ -337,9 +390,10 @@
   }
 
   .pager button.current {
-    background: var(--fg);
+    background: var(--brand-mid);
     color: var(--fg-on-loud);
     font-weight: var(--weight-semibold);
+    box-shadow: 0 0 16px rgba(196, 122, 168, 0.22);
   }
 
   .pager button.step {

@@ -3,12 +3,16 @@ import { describe, expect, it } from "vitest";
 import LibraryScreen from "./LibraryScreen.svelte";
 import { translate } from "../lib/i18n";
 import type { LibraryEntry } from "../lib/library";
+import type { WindowLayout } from "../lib/window";
 
 const english = translate("en");
 
-function libraryProps(overrides: { entries?: LibraryEntry[]; inFlight?: boolean } = {}) {
+function libraryProps(
+  overrides: { entries?: LibraryEntry[]; inFlight?: boolean; layout?: WindowLayout } = {},
+) {
   return {
     entries: [] as LibraryEntry[],
+    layout: "columns-2" as WindowLayout,
     inFlight: false,
     error: null as string | null,
     locale: "en",
@@ -122,5 +126,62 @@ describe("Biblioteca's author selector (R39)", () => {
     // A shelf where no card has an author is the boundary that would empty the selector if the
     // "all" entry were not drawn unconditionally.
     expect(body).toContain('value=""');
+  });
+});
+
+/** `count` documents with distinct ids, which is what a page is cut from. */
+function entries(count: number): LibraryEntry[] {
+  return Array.from({ length: count }, (_, index) =>
+    entry({ id: index + 1, path: `/library/${index}.pdf`, title: `Document ${index}` }),
+  );
+}
+
+/**
+ * L11. The listing's controls and pages follow the window's layout: how many documents a page holds, how
+ * the pager is aligned and, in full screen, how large it is and whether the filters share one row.
+ */
+describe("Biblioteca follows the window layout", () => {
+  function drawn(entriesOnScreen: number, layout: WindowLayout): number {
+    const { body } = render(LibraryScreen, {
+      props: libraryProps({ entries: entries(entriesOnScreen), layout }),
+    });
+    return (body.match(/<article/g) ?? []).length;
+  }
+
+  it("cuts a page at the size the row needs", () => {
+    expect(drawn(14, "columns-2")).toBe(10);
+    expect(drawn(14, "columns-3")).toBe(12);
+    expect(drawn(14, "columns-4")).toBe(12);
+    expect(drawn(20, "auto")).toBe(14);
+  });
+
+  it("aligns the pager to the right from three per row", () => {
+    for (const layout of ["columns-2", "columns-3", "columns-4", "auto"] as const) {
+      const { body } = render(LibraryScreen, {
+        props: libraryProps({ entries: entries(20), layout }),
+      });
+      const right = /<nav[^>]*class="pager[^"]*right/.test(body);
+      expect(right, layout).toBe(layout !== "columns-2");
+    }
+  });
+
+  it("draws a larger pager only in full screen", () => {
+    for (const layout of ["columns-2", "columns-3", "columns-4", "auto"] as const) {
+      const { body } = render(LibraryScreen, {
+        props: libraryProps({ entries: entries(20), layout }),
+      });
+      const large = /<nav[^>]*class="pager[^"]*large/.test(body);
+      expect(large, layout).toBe(layout === "auto");
+    }
+  });
+
+  it("puts the three filters on one row only in full screen", () => {
+    for (const layout of ["columns-2", "columns-3", "columns-4", "auto"] as const) {
+      const { body } = render(LibraryScreen, {
+        props: libraryProps({ entries: entries(3), layout }),
+      });
+      const single = /<div[^>]*class="controls[^"]*row/.test(body);
+      expect(single, layout).toBe(layout === "auto");
+    }
   });
 });

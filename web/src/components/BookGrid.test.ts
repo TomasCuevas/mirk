@@ -252,3 +252,26 @@ describe("the document editor and the listing it reads from", () => {
     expect(shown).not.toContain('value="1"');
   });
 });
+
+/**
+ * L13/L14: the document editor is the dialog that has content for a wide window.
+ *
+ * At two per row the narrow dialog was right; once the window grows, the same form in a 22 rem box
+ * looked pinned to the corner of a large screen. The editor asks for the wide dialog — and L14 keeps
+ * its content in one vertical column, because the reader rejected the two-column split.
+ */
+describe("the document editor in a wide window", () => {
+  it("uses the wide dialog", () => {
+    const { body } = render(BookGrid, {
+      props: {
+        entries: entries(1),
+        t: english,
+        onOpenFolder: () => {},
+        onOpenDocument: () => {},
+        initialEditing: entries(1)[0],
+      },
+    });
+
+    expect(body).toMatch(/class="[^"]*\bdialog\b[^"]*\bwide\b/);
+  });
+});

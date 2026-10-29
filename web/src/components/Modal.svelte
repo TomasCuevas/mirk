@@ -3,10 +3,19 @@
 
   let {
     title,
+    size = "narrow",
     onClose,
     children,
   }: {
     title: string;
+    /**
+     * The width this dialog's content justifies (L13).
+     *
+     * A confirmation is one sentence, and a wide box around one sentence is the mirror of the complaint
+     * that opened this: the document editor is narrow in a wide window. So the width is the caller's
+     * decision — narrow by default, wide only where there is content for the room.
+     */
+    size?: "narrow" | "wide";
     onClose: () => void;
     children: Snippet;
   } = $props();
@@ -44,6 +53,7 @@
 <div class="backdrop" role="presentation" onclick={onClose}>
   <div
     class="dialog"
+    class:wide={size === "wide"}
     role="dialog"
     aria-modal="true"
     aria-label={title}
@@ -86,10 +96,20 @@
     flex-direction: column;
     gap: 0.6rem;
     padding: 1rem;
-    background: var(--surface);
-    border: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)), var(--glass-strong);
+    backdrop-filter: blur(26px) saturate(1.1);
+    -webkit-backdrop-filter: blur(26px) saturate(1.1);
+    border: 1px solid var(--glass-border);
     border-radius: var(--r-xl);
-    box-shadow: var(--shadow-modal);
+    box-shadow: var(--shadow-modal), inset 0 1px 0 var(--glass-highlight);
+  }
+
+  /* L13/L14: the editor's width. A cap rather than a fixed width, so a window narrower than the cap
+     still gets a dialog that fits. 36 rem is a form width — wider than the phone dialog without
+     stretching a single column of fields across a desktop window — and the form inside stays vertical
+     at every size, because the reader rejected the two-column split. */
+  .dialog.wide {
+    max-width: min(36rem, 100%);
   }
 
   /* The focus is moved here by the script, not by the reader's tab: a ring around the whole card would

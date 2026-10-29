@@ -125,6 +125,7 @@
       type="button"
       class="edit-document"
       aria-label={t("card.editDocument", { title: displayTitle(entry) })}
+      data-tip={t("card.editTip")}
       onclick={() => onEditDocument(entry)}
     >
       <svg
@@ -159,6 +160,7 @@
       type="button"
       class="open-folder"
       aria-label={t("card.openFolder")}
+      data-tip={t("card.openFolder")}
       onclick={() => onOpenFolder(entry)}
     >
       <svg
@@ -487,9 +489,15 @@
     left: clamp(1.7em, var(--at), calc(100% - 1.7em));
     box-sizing: border-box;
     width: 3.4em;
-    border: 1px solid var(--line-strong);
+    border: 1px solid rgba(255, 255, 255, 0.22);
     border-radius: var(--r-full);
-    background: var(--surface-2);
+    /* L5: the number sits ON the coloured bar, so it needs a ground of its own: a near-opaque pane with
+       blur, not the translucent surface it had, which let the bar's colour run through the digits. The
+       100 % marker keeps its green fill and dark text. */
+    background: rgba(10, 7, 20, 0.86);
+    backdrop-filter: blur(6px) saturate(1.05);
+    -webkit-backdrop-filter: blur(6px) saturate(1.05);
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.12);
     color: var(--fg);
     font-size: 0.625rem;
     line-height: 1.5;
@@ -505,6 +513,14 @@
     color: var(--fg-subtle);
   }
 
+  /* L15: the cover pills follow the root as well, so full screen's larger cards do not wear icons sized
+     for the phone grid. The 1.7 rem box already scales; the drawing inside it now scales with it. */
+  .open-folder svg,
+  .edit-document svg {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+
   .open-folder {
     position: absolute;
     top: 0.3rem;
@@ -515,17 +531,88 @@
     width: 1.7rem;
     height: 1.7rem;
     padding: 0;
-    border: 1px solid var(--line-strong);
+    border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: var(--r-sm);
-    background: var(--surface);
-    color: var(--fg-muted);
+    /* L5: these pills sit directly on cover art, whose pixels the application does not own. A translucent
+       white surface disappeared into a light cover, so the ground is a dark glass pane with real blur,
+       the same material as the page-count badge. */
+    background: rgba(10, 7, 20, 0.55);
+    backdrop-filter: blur(10px) saturate(1.1);
+    -webkit-backdrop-filter: blur(10px) saturate(1.1);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    color: var(--fg);
     cursor: pointer;
-    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+    transition:
+      background var(--fast) var(--ease), color var(--fast) var(--ease),
+      opacity var(--fast) var(--ease);
   }
 
   .open-folder:hover {
-    background: var(--surface-2);
+    background: rgba(10, 7, 20, 0.72);
     color: var(--fg);
+  }
+
+  /* L12: the cover states the page count and nothing else until the reader reaches the card. The two
+     corner actions fade in on hover, and on keyboard focus too — a rule that only understood a pointer
+     would hide them from a reader who tabs. `pointer-events` follows the same switch, so an invisible
+     pill is not a click target nobody can see. */
+  .open-folder,
+  .edit-document {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  article:hover .open-folder,
+  article:focus-within .open-folder,
+  article:hover .edit-document,
+  article:focus-within .edit-document,
+  .open-folder:focus-visible,
+  .edit-document:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* The popover is CSS, not a library, exactly as the editor's restore button does it: the same words
+     the icon stands for, shown on hover and on keyboard focus. It opens BELOW the pill and grows away
+     from the cover's corner, so it stays inside the card at every column width. */
+  .open-folder::after,
+  .edit-document::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 0.35rem);
+    z-index: 5;
+    padding: 0.2rem 0.45rem;
+    /* L6: a popover states a control's name, so its words may not sit on whatever is behind it. A
+       near-opaque dark pane with blur, a light hairline and a shadow; the surface it had was 11 % white
+       and the cover read straight through the sentence. */
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: var(--r-sm);
+    background: rgba(10, 7, 20, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    color: var(--fg);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-regular);
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--fast) var(--ease);
+  }
+
+  .edit-document::after {
+    left: 0;
+  }
+
+  .open-folder::after {
+    right: 0;
+  }
+
+  .open-folder:hover::after,
+  .open-folder:focus-visible::after,
+  .edit-document:hover::after,
+  .edit-document:focus-visible::after {
+    opacity: 1;
   }
 
   /* R31, corrected in R32: the same pill as the folder action, on the opposite corner, and the ONE
@@ -540,16 +627,24 @@
     width: 1.7rem;
     height: 1.7rem;
     padding: 0;
-    border: 1px solid var(--line-strong);
+    border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: var(--r-sm);
-    background: var(--surface);
-    color: var(--fg-muted);
+    /* L5: these pills sit directly on cover art, whose pixels the application does not own. A translucent
+       white surface disappeared into a light cover, so the ground is a dark glass pane with real blur,
+       the same material as the page-count badge. */
+    background: rgba(10, 7, 20, 0.55);
+    backdrop-filter: blur(10px) saturate(1.1);
+    -webkit-backdrop-filter: blur(10px) saturate(1.1);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    color: var(--fg);
     cursor: pointer;
-    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+    transition:
+      background var(--fast) var(--ease), color var(--fast) var(--ease),
+      opacity var(--fast) var(--ease);
   }
 
   .edit-document:hover {
-    background: var(--surface-2);
+    background: rgba(10, 7, 20, 0.72);
     color: var(--fg);
   }
 
@@ -571,7 +666,7 @@
     /* The second literal the card keeps: the badge sits ON a cover, whose pixels the application does
        not own, so it needs its own ground — the canvas colour at 80 %, blurred — rather than the
        surface underneath it. */
-    background: rgba(7, 8, 10, 0.8);
+    background: rgba(13, 3, 33, 0.82);
     backdrop-filter: blur(2px);
     color: var(--fg-muted);
     font-size: 0.625rem;

@@ -397,3 +397,39 @@ describe("the card states its authors", () => {
     expect(line(entry({ authors: ["   "] }))).toBeNull();
   });
 });
+
+/**
+ * L12: the cover's two actions are quiet until the reader reaches the card.
+ *
+ * The cover states one fact by default — the page count — and the pencil and the folder are revealed on
+ * hover (or keyboard focus, which is the same rule for a reader who does not use a pointer). An icon is
+ * still not a name, so each one explains itself in a hover popover, the same CSS popover the editor's
+ * restore button uses instead of a sentence the width of the dialog.
+ */
+describe("the cover actions' hover popover", () => {
+  function card() {
+    const { body } = render(BookCard, {
+      props: {
+        entry: entry(),
+        t: english,
+        onOpenFolder: () => {},
+        onOpenDocument: () => {},
+        onEditDocument: () => {},
+      },
+    });
+    return body.slice(body.indexOf("<article"), body.indexOf("</article>"));
+  }
+
+  it("says what each corner icon does, in the popover the restore button already uses", () => {
+    const body = card();
+
+    expect(body).toContain(`data-tip="${english("card.openFolder")}"`);
+    expect(body).toContain(`data-tip="${english("card.editTip")}"`);
+    // One short sentence per icon, not the accessible name with a document title spliced into it.
+    expect(english("card.editTip")).not.toContain("Cosmos");
+  });
+
+  it("keeps the page count as the cover's only default statement", () => {
+    expect(card()).toContain(english("library.pages", { count: 300 }));
+  });
+});

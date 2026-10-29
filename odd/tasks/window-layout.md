@@ -49,8 +49,9 @@ never reaches the store.
 
 A preset states its column count explicitly (`repeat(3, …)`), so "3 per row" is guaranteed rather than
 left to a `minmax` computation that could disagree with the window width. `auto` uses
-`repeat(auto-fill, …)`, the rule the grid already had, so full screen shows as many cards as fit at the
-card's own width. The card itself is not redesigned.
+`repeat(auto-fill, …)` with a floor of the width two columns have in the shipped window (194.2 px, L10),
+so full screen shows cards the size the fixed layouts show and as many as fit. The card itself is not
+redesigned.
 
 **Scope of the count (L9):** it applies to Biblioteca and to a category's own list — the screens that
 draw a grid. Inicio's carousels are strips, not grids: they keep their horizontal scroll and their own
@@ -67,6 +68,22 @@ carry every new string in both languages.
 The window keeps no native decorations and no maximise control; dragging its edge still does not
 resize it — the presets are the only way its size changes. The top bar's three controls, the tray and
 the language setting behave exactly as before. Nothing about a stored library changes.
+
+**S8 — Biblioteca follows the layout (L11).**
+
+The window's layout decides four things on the listing, because a page that ends halfway through a row
+reads as missing documents:
+
+| Layout | Documents per page | Pager | Filters |
+| --- | --- | --- | --- |
+| `columns-2` | 10 (unchanged) | centred | three stacked rows |
+| `columns-3` | 12 | right-aligned | three stacked rows |
+| `columns-4` | 12 | right-aligned | three stacked rows |
+| `auto` | 14 | right-aligned, larger | search, author and order on one row |
+
+From three per row the grid fills the window, so the strip follows the content and ends at the right
+edge; full screen's page controls are drawn larger because they are read from farther away, and its three
+filters share a row, which is height given back to the documents.
 
 **S7 — documentation matches the new truth.**
 
@@ -88,6 +105,7 @@ be judged at 3 and 4 per row without running the desktop shell.
 | T6 | Ajustes → Ventana, with both catalogues | S5 | inline | `e39f9a1` |
 | T7 | Documentation and the capture script | S7 | inline | `docs` slice |
 | T8 | Verification of the round | S1–S7 | parent | see L3–L5 |
+| T9 | The page size, pager alignment and size, and the filters' row | S8 | inline | uncommitted (L11) |
 
 ---
 
@@ -148,3 +166,30 @@ result, the same boundaries are the ones to use, in this order:
 | 2 | `feat(window): name the four layouts and the columns each one asks for` | The interface's model and its store bridge compile and pass without the screens. |
 | 3 | `feat(ui): choose the window's layout in Ajustes` | The reader-facing half: the section, its screen, both catalogues, and the shell publishing the column count to the grid. Splitting the screen from the wiring would pass a prop before it exists. |
 | 4 | `docs: record the window layout and capture it at every size` | Documentation, the capture script and this record. No behaviour changes. |
+
+**L10 — full screen's cards were too small.**
+> "Ahora que vi, los documentos en pantalla completa son muy pequeños, el tamaño minimo deberia ser
+> mayor, similar al tamaño que poseen cuando es fijo el numero de elementos"
+
+`auto-fill` still used the card's bare 8.5 rem minimum (136 px), which on a 1920-wide screen fit about
+twelve tiny columns. Full screen's floor is now the same derivation the window's sizes use —
+`(430 − 32 − 9.6) / 2 = 194.2 px` — published by the shell as `--grid-card-min`; the fixed layouts keep
+136 px because their count is explicit and the window is already sized for it. `gridCardMinimum` is a
+pure rule with a test, the shell publishes it, and the grid reads it. The `auto` capture now draws five
+tracks instead of twelve, with the cards at the fixed layouts' size.
+
+**L11 — the listing's page and controls follow the layout.**
+> "- A partir de 3 elementos por fila, la paginacion debe estar alineada a la derecha y no en el centro.
+> - En pantalla completa, los elementos pertenecientes a la paginacion deben ser mas grandes.
+> - Se deben ajustar los elementos de la paginacion. Cuando son 2 por fila esta bien que sean 10
+>   elementos, pero al ser 3 por fila debe pasarse a 12 para que no queden espacios. En 4 por fila esta
+>   bien 12 y en pantalla completa pasar a 14 por pagina.
+> - En pantalla completa, los filtros de busqueda podrian estar todos en la misma fila para ahorrar
+>   altura, ya que como puedes ver en la captura, la busqueda ocupa todo el ancho y queda feo"
+
+`libraryPageSize(layout)` is the page size rule (10 / 12 / 12 / 14) and `paginate` already took the size;
+the screen now cuts the page with it. The pager gains `right` from three per row and `large` in full
+screen, and the controls gain `row` in full screen — the query keeps twice the width of each selector.
+Pinned by `window.test.ts` (the sizes) and `LibraryScreen.test.ts` (the four layouts × page size, pager
+alignment, pager size and filter row), with the capture at 16 seeded documents showing the right-aligned
+strip in 3 per row and the single filter row with larger pages in full screen.

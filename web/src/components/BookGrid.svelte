@@ -614,7 +614,10 @@
 {#if shownEditing !== null}
   {@const editor = titleEditor(shownEditing)}
   {@const author = authorEditor(shownEditing)}
-  <Modal title={t("card.documentEditor")} onClose={closeDocumentEditor}>
+  <Modal title={t("card.documentEditor")} size="wide" onClose={closeDocumentEditor}>
+    <!-- L14: the editor stays one vertical column at every window size. The dialog is wider than a
+         confirmation's so the form is not cramped, but the groups never sit side by side: the cover
+         below the text is the order the form was designed in, and it is kept. -->
     <!-- R16. Two groups, because the editor changes two different kinds of thing with two different
          saves: the text (title and authors, committed together) and the cover. Five controls stacked
          in one column never said which Save applied to what — that was the "estructura" the user
@@ -919,10 +922,12 @@
     padding: 0;
     display: grid;
     /* S4: the shell publishes the reader's layout as `--grid-columns` — an exact count for a preset, or
-       `auto-fill` for full screen, where the width decides how many cards fit. The fallback is the rule
-       the grid had before the choice existed, which is what a grid rendered on its own (a test, the
+       `auto-fill` for full screen, where the width decides how many cards fit — and the floor that makes
+       full screen's cards the size the fixed layouts show (`--grid-card-min`, L10). The fallbacks are the
+       rule the grid had before the choice existed, which is what a grid rendered on its own (a test, the
        carousel's own measuring) still gets. */
-    grid-template-columns: repeat(var(--grid-columns, auto-fill), minmax(8.5rem, 1fr));
+    grid-template-columns:
+      repeat(var(--grid-columns, auto-fill), minmax(var(--grid-card-min, 8.5rem), 1fr));
     column-gap: 0.6rem;
     row-gap: 0.6rem;
   }
@@ -951,7 +956,7 @@
     padding: 0;
     border: 1px solid var(--line-strong);
     border-radius: var(--r-full);
-    background: rgba(7, 8, 10, 0.78);
+    background: rgba(13, 3, 33, 0.78);
     color: var(--fg);
     cursor: pointer;
     backdrop-filter: blur(6px);
@@ -1001,11 +1006,11 @@
      It is re-stated as its own rule so a future `select` cleanup cannot take it down with it. */
   input {
     width: 100%;
-    height: 2.25rem;
+    height: 2.5rem;
     padding: 0 0.6rem;
-    border: 1px solid var(--line);
+    border: 1px solid var(--line-strong);
     border-radius: var(--r-sm);
-    background-color: var(--surface-1);
+    background-color: rgba(255, 255, 255, 0.06);
     color: var(--fg);
     font: inherit;
     font-size: var(--text-sm);
@@ -1134,6 +1139,7 @@
     gap: 0.55rem;
   }
 
+
   .group + .group {
     margin-top: 0.35rem;
     padding-top: 0.85rem;
@@ -1198,9 +1204,14 @@
     right: 0;
     z-index: 4;
     padding: 0.2rem 0.45rem;
-    border: 1px solid var(--line-strong);
+    /* L6: same ground as the card's popovers — the sentence the icon stands for is never laid over
+       live text or art. */
+    border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: var(--r-sm);
-    background: var(--surface-3);
+    background: rgba(10, 7, 20, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
     color: var(--fg);
     font-size: var(--text-xs);
     white-space: nowrap;
@@ -1231,10 +1242,14 @@
     max-height: 9rem;
     overflow-y: auto;
     padding: 0.2rem;
-    border: 1px solid var(--line-strong);
+    border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: var(--r-md);
-    background: var(--surface-2);
-    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
+    /* L6: the list opens over the form's own labels and hints. It needs a ground that ends the layer,
+       not a 7 % white tint: a dense dark pane, blur, and the shadow that already separated it. */
+    background: rgba(12, 8, 24, 0.96);
+    backdrop-filter: blur(14px) saturate(1.05);
+    -webkit-backdrop-filter: blur(14px) saturate(1.05);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   }
 
   .choices button {
@@ -1251,7 +1266,7 @@
 
   .choices button:hover,
   .choices button.highlighted {
-    background: var(--surface-3);
+    background: rgba(255, 255, 255, 0.12);
   }
 
   .field-hint {
@@ -1346,6 +1361,8 @@
   .action {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    min-height: 2.5rem;
     gap: 0.35rem;
     padding: 0.4rem 0.7rem;
     border: 1px solid var(--line);
@@ -1376,8 +1393,9 @@
   }
 
   .action.primary:hover:not(:disabled) {
-    background: #ffffff;
+    background: #fbf7ff;
     border-color: transparent;
+    box-shadow: 0 6px 24px rgba(230, 163, 201, 0.18);
   }
 
   .action.danger {
@@ -1385,8 +1403,8 @@
   }
 
   .action.danger:hover:not(:disabled) {
-    border-color: rgba(255, 99, 99, 0.4);
-    background: rgba(255, 99, 99, 0.12);
+    border-color: rgba(255, 92, 122, 0.4);
+    background: rgba(255, 92, 122, 0.12);
   }
 
 </style>
