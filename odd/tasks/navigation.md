@@ -1,6 +1,6 @@
 # Feature: the navigation earns its size, its icons, and a sidebar in full screen
 
-Status: **in progress** — implemented and verified; waiting for the user's approval before committing
+Status: **done** — implemented, verified on the running application by the user, and committed in `90a801e`.
 (L3), as they asked for the previous round.
 Created: 2026-10-22
 Engram mirror: `odd/navigation/tasks`

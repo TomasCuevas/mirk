@@ -1,6 +1,6 @@
 # Feature: the interface reads at every window size
 
-Status: **in progress** — implemented and verified; waiting for the user's approval before committing.
+Status: **done** — implemented, verified on the running application by the user, and committed in `36aed0d`.
 
 ---
 

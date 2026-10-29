@@ -1,6 +1,6 @@
 # Feature: the watched folders are watched while the application runs
 
-Status: **done** — verified by the user on their own library; the commit waits for approval.
+Status: **done** — verified by the user on their own library, committed in `8a06af9`.
 Acceptance (the user's own words): a PDF added with the application running was found in the
 library and could be filtered by author.
 Created: 2026-10-29
@@ -72,11 +72,11 @@ half-built because a kernel resource ran out.
 
 | ID | Task | Specs | Route | Commit |
 | --- | --- | --- | --- | --- |
-| T1 | The two pure rules: the targets of a folder set, and whether the armed set is stale | S3, S4 | inline | uncommitted (awaiting approval) |
-| T2 | The armed watch: one thread, one bridge, a stop flag | S3, S6 | inline | uncommitted (awaiting approval) |
-| T3 | The loop that compares and rebuilds, and its place in `setup` | S4, S6 | inline | uncommitted (awaiting approval) |
-| T4 | An end-to-end test with the real inotify watcher: a PDF written after the watch starts | S2, S3 | inline | uncommitted (awaiting approval) |
-| T5 | Documentation: this record, and the README line that called the watcher merely in progress | S1–S6 | inline | uncommitted (awaiting approval) |
+| T1 | The two pure rules: the targets of a folder set, and whether the armed set is stale | S3, S4 | inline | `8a06af9` |
+| T2 | The armed watch: one thread, one bridge, a stop flag | S3, S6 | inline | `8a06af9` |
+| T3 | The loop that compares and rebuilds, and its place in `setup` | S4, S6 | inline | `8a06af9` |
+| T4 | An end-to-end test with the real inotify watcher: a PDF written after the watch starts | S2, S3 | inline | `8a06af9` |
+| T5 | Documentation: this record, and the README line that called the watcher merely in progress | S1–S6 | inline | `8a06af9` |
 
 ---
 

@@ -1,6 +1,6 @@
 # Feature: the cover's actions appear on hover, each with a popover
 
-Status: **in progress** — implemented and verified; waiting for the user's approval before committing.
+Status: **done** — implemented, verified on the running application by the user, and committed in `90a801e`.
 
 ---
 

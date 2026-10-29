@@ -1,6 +1,6 @@
 # Feature: the window layout is chosen — 2, 3, 4 per row, or full screen
 
-Status: **in progress** — implementation and runtime proof complete; the commits were undone at the
+Status: **done** — implemented, verified on the running application by the user, and committed in `90a801e`.
 user's request (L6) and wait for approval. Delivery (push/PR/merge) is the user's decision.
 Created: 2026-10-21
 Engram mirror: `odd/window-layout/tasks`
@@ -105,7 +105,7 @@ be judged at 3 and 4 per row without running the desktop shell.
 | T6 | Ajustes → Ventana, with both catalogues | S5 | inline | `e39f9a1` |
 | T7 | Documentation and the capture script | S7 | inline | `docs` slice |
 | T8 | Verification of the round | S1–S7 | parent | see L3–L5 |
-| T9 | The page size, pager alignment and size, and the filters' row | S8 | inline | uncommitted (L11) |
+| T9 | The page size, pager alignment and size, and the filters' row | S8 | inline | `90a801e` (L11) |
 
 ---
 

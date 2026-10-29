@@ -1,6 +1,6 @@
 # Feature: the palette follows the reader's wallpaper
 
-Status: **in progress** — implemented; waiting for the user's approval before committing.
+Status: **done** — implemented, verified on the running application by the user, and committed in `36aed0d`.
 
 ---
 

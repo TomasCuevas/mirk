@@ -1,6 +1,6 @@
 # Feature: the window chrome works, and the default is three per row
 
-Status: **in progress** — implemented and verified; waiting for the user's approval before committing.
+Status: **done** — implemented, verified on the running application by the user, and committed in `8a06af9`.
 
 ---
 
