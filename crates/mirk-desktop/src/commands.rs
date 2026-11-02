@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use mirk_core::domain::CoverChoice;
 use mirk_core::{
     CoverSource, FileIdentity, LaunchOutcome, Launcher, MirkError, OpenDocumentDetector,
-    StoredProgress,
+    RecentDocumentsSource, StoredProgress,
 };
 use mirk_scan::{cover_for, CoverOutcome, ScanReport, Scanner};
 use mirk_store::{
@@ -301,6 +301,14 @@ pub struct SuggestionView {
     pub seen_count: u32,
     /// Unix seconds when it was first observed, which is what orders the queue.
     pub first_seen_at: i64,
+    /// Unix seconds when the desktop's history recorded the reader opening it, or `null` when no
+    /// source knows (`historyAt` over IPC).
+    ///
+    /// The reader's own moment, kept apart from `first_seen_at` — when the application noticed the
+    /// file — for the reason L46 recorded: one column for both made every row look freshly read. The
+    /// screen orders by this, with the undated rows after every dated one, and `null` is "no source
+    /// said" rather than 1970.
+    pub history_at: Option<i64>,
 }
 
 impl From<Suggestion> for SuggestionView {
@@ -310,6 +318,7 @@ impl From<Suggestion> for SuggestionView {
             path: display_path(&suggestion.path),
             seen_count: suggestion.seen_count,
             first_seen_at: suggestion.first_seen_at,
+            history_at: suggestion.history_at,
         }
     }
 }
@@ -896,6 +905,86 @@ pub fn observe_open_documents(
             continue;
         }
         store.record_suggestion(&document.path)?;
+        recorded.insert(document.path.clone());
+    }
+    Ok(recorded.len())
+}
+
+/// How many suggestions one pass records.
+///
+/// This bounds what the pass **records**, not what it asks the source for, and it keeps the newest
+/// entries because the source answers newest first. The two are not interchangeable: asking the
+/// source for this many entries would spend the window on entries the pass then rejects, so a
+/// history longer than the bound — or one whose newest entries are all already in the library or
+/// inside a watched folder — would hide the eligible documents behind them for good, which is the
+/// opposite of S10's "every eligible PDF". The source reads the whole history file either way, so
+/// the only thing an early limit bought was the omission.
+const RECENT_SUGGESTION_LIMIT: usize = 1_000;
+
+/// Records a suggestion for every PDF the desktop's history names that is neither in the library nor
+/// inside a watched folder (S10 of `suggestions-screen.md`).
+///
+/// The sibling producer of [`observe_open_documents`], over the other axis: that one asks what is
+/// open right now and records the moment the application noticed; this one asks what the reader
+/// opened at some point in the past, and the history's own moment travels with the suggestion. It is
+/// a separate column from `first_seen_at`, because "when the reader opened it" and "when mirk
+/// looked" are different facts (L46 of `pdf-progress-tracker.md`).
+///
+/// Like its sibling it decides nothing: a watched folder is the source of truth, a document already
+/// in the library is nothing to suggest, and accepting or dismissing stays the reader's
+/// ([`accept_suggestion`], [`discard_suggestion`]). Decided rows are left untouched by the store, so
+/// a dismissed document cannot come back through this path.
+///
+/// The history is read on demand — when the interface asks — rather than on the ingestion tick: the
+/// tick runs every few seconds and would bump every suggestion's sighting count on each pass, which
+/// is neither what the counter means nor a reason for a disk read that often.
+///
+/// Returns how many distinct paths this pass recorded. A source that cannot answer — no backend on
+/// this platform — is propagated instead of being reported as an empty queue.
+pub fn observe_recent_documents(
+    store: &Store,
+    source: &dyn RecentDocumentsSource,
+) -> Result<usize, MirkError> {
+    record_recent_documents(store, source, RECENT_SUGGESTION_LIMIT)
+}
+
+/// [`observe_recent_documents`] with the pass's window as a parameter.
+///
+/// Separate only so the window's rule can be tested with a bound small enough to read: "the newest
+/// entries first" and "the bound applies to what is recorded" are one rule, and a test needs only
+/// a window of one and a history whose newest entry is already known to tell it from the other one.
+fn record_recent_documents(
+    store: &Store,
+    source: &dyn RecentDocumentsSource,
+    limit: usize,
+) -> Result<usize, MirkError> {
+    // Everything the source has, rather than the window: the three exclusions below are this pass's
+    // own judgement, and a limit here would drop eligible documents before they were even looked
+    // at. The window is applied to the entries actually recorded.
+    let recent = source.recent(usize::MAX)?;
+    let entries = store.library()?;
+    let folders = store.folders()?;
+
+    let mut recorded = std::collections::HashSet::new();
+    for document in &recent {
+        // The window is spent by recordings, and the source is newest first, so what survives it is
+        // the newest eligible entries rather than the newest entries.
+        if recorded.len() >= limit {
+            break;
+        }
+        if recorded.contains(&document.path) {
+            continue;
+        }
+        if entries
+            .iter()
+            .any(|entry| entry.document.document.path == document.path)
+        {
+            continue;
+        }
+        if covering_folder(&folders, &document.path).is_some() {
+            continue;
+        }
+        store.record_suggestion_with_history(&document.path, document.last_used_unix)?;
         recorded.insert(document.path.clone());
     }
     Ok(recorded.len())
@@ -2678,6 +2767,62 @@ mod tests {
 
     // --- R4: the suggestion queue's producer and its decisions -----------------------------
 
+    /// A source that reports exactly the documents a test hands it, so the producer's own rules can
+    /// be exercised without reading this machine's real recent-files history.
+    struct FixedRecent {
+        documents: Vec<mirk_core::RecentDocument>,
+    }
+
+    impl FixedRecent {
+        fn naming(entries: &[(&str, Option<i64>)]) -> Self {
+            Self {
+                documents: entries
+                    .iter()
+                    .map(|(path, time)| mirk_core::RecentDocument {
+                        path: PathBuf::from(*path),
+                        last_used_unix: *time,
+                    })
+                    .collect(),
+            }
+        }
+    }
+
+    impl RecentDocumentsSource for FixedRecent {
+        fn id(&self) -> &'static str {
+            "test-recent"
+        }
+
+        fn platform(&self) -> Platform {
+            Platform::current()
+        }
+
+        fn recent(&self, limit: usize) -> Result<Vec<mirk_core::RecentDocument>, MirkError> {
+            let mut documents = self.documents.clone();
+            documents.truncate(limit);
+            Ok(documents)
+        }
+    }
+
+    /// A source that cannot answer, so the producer's failure path can be observed.
+    struct BrokenRecent;
+
+    impl RecentDocumentsSource for BrokenRecent {
+        fn id(&self) -> &'static str {
+            "broken-recent"
+        }
+
+        fn platform(&self) -> Platform {
+            Platform::current()
+        }
+
+        fn recent(&self, _limit: usize) -> Result<Vec<mirk_core::RecentDocument>, MirkError> {
+            Err(MirkError::NotSupported {
+                capability: "recent-document ingestion",
+                platform: Platform::current(),
+            })
+        }
+    }
+
     #[test]
     fn a_document_inside_a_watched_folder_is_never_suggested() {
         // The watched folder is the source of truth. A PDF under one that is not in the library is a
@@ -2753,6 +2898,133 @@ mod tests {
             suggestions[0].seen_count, 2,
             "the next observation is the second"
         );
+    }
+
+    #[test]
+    fn the_history_becomes_suggestions_with_the_readers_own_time() {
+        // S10 of `suggestions-screen.md`: every PDF the history names that is neither in the library
+        // nor inside a watched folder is a suggestion, and it carries the moment the history
+        // recorded — not the moment mirk noticed the file.
+        let store = in_memory_store();
+        store
+            .upsert_document(&document("/library/known.pdf", 1, 1))
+            .expect("insert a document");
+        store
+            .record_folder("/library/pdfs", true)
+            .expect("watch the folder");
+
+        let source = FixedRecent::naming(&[
+            ("/library/known.pdf", Some(1_700_000_000)),
+            ("/library/pdfs/inside.pdf", Some(1_700_000_000)),
+            ("/elsewhere/reading.pdf", Some(1_600_000_000)),
+            // S3 of the inherited spec: a document with no recorded moment is still a document.
+            ("/elsewhere/undated.pdf", None),
+        ]);
+
+        let recorded = observe_recent_documents(&store, &source).expect("observe");
+        assert_eq!(
+            recorded, 2,
+            "only the two outside the library and the watch"
+        );
+
+        let mut suggestions = list_suggestions(&store).expect("list");
+        suggestions.sort_by(|left, right| left.path.cmp(&right.path));
+        assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions[0].path, "/elsewhere/reading.pdf");
+        assert_eq!(suggestions[0].history_at, Some(1_600_000_000));
+        assert_ne!(
+            suggestions[0].first_seen_at, 1_600_000_000,
+            "when the app noticed is not when the reader opened it"
+        );
+        assert_eq!(suggestions[1].path, "/elsewhere/undated.pdf");
+        assert_eq!(
+            suggestions[1].history_at, None,
+            "no moment is null, never 1970"
+        );
+    }
+
+    #[test]
+    fn the_window_keeps_the_newest_eligible_entries_not_the_newest_entries() {
+        // S10: every eligible PDF is a suggestion. The bound therefore applies to what the pass
+        // RECORDS, in the newest-first order the source guarantees. Applying it to what the source
+        // is asked for would hide the eligible documents behind the newest entries, permanently,
+        // whenever those newest entries are already known. A history needs no thousand entries to
+        // show that: the same rule with a window of one is the same rule.
+        let store = in_memory_store();
+        store
+            .upsert_document(&document("/library/newest.pdf", 1, 1))
+            .expect("insert");
+        store
+            .upsert_document(&document("/library/second.pdf", 2, 2))
+            .expect("insert");
+
+        let source = FixedRecent::naming(&[
+            // The newest entries are all already in the library, which is the case that used to
+            // consume the whole window.
+            ("/library/newest.pdf", Some(1_700_000_002)),
+            ("/library/second.pdf", Some(1_700_000_001)),
+            ("/elsewhere/eligible.pdf", Some(1_600_000_000)),
+            ("/elsewhere/older.pdf", Some(1_500_000_000)),
+        ]);
+
+        let recorded = record_recent_documents(&store, &source, 1).expect("observe");
+        assert_eq!(recorded, 1, "the bound counts what was recorded");
+
+        let suggestions = list_suggestions(&store).expect("list");
+        let paths: Vec<&str> = suggestions
+            .iter()
+            .map(|suggestion| suggestion.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["/elsewhere/eligible.pdf"],
+            "the newest eligible entry is kept, not the newest entry"
+        );
+    }
+
+    #[test]
+    fn a_decided_history_document_is_not_offered_again() {
+        // The producer decides nothing: a document the reader dismissed stays dismissed even though
+        // the history still names it and the file is still there.
+        let store = in_memory_store();
+        let source = FixedRecent::naming(&[("/elsewhere/dismissed.pdf", Some(1_600_000_000))]);
+
+        assert_eq!(
+            observe_recent_documents(&store, &source).expect("observe"),
+            1
+        );
+        let id = list_suggestions(&store).expect("list")[0].id;
+        discard_suggestion(&store, id).expect("discard");
+
+        assert_eq!(
+            observe_recent_documents(&store, &source).expect("observe again"),
+            1,
+            "the path is still recorded; the decision is what stops it being offered"
+        );
+        assert!(
+            list_suggestions(&store).expect("list").is_empty(),
+            "a dismissed document must not come back"
+        );
+        let suggestion = store.suggestion(id).expect("read").expect("present");
+        assert_eq!(suggestion.decision, Some(SuggestionDecision::Discarded));
+        assert_eq!(
+            suggestion.history_at,
+            Some(1_600_000_000),
+            "a decided row is never touched"
+        );
+    }
+
+    #[test]
+    fn a_history_that_cannot_be_read_is_reported_rather_than_shown_as_an_empty_queue() {
+        // "No backend on this platform" must not look like "nothing is waiting": the producer
+        // propagates the capability error instead of recording zero suggestions.
+        let store = in_memory_store();
+        let error = observe_recent_documents(&store, &BrokenRecent).expect_err("no source");
+        assert!(
+            matches!(error, MirkError::NotSupported { .. }),
+            "got {error:?}"
+        );
+        assert!(list_suggestions(&store).expect("list").is_empty());
     }
 
     #[test]

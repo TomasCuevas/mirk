@@ -87,6 +87,11 @@ pub fn progress_providers() -> Vec<Box<dyn ProgressProvider>> {
 }
 
 /// Builds the standard "this capability is not implemented on this platform" error.
+///
+/// Every platform whose backends cannot answer calls it. On Linux every backend is implemented now,
+/// so the only caller left in that compilation is a test of the error's own wording — the allowance
+/// below is that fact, not the suppression of a real defect.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub(crate) fn not_supported(capability: &'static str, platform: mirk_core::Platform) -> MirkError {
     MirkError::NotSupported {
         capability,

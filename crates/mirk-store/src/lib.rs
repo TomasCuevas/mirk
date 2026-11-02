@@ -71,10 +71,10 @@
 //!   need: [`Store::record_folder`], [`Store::folders`], [`Store::forget_folder`],
 //!   [`Store::folder_removal`], [`WatchedFolder`] and the pure [`covering_folder`] rule that
 //!   decides whether a folder is already covered by a watch (R20, R22, R27);
-//! - the `suggestions` table is written and read only through the queue's own four methods —
-//!   [`Store::record_suggestion`], [`Store::suggestions`], [`Store::suggestion`] and
-//!   [`Store::decide_suggestion`] — because the suggestion queue is the only caller, and a decision
-//!   is the reader's (R4);
+//! - the `suggestions` table is written and read only through the queue's own methods —
+//!   [`Store::record_suggestion`], [`Store::record_suggestion_with_history`],
+//!   [`Store::suggestions`], [`Store::suggestion`] and [`Store::decide_suggestion`] — because the
+//!   suggestion queue is the only caller, and a decision is the reader's (R4);
 //! - metadata writes (`size`, `mtime`, `discovered_via`, `platform`, `status`) — the
 //!   [`mirk_core::Document`] value type does not carry them yet, so [`Store::upsert_document`]
 //!   leaves those columns unset for the scanner (T6) to fill;
@@ -441,6 +441,24 @@ UPDATE documents
  WHERE cover_source IS NULL;
 ";
 
+/// Version 11: when the **reader** opened a suggested document, according to the desktop's own
+/// history, as a fact of its own.
+///
+/// The queue already knew when the application first noticed a file (`first_seen_at`), and that is a
+/// different fact: it is when *mirk* looked. L46 already paid for putting the two in one column —
+/// every row looked freshly read, and a "not opened in a long time" category could never contain
+/// anything — so the history's time is a separate nullable column and `first_seen_at` keeps its
+/// meaning untouched. `NULL` means no source said, which is not the same as 1970 and not the same as
+/// "opened long ago"; a source that has no time to offer (`/proc` has none) writes `NULL`.
+///
+/// Added as a migration rather than by editing [`SCHEMA_V1`], because V1 is **frozen**: a database an
+/// earlier build already created reports its version, and editing the frozen text would leave that
+/// database without the column forever while claiming otherwise. Every existing suggestion row keeps
+/// its path, its sighting count and its decision, and reads back with no history time.
+const SCHEMA_V11: &str = "
+ALTER TABLE suggestions ADD COLUMN history_at INTEGER;
+";
+
 /// A document `mirk` observed open outside the watched folders, awaiting the reader's decision (R4).
 ///
 /// A suggestion is **not** library data: it carries a path and no document foreign key, so a
@@ -461,6 +479,16 @@ pub struct Suggestion {
     pub seen_count: u32,
     /// Unix seconds when the application first observed it.
     pub first_seen_at: i64,
+    /// Unix seconds when the desktop's own history recorded the reader opening this document, or
+    /// [`None`] when no source knows.
+    ///
+    /// This is the reader's own moment — what the GTK recent-files list wrote down — and it is a
+    /// **separate column** from `first_seen_at`, which is the moment the application noticed the
+    /// file. L46 already paid for that lesson once: one column for "when I looked" and "when the
+    /// reader opened it" made every row look freshly read. `None` says no source said, which is a
+    /// different fact from a document opened long ago, and it is what a detector that records no
+    /// time writes.
+    pub history_at: Option<i64>,
     /// The reader's decision, or [`None`] while it is still awaiting one.
     pub decision: Option<SuggestionDecision>,
     /// Unix seconds when the reader decided, or [`None`] while no decision exists.
@@ -737,7 +765,7 @@ pub fn covering_folder<'a>(folders: &'a [WatchedFolder], path: &Path) -> Option<
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 10;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 11;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -1758,31 +1786,56 @@ impl Store {
     /// application observing the same file again must never put a dismissed document back in front
     /// of the reader, and accepting one twice is not a decision that exists.
     ///
+    /// This writes no history time, because the detector that calls it has none: `/proc` says a file
+    /// is open now, not when a person opened it. [`Store::record_suggestion_with_history`] is the
+    /// same write for a source that does know.
+    ///
     /// The lookup and the write are not one transaction, the same accepted residual as
     /// [`Store::record_folder`] and [`Store::upsert_document`]: `mirk` opens one store per process
     /// today. A racing second writer cannot duplicate the path, because `suggestions.path` is
     /// UNIQUE — it fails with a constraint error instead of forking the queue.
     pub fn record_suggestion(&self, path: impl AsRef<Path>) -> Result<i64, MirkError> {
+        self.record_suggestion_with_history(path, None)
+    }
+
+    /// Records one observation of `path`, together with when the desktop's history says the reader
+    /// opened it.
+    ///
+    /// The behaviour is exactly [`Store::record_suggestion`]'s — decided rows are never touched —
+    /// with one addition: an undecided row keeps the **newest** history time any observation
+    /// reported. It is a high-water mark rather than last-write-wins for the reason L46 recorded
+    /// when it made the same choice for `progress.read_at`: a later pass that knew an older moment
+    /// would otherwise walk the fact backwards and make a document opened today look older than the
+    /// store already knew it was. `None` never erases a known time, and two unknowns stay unknown.
+    ///
+    /// `first_seen_at` is not involved: it is when the application noticed the file, and the
+    /// history's time is a different fact about a different actor.
+    pub fn record_suggestion_with_history(
+        &self,
+        path: impl AsRef<Path>,
+        history_at: Option<i64>,
+    ) -> Result<i64, MirkError> {
         let path = path_to_string(path.as_ref())?;
 
-        let existing: Option<(i64, Option<String>)> = self
+        let existing: Option<(i64, Option<String>, Option<i64>)> = self
             .connection
             .query_row(
-                "SELECT id, decision FROM suggestions WHERE path = ?1 ORDER BY id LIMIT 1",
+                "SELECT id, decision, history_at FROM suggestions WHERE path = ?1 ORDER BY id LIMIT 1",
                 params![path],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(storage_error)?;
 
         match existing {
             // A decided suggestion is history: it is returned as it stands, never touched.
-            Some((id, Some(_))) => Ok(id),
-            Some((id, None)) => {
+            Some((id, Some(_), _)) => Ok(id),
+            Some((id, None, known)) => {
                 self.connection
                     .execute(
-                        "UPDATE suggestions SET seen_count = seen_count + 1 WHERE id = ?1",
-                        params![id],
+                        "UPDATE suggestions SET seen_count = seen_count + 1, history_at = ?1 \
+                         WHERE id = ?2",
+                        params![newest_history_at(known, history_at), id],
                     )
                     .map_err(storage_error)?;
                 Ok(id)
@@ -1790,9 +1843,10 @@ impl Store {
             None => {
                 self.connection
                     .execute(
-                        "INSERT INTO suggestions (path, seen_count, first_seen_at, decided_at, decision) \
-                         VALUES (?1, 1, ?2, NULL, NULL)",
-                        params![path, unix_now()],
+                        "INSERT INTO suggestions \
+                         (path, seen_count, first_seen_at, decided_at, decision, history_at) \
+                         VALUES (?1, 1, ?2, NULL, NULL, ?3)",
+                        params![path, unix_now(), history_at],
                     )
                     .map_err(storage_error)?;
                 Ok(self.connection.last_insert_rowid())
@@ -1810,7 +1864,7 @@ impl Store {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT id, path, seen_count, first_seen_at, decision, decided_at \
+                "SELECT id, path, seen_count, first_seen_at, decision, decided_at, history_at \
                  FROM suggestions WHERE decision IS NULL ORDER BY first_seen_at ASC, id ASC",
             )
             .map_err(storage_error)?;
@@ -1831,7 +1885,7 @@ impl Store {
         let columns: Option<SuggestionColumns> = self
             .connection
             .query_row(
-                "SELECT id, path, seen_count, first_seen_at, decision, decided_at \
+                "SELECT id, path, seen_count, first_seen_at, decision, decided_at, history_at \
                  FROM suggestions WHERE id = ?1",
                 params![id],
                 suggestion_columns,
@@ -2382,6 +2436,23 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
             .pragma_update(None, "user_version", 10i64)
             .map_err(storage_error)?;
         transaction.commit().map_err(storage_error)?;
+        version = 10;
+    }
+
+    if version < 11 {
+        let transaction = connection.transaction().map_err(storage_error)?;
+        // `ADD COLUMN` has no `IF NOT EXISTS` in SQLite, and a run that already added it — an
+        // interrupted upgrade, or a database built from the current shape and stamped older — must
+        // not fail the whole open.
+        if !column_exists(&transaction, "suggestions", "history_at")? {
+            transaction
+                .execute_batch(SCHEMA_V11)
+                .map_err(storage_error)?;
+        }
+        transaction
+            .pragma_update(None, "user_version", 11i64)
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
     }
 
     Ok(())
@@ -2618,7 +2689,15 @@ fn intern(value: &str) -> &'static str {
 }
 
 /// The `suggestions` columns every read shares, before they are interpreted.
-type SuggestionColumns = (i64, String, i64, i64, Option<String>, Option<i64>);
+type SuggestionColumns = (
+    i64,
+    String,
+    i64,
+    i64,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+);
 
 /// Reads one `suggestions` row into its raw columns.
 fn suggestion_columns(row: &rusqlite::Row<'_>) -> rusqlite::Result<SuggestionColumns> {
@@ -2629,7 +2708,21 @@ fn suggestion_columns(row: &rusqlite::Row<'_>) -> rusqlite::Result<SuggestionCol
         row.get(3)?,
         row.get(4)?,
         row.get(5)?,
+        row.get(6)?,
     ))
+}
+
+/// The newer of two history times, where `None` carries no information rather than zero.
+///
+/// A known time is never lowered and never erased by an observation that has none: the history's
+/// moment is a fact a source recorded, and a later pass that cannot see it is not evidence that it
+/// did not happen.
+fn newest_history_at(known: Option<i64>, observed: Option<i64>) -> Option<i64> {
+    match (known, observed) {
+        (Some(known), Some(observed)) => Some(known.max(observed)),
+        (Some(known), None) => Some(known),
+        (None, observed) => observed,
+    }
 }
 
 /// Interprets a raw row, refusing a decision id this build does not know.
@@ -2639,7 +2732,7 @@ fn suggestion_columns(row: &rusqlite::Row<'_>) -> rusqlite::Result<SuggestionCol
 /// "still awaiting a decision", because the reader could then decide it again and overwrite the
 /// answer already on record.
 fn suggestion_from_columns(columns: SuggestionColumns) -> Result<Suggestion, MirkError> {
-    let (id, path, seen_count, first_seen_at, decision, decided_at) = columns;
+    let (id, path, seen_count, first_seen_at, decision, decided_at, history_at) = columns;
     let seen_count = u32::try_from(seen_count).map_err(|_| {
         MirkError::Storage(format!(
             "suggestion {id} has an invalid seen count {seen_count}"
@@ -2663,6 +2756,7 @@ fn suggestion_from_columns(columns: SuggestionColumns) -> Result<Suggestion, Mir
         first_seen_at,
         decision,
         decided_at,
+        history_at,
     })
 }
 
@@ -2831,6 +2925,163 @@ mod tests {
             .expect("stamp version 4");
         drop(connection);
         (dir, path)
+    }
+
+    /// Builds a database exactly as version 10 left it: V1..V10 applied, one suggestion awaiting the
+    /// reader's decision, and the version stamp. The V11 migration must add the history column
+    /// without touching the suggestion it exists for.
+    fn a_version_10_database() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("mirk.sqlite3");
+        let connection = Connection::open(&path).expect("open raw");
+        for schema in [
+            SCHEMA_V1,
+            SCHEMA_V2,
+            SCHEMA_V3,
+            SCHEMA_V4,
+            SCHEMA_V5,
+            SCHEMA_V6,
+            SCHEMA_V7,
+            SCHEMA_V8,
+            SCHEMA_V9,
+            SCHEMA_V9_RETIRE_USER_AUTHOR,
+            SCHEMA_V10_ADD,
+        ] {
+            connection
+                .execute_batch(schema)
+                .expect("apply a schema a version 10 database has");
+        }
+        // One suggestion waiting for its decision, recorded before the history column existed.
+        connection
+            .execute(
+                "INSERT INTO suggestions (path, seen_count, first_seen_at, decided_at, decision) \
+                 VALUES (?1, 3, 1700000000, NULL, NULL)",
+                params!["/elsewhere/suggested.pdf"],
+            )
+            .expect("record a suggestion the way version 10 did");
+        connection
+            .pragma_update(None, "user_version", 10i64)
+            .expect("stamp version 10");
+        drop(connection);
+        (dir, path)
+    }
+
+    #[test]
+    fn a_version_10_database_gains_the_history_time_without_losing_a_suggestion() {
+        // The column the migration exists for: the reader's own moment from the desktop's history,
+        // which must never be confused with `first_seen_at` — the moment the application noticed the
+        // file. L46 already paid for putting those two in one column.
+        let (_dir, path) = a_version_10_database();
+
+        let store = Store::open(&path).expect("opening migrates the database");
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+
+        // What the older build recorded survives whole, and it reads back with no history time:
+        // the migration adds a fact, it does not invent one.
+        let suggestion = store.suggestion(1).expect("read").expect("still present");
+        assert_eq!(suggestion.path, PathBuf::from("/elsewhere/suggested.pdf"));
+        assert_eq!(suggestion.seen_count, 3);
+        assert_eq!(suggestion.first_seen_at, 1_700_000_000);
+        assert_eq!(suggestion.decision, None);
+        assert_eq!(suggestion.history_at, None);
+
+        // And the column is live afterwards, as its own fact: recording the history's time leaves
+        // the application's own sighting time exactly where it was.
+        store
+            .record_suggestion_with_history("/elsewhere/suggested.pdf", Some(1_600_000_000))
+            .expect("record the history's time");
+        let suggestion = store.suggestion(1).expect("read").expect("present");
+        assert_eq!(suggestion.history_at, Some(1_600_000_000));
+        assert_eq!(suggestion.first_seen_at, 1_700_000_000);
+        assert_eq!(suggestion.seen_count, 4);
+    }
+
+    #[test]
+    fn the_history_column_migration_is_idempotent() {
+        // Reopening a migrated database must not run the step again, and must not rewrite anything.
+        let (_dir, path) = a_version_10_database();
+        drop(Store::open(&path).expect("migrate"));
+
+        let store = Store::open(&path).expect("reopen a migrated database");
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+        let suggestion = store.suggestion(1).expect("read").expect("present");
+        assert_eq!(suggestion.seen_count, 3);
+        assert_eq!(suggestion.history_at, None);
+        drop(store);
+
+        // A database that already carries the column and is still stamped 10 is what an interrupted
+        // upgrade leaves behind: `ADD COLUMN` has no `IF NOT EXISTS`, so the step has to ask first
+        // instead of failing the whole open.
+        let (_dir, path) = a_version_10_database();
+        let connection = Connection::open(&path).expect("open raw");
+        connection
+            .execute_batch(SCHEMA_V11)
+            .expect("add the column without stamping the version");
+        drop(connection);
+
+        let store = Store::open(&path).expect("a half-applied step must not fail the open");
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+        let suggestion = store.suggestion(1).expect("read").expect("present");
+        assert_eq!(suggestion.path, PathBuf::from("/elsewhere/suggested.pdf"));
+        assert_eq!(suggestion.seen_count, 3, "the rows are intact");
+        assert_eq!(suggestion.history_at, None);
+    }
+
+    #[test]
+    fn a_suggestion_keeps_the_histories_time_apart_and_never_moves_it_backwards() {
+        let store = Store::open_in_memory().expect("open in memory");
+
+        // The `/proc` detector says a file is open now and has no moment to offer, so the row says
+        // honestly that no source said when it was opened.
+        let untyped = store
+            .record_suggestion("/elsewhere/open.pdf")
+            .expect("record");
+        let suggestion = store.suggestion(untyped).expect("read").expect("present");
+        assert_eq!(suggestion.history_at, None);
+
+        // A source that does know writes the reader's moment, in its own column.
+        let history = store
+            .record_suggestion_with_history("/elsewhere/opened.pdf", Some(1_600_000_000))
+            .expect("record");
+        let suggestion = store.suggestion(history).expect("read").expect("present");
+        assert_eq!(suggestion.history_at, Some(1_600_000_000));
+        assert_ne!(
+            suggestion.first_seen_at, 1_600_000_000,
+            "when mirk looked is not when the reader opened it"
+        );
+
+        // A later pass that knows an older moment cannot walk the fact backwards, and one that knows
+        // nothing cannot erase it — the same high-water mark `progress.read_at` uses (L46).
+        store
+            .record_suggestion_with_history("/elsewhere/opened.pdf", Some(1_500_000_000))
+            .expect("record an older moment");
+        store
+            .record_suggestion("/elsewhere/opened.pdf")
+            .expect("record an observation with no moment");
+        let suggestion = store.suggestion(history).expect("read").expect("present");
+        assert_eq!(suggestion.history_at, Some(1_600_000_000));
+        assert_eq!(suggestion.seen_count, 3);
+
+        // A decided suggestion is history: nothing about it is touched, its time included.
+        store
+            .decide_suggestion(history, SuggestionDecision::Discarded)
+            .expect("discard");
+        store
+            .record_suggestion_with_history("/elsewhere/opened.pdf", Some(1_700_000_000))
+            .expect("record a decided path again");
+        let suggestion = store.suggestion(history).expect("read").expect("present");
+        assert_eq!(suggestion.decision, Some(SuggestionDecision::Discarded));
+        assert_eq!(suggestion.history_at, Some(1_600_000_000));
+        assert_eq!(suggestion.seen_count, 3);
     }
 
     #[test]

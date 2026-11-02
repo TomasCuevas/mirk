@@ -366,6 +366,27 @@ fn suggestion_detector() -> commands::DetectorView {
     commands::suggestion_detector(mirk_platform::backends().open_documents.as_ref())
 }
 
+/// Reads the desktop's recent-files history into the suggestion queue (S10).
+///
+/// The interface asks for this before listing the queue, so the screen shows what the reader's own
+/// desktop recorded opening — each suggestion carrying the moment the history wrote down. It is not
+/// part of the ingestion tick: the tick runs every few seconds, and reading the history that often
+/// would bump every suggestion's sighting count for no reason and re-read a file nobody changed.
+///
+/// Reading the history is file I/O over a list another application maintains, so it runs off the
+/// interface thread. A platform with no backend answers `NotSupported` and the caller can say the
+/// capability is missing instead of showing an empty queue that merely looks like good news.
+#[tauri::command]
+async fn observe_recent_documents() -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = open_store()?;
+        let source = mirk_platform::backends().recent_documents;
+        commands::observe_recent_documents(&store, source.as_ref()).map_err(error_message)
+    })
+    .await
+    .map_err(|error| format!("the recent-documents task could not run: {error}"))?
+}
+
 /// Scans `folder` into the library and returns the report, including any per-file failure.
 #[tauri::command]
 fn scan_folder(folder: String) -> Result<ScanReportView, String> {
@@ -1291,6 +1312,7 @@ fn main() {
             document_cover,
             suggestion_cover,
             suggestion_detector,
+            observe_recent_documents,
             scan_folder,
             progress_providers,
             list_suggestions,

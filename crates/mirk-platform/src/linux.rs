@@ -8,7 +8,7 @@
 //!
 //! | Backend | Source of truth | Task |
 //! | --- | --- | --- |
-//! | Axis A | `~/.local/share/recently-used.xbel` (freedesktop Recent files, GTK) | T12 |
+//! | Axis A | `~/.local/share/recently-used.xbel` (freedesktop Recent files, GTK) | T12a |
 //! | Axis B | `/proc/<pid>/fd` plus `/proc/<pid>/cmdline` | T8 |
 //! | Axis C | `xdg-open`, or a viewer CLI such as `evince -i <N>` | T7 |
 //! | Watched folders | `inotify`, one watch per directory, coalesced per path | T7a |
@@ -40,14 +40,15 @@ use mirk_core::{
     WatchEventKind, WatchTarget,
 };
 
-use crate::{not_supported, Backends};
+use crate::recent::{recently_used_path, RecentDocuments};
+use crate::Backends;
 
 const PLATFORM: Platform = Platform::Linux;
 
 /// Every Linux backend, in the state this build provides it.
 pub(super) fn backends() -> Backends {
     Backends {
-        recent_documents: Box::new(XbelRecentDocuments),
+        recent_documents: Box::new(XbelRecentDocuments::new()),
         open_documents: Box::new(ProcOpenDocuments),
         launcher: Box::new(XdgLauncher::new()),
         file_identity: Box::new(PosixFileIdentity),
@@ -263,7 +264,56 @@ fn environment_search_path() -> Vec<PathBuf> {
 }
 
 /// Axis A — the freedesktop recent-documents list.
-pub struct XbelRecentDocuments;
+///
+/// This is the trait's surface over the reader L46 shipped ([`RecentDocuments`]), not a second
+/// parser: `$XDG_DATA_HOME` is resolved through [`recently_used_path`], and percent decoding,
+/// entity decoding and ISO-8601 arithmetic stay in that module, where their tests already pin them.
+/// What this type decides is which of those documents are PDFs worth reporting, in what order, and
+/// how many.
+///
+/// It reads the file once per call and keeps no cache: one `fs::read` of the whole history plus one
+/// scan, which is a cost per call and not per document. A cache would need invalidation and has no
+/// consumer that would pay for it.
+pub struct XbelRecentDocuments {
+    /// The history to read, or `None` to resolve the XDG location on every call.
+    ///
+    /// The override exists so the behaviour can be tested against a fixture in a temporary
+    /// directory instead of the machine's real history, and without mutating the process
+    /// environment — the same injection pattern [`find_program`] uses for its search path.
+    history: Option<PathBuf>,
+}
+
+impl XbelRecentDocuments {
+    /// The history this build reads: `$XDG_DATA_HOME/recently-used.xbel`, resolved per call.
+    pub const fn new() -> Self {
+        Self { history: None }
+    }
+
+    /// The same source over an explicit history file.
+    ///
+    /// Tests only: production reads the location the environment names, and nothing else in the
+    /// workspace needs to point this source at an arbitrary file.
+    #[cfg(test)]
+    pub fn at(history: impl Into<PathBuf>) -> Self {
+        Self {
+            history: Some(history.into()),
+        }
+    }
+
+    /// Where this source reads from, resolving the environment only when it was not told.
+    fn history_path(&self) -> Result<PathBuf, MirkError> {
+        match &self.history {
+            Some(path) => Ok(path.clone()),
+            None => recently_used_path(),
+        }
+    }
+}
+
+impl Default for XbelRecentDocuments {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl RecentDocumentsSource for XbelRecentDocuments {
     fn id(&self) -> &'static str {
@@ -274,10 +324,117 @@ impl RecentDocumentsSource for XbelRecentDocuments {
         PLATFORM
     }
 
-    fn recent(&self, _limit: usize) -> Result<Vec<RecentDocument>, MirkError> {
-        // TODO(T12): parse `~/.local/share/recently-used.xbel`, keep `application/pdf` entries,
-        // skip entries whose file no longer exists, and return them newest first.
-        Err(not_supported("recent-document ingestion", PLATFORM))
+    fn recent(&self, limit: usize) -> Result<Vec<RecentDocument>, MirkError> {
+        // A history that is not there is a machine where nothing was opened this way, which the
+        // reader already answers as an empty history; a history that exists and cannot be read is a
+        // real fault and stays an error (S6).
+        let history = RecentDocuments::read(&self.history_path()?)?;
+        let scan = recent_documents(&history, limit, unix_now());
+        // A dead path is a fact about the reader's disk, not a fault of the call (S4). It is
+        // recorded where this workspace records the other non-fatal facts of the same kind, and it
+        // is also returned to the tests, because this line cannot be asserted and the count can.
+        if scan.omitted_dead > 0 {
+            eprintln!(
+                "{} recent documents name a file that is gone and were not reported",
+                scan.omitted_dead
+            );
+        }
+        Ok(scan.documents)
+    }
+}
+
+/// The wall clock as Unix seconds, which decides which recorded moments are usable.
+///
+/// A clock that cannot be placed after 1970 answers `i64::MAX` — "no upper bound known" — so a
+/// broken clock leaves every recorded time usable instead of declaring every document future-dated.
+/// That is not a moment standing in for an unknown one: nothing is compared against it except to
+/// conclude that it bounds nothing.
+fn unix_now() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(i64::MAX)
+}
+
+/// What one pass over a history found.
+///
+/// Both halves are facts the spec asks for: the documents worth suggesting, and how many were left
+/// out because the file they name is gone (S4). The count is a returned value rather than only a
+/// line on stderr, because a stderr line cannot be asserted and this project pins behaviour with
+/// tests.
+struct RecentScan {
+    /// The documents worth reporting, in the order S5 fixes.
+    documents: Vec<RecentDocument>,
+    /// Bookmark PDFs omitted because the file they name no longer exists.
+    omitted_dead: usize,
+}
+
+/// The documents `history` names that are worth reporting, in the order S5 fixes, together with how
+/// many were omitted for naming a file that is gone.
+///
+/// Pure: the history and the reference moment are parameters, so every rule below is pinned against
+/// a fixture rather than against whatever this machine happens to have opened, or whatever its
+/// clock happens to say.
+///
+/// - a document is a PDF by the type its bookmark recorded **or** by a case-insensitive `.pdf`
+///   extension (S2). The union matters in both directions: the type alone would drop a document
+///   whose type was never recorded, and the extension alone would drop a correctly typed document
+///   that lost its name. The extension test is [`is_pdf`] — the same function the `/proc` detector
+///   uses, so the two axes cannot disagree about what a PDF is;
+/// - a path whose file is gone is omitted, without an error and without a placeholder row (S4), and
+///   counted: a silent omission cannot be told apart from a history that names fewer files;
+/// - a moment later than `now` is not a usable moment. The document is still reported — S3 says a
+///   path without a time is still a document — but it sorts with the undated entries, because the
+///   queue's default order is that moment descending and one future bookmark would otherwise
+///   outrank every genuine later one for ever. It is not clamped to `now`, which would invent a
+///   moment and claim the reader opened the file then;
+/// - newest first, entries with no usable time after every dated one (sorting them as `0` would
+///   claim 1970, which is the mistake the parser already refused to make), and ties broken on the
+///   path's bytes so two runs over one file cannot disagree (S5);
+/// - at most `limit` entries, and `0` returns none (S5). The limit applies after the omissions, so
+///   it selects from the documents that were actually reported.
+fn recent_documents(history: &RecentDocuments, limit: usize, now: i64) -> RecentScan {
+    let mut documents: Vec<RecentDocument> = Vec::new();
+    let mut omitted_dead = 0;
+
+    for entry in history.documents() {
+        if !(entry.recorded_as_pdf || is_pdf(&entry.path)) {
+            continue;
+        }
+        if !entry.path.is_file() {
+            omitted_dead += 1;
+            continue;
+        }
+        documents.push(RecentDocument {
+            path: entry.path.clone(),
+            last_used_unix: entry.last_used_unix.filter(|time| *time <= now),
+        });
+    }
+
+    documents.sort_by(
+        |left, right| match (left.last_used_unix, right.last_used_unix) {
+            (Some(left_time), Some(right_time)) => right_time.cmp(&left_time).then_with(|| {
+                left.path
+                    .as_os_str()
+                    .as_bytes()
+                    .cmp(right.path.as_os_str().as_bytes())
+            }),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => left
+                .path
+                .as_os_str()
+                .as_bytes()
+                .cmp(right.path.as_os_str().as_bytes()),
+        },
+    );
+    documents.truncate(limit);
+
+    RecentScan {
+        documents,
+        omitted_dead,
     }
 }
 
@@ -1156,16 +1313,296 @@ mod tests {
         }
     }
 
-    /// The whole point of the stub convention: an unimplemented backend must say so, because
-    /// `Ok(vec![])` would be indistinguishable from a genuinely empty library.
+    // --- T12a: the recent-documents source over the parser L46 shipped -----------------------
+
+    /// Writes `contents` as a `recently-used.xbel` inside `dir` and returns the source reading it.
+    ///
+    /// The source is always given an explicit path: a test must never read the machine's real
+    /// history, which lists the documents its owner opened.
+    fn history_source(dir: &TempDir, contents: &str) -> XbelRecentDocuments {
+        XbelRecentDocuments::at(history_file(dir, contents))
+    }
+
+    /// Writes `contents` as a `recently-used.xbel` inside `dir` and returns its path, for the tests
+    /// that assert against the filtering function rather than against the trait's answer.
+    fn history_file(dir: &TempDir, contents: &str) -> PathBuf {
+        let path = dir.path.join("recently-used.xbel");
+        std::fs::write(&path, contents).expect("write the history fixture");
+        path
+    }
+
+    /// Creates a file named `name` in `dir`, so a bookmark can name a path that exists.
+    fn an_existing_file(dir: &TempDir, name: &str) -> PathBuf {
+        let path = dir.path.join(name);
+        std::fs::write(&path, b"%PDF-1.4\n").expect("create the fixture file");
+        path
+    }
+
+    /// One `<bookmark>` element for `path`, with an optional recorded mime type and time.
+    ///
+    /// The type is written where GTK writes it — a `<mime:mime-type>` child inside the element —
+    /// because that is the shape the parser has to read.
+    fn bookmark(path: &Path, mime: Option<&str>, visited: Option<&str>) -> String {
+        let href = format!("file://{}", path.display());
+        let visited = visited
+            .map(|time| format!(" visited=\"{time}\""))
+            .unwrap_or_default();
+        let info = mime
+            .map(|mime| {
+                format!(
+                    "<info><metadata owner=\"http://freedesktop.org\">\
+                     <mime:mime-type type=\"{mime}\"/></metadata></info>"
+                )
+            })
+            .unwrap_or_default();
+
+        format!("<bookmark href=\"{href}\"{visited}>{info}</bookmark>\n")
+    }
+
+    /// A history file holding `bookmarks`.
+    fn xbel(bookmarks: &[String]) -> String {
+        format!("<xbel version=\"1.0\">\n{}</xbel>\n", bookmarks.concat())
+    }
+
+    /// 2026-09-08T07:06:05Z, derived with `date -u -d '2026-09-08T07:06:05Z' +%s`.
+    const SEPTEMBER_8TH: &str = "2026-09-08T07:06:05.000000Z";
+    const SEPTEMBER_8TH_UNIX: i64 = 1_788_851_165;
+
+    /// 2026-09-09T07:06:05Z, one day later.
+    const SEPTEMBER_9TH: &str = "2026-09-09T07:06:05.000000Z";
+    const SEPTEMBER_9TH_UNIX: i64 = 1_788_937_565;
+
+    /// Exactly one second after [`SEPTEMBER_9TH`], for the boundary of "past `now`".
+    const ONE_SECOND_PAST_SEPTEMBER_9TH: &str = "2026-09-09T07:06:06.000000Z";
+
+    /// A moment no genuine bookmark can carry on a machine running today: the far future is the
+    /// shape the defect takes on a real history, and it does not depend on this machine's clock.
+    const NOT_YET: &str = "2099-01-01T00:00:00.000000Z";
+
+    /// The stub this test replaces asserted `NotSupported`, so that an unimplemented backend could
+    /// not be forgotten. Landing the real answer is what made it wrong: the source now answers, and
+    /// the answer to a history that is not there is an empty list, which is what a fresh profile
+    /// looks like rather than a claim that the capability is missing (S6).
     #[test]
-    fn the_recent_documents_stub_reports_not_supported_rather_than_empty_success() {
-        let recent = XbelRecentDocuments.recent(10);
-        assert!(matches!(recent, Err(MirkError::NotSupported { .. })));
+    fn the_recent_documents_source_answers_instead_of_claiming_the_capability_is_missing() {
+        let dir = TempDir::new("recent-answers");
+        let source = XbelRecentDocuments::at(dir.path.join("no-history-yet.xbel"));
+
+        assert_eq!(
+            source
+                .recent(10)
+                .expect("a missing history is not an error"),
+            Vec::new(),
+            "nothing was opened this way, which is not the same as no capability"
+        );
+        assert_eq!(source.id(), "linux-xbel-recent");
+        assert_eq!(source.platform(), Platform::Linux);
 
         // The `/proc` detector is implemented (T8), so it must answer rather than claim the
         // capability is missing. Its behaviour is covered by the T8 tests below.
         assert!(ProcOpenDocuments.open_documents().is_ok());
+    }
+
+    #[test]
+    fn a_pdf_is_its_recorded_type_or_its_extension_in_either_case() {
+        // The union is the rule (S2): the type alone would drop a document whose type was never
+        // recorded, and the extension alone would drop a typed document that lost its name.
+        let dir = TempDir::new("recent-pdf-rule");
+        let typed_without_extension = an_existing_file(&dir, "typed-report.bin");
+        let shouted_extension = an_existing_file(&dir, "SHOUTED.PDF");
+        let typed_and_named = an_existing_file(&dir, "named.pdf");
+        let text_file = an_existing_file(&dir, "notes.txt");
+
+        let source = history_source(
+            &dir,
+            &xbel(&[
+                bookmark(
+                    &typed_without_extension,
+                    Some("application/pdf"),
+                    Some(SEPTEMBER_8TH),
+                ),
+                bookmark(&shouted_extension, None, Some(SEPTEMBER_8TH)),
+                bookmark(&typed_and_named, Some("text/plain"), Some(SEPTEMBER_8TH)),
+                bookmark(&text_file, Some("text/plain"), Some(SEPTEMBER_8TH)),
+            ]),
+        );
+
+        let mut reported: Vec<PathBuf> = source
+            .recent(10)
+            .expect("read the fixture")
+            .into_iter()
+            .map(|document| document.path)
+            .collect();
+        reported.sort();
+
+        let mut expected = vec![typed_without_extension, shouted_extension, typed_and_named];
+        expected.sort();
+        assert_eq!(reported, expected);
+    }
+
+    /// The boundary of the future rule, decided on both sides of it: a moment equal to `now` is a
+    /// moment, and one second past it is not. The reference moment is a parameter of the filtering
+    /// function, so the boundary is testable without waiting for a clock to arrive at it.
+    #[test]
+    fn a_time_equal_to_now_is_usable_and_one_second_past_it_is_not() {
+        let dir = TempDir::new("recent-boundary");
+        let at_now = an_existing_file(&dir, "at-now.pdf");
+        let one_second_past = an_existing_file(&dir, "one-second-past.pdf");
+
+        let history = RecentDocuments::read(&history_file(
+            &dir,
+            &xbel(&[
+                bookmark(&at_now, None, Some(SEPTEMBER_9TH)),
+                bookmark(&one_second_past, None, Some(ONE_SECOND_PAST_SEPTEMBER_9TH)),
+            ]),
+        ))
+        .expect("read the fixture");
+
+        let scan = recent_documents(&history, 10, SEPTEMBER_9TH_UNIX);
+        assert_eq!(scan.documents.len(), 2, "both are documents (S3)");
+        assert_eq!(scan.documents[0].path, at_now);
+        assert_eq!(
+            scan.documents[0].last_used_unix,
+            Some(SEPTEMBER_9TH_UNIX),
+            "a time equal to now is usable"
+        );
+        assert_eq!(scan.documents[1].path, one_second_past);
+        assert_eq!(
+            scan.documents[1].last_used_unix, None,
+            "one second past now is not a usable time"
+        );
+    }
+
+    #[test]
+    fn a_bookmark_whose_file_is_gone_is_omitted_and_the_omission_is_counted() {
+        // S4 of the inherited spec: a dead path is omitted, and the omission is counted. The count
+        // is returned rather than only written to stderr, because a stderr line cannot be asserted
+        // and this project pins behaviour with tests.
+        let dir = TempDir::new("recent-dead-path");
+        let present = an_existing_file(&dir, "present.pdf");
+        let gone = dir.path.join("deleted-since-then.pdf");
+        // Not a PDF, so not a candidate: an entry that was never eligible is not an omission.
+        let text = an_existing_file(&dir, "notes.txt");
+
+        let fixture = history_file(
+            &dir,
+            &xbel(&[
+                bookmark(&present, None, Some(SEPTEMBER_8TH)),
+                bookmark(&gone, Some("application/pdf"), Some(SEPTEMBER_9TH)),
+                bookmark(&text, Some("text/plain"), None),
+            ]),
+        );
+        let history = RecentDocuments::read(&fixture).expect("read the fixture");
+
+        let scan = recent_documents(&history, 10, SEPTEMBER_9TH_UNIX);
+        assert_eq!(
+            scan.documents.len(),
+            1,
+            "the missing file is not a suggestion"
+        );
+        assert_eq!(scan.documents[0].path, present);
+        assert_eq!(
+            scan.omitted_dead, 1,
+            "34 PDF bookmarks, 29 present, 5 dropped on the reference host: the count is a fact"
+        );
+
+        // The trait's own answer omits the same path and stays an `Ok`, not an error (S4/S6).
+        let source = XbelRecentDocuments::at(&fixture);
+        assert_eq!(
+            source
+                .recent(10)
+                .expect("a dead path is not an error")
+                .len(),
+            1
+        );
+    }
+
+    /// A bookmark dated in the future distorts the queue's default order for ever: the order is
+    /// that value descending, so one such bookmark outranks every genuine later one. The answer is
+    /// not to clamp it — clamping invents a moment — but to treat it as no usable time, so the
+    /// document still appears (S3: a path without a time is still a document) and sorts after every
+    /// dated entry, exactly like a bookmark that never carried a time.
+    #[test]
+    fn a_bookmark_dated_in_the_future_is_a_document_with_no_usable_time() {
+        let dir = TempDir::new("recent-future");
+        let dated = an_existing_file(&dir, "dated.pdf");
+        // Named so the undated group's path order is unambiguous.
+        let future = an_existing_file(&dir, "2099.pdf");
+        let undated = an_existing_file(&dir, "undated.pdf");
+
+        let source = history_source(
+            &dir,
+            &xbel(&[
+                bookmark(&future, None, Some(NOT_YET)),
+                bookmark(&dated, None, Some(SEPTEMBER_8TH)),
+                bookmark(&undated, None, None),
+            ]),
+        );
+
+        let reported = source.recent(10).expect("read the fixture");
+        let order: Vec<&PathBuf> = reported.iter().map(|document| &document.path).collect();
+        assert_eq!(
+            order,
+            vec![&dated, &future, &undated],
+            "a future date cannot outrank a genuine one, and the document is still reported"
+        );
+        assert_eq!(
+            reported[1].last_used_unix, None,
+            "no usable time is null, never the future date and never clamped to now"
+        );
+    }
+
+    #[test]
+    fn the_history_comes_newest_first_with_undated_entries_last_and_ties_on_the_path() {
+        let dir = TempDir::new("recent-order");
+        let newest = an_existing_file(&dir, "newest.pdf");
+        let tie_b = an_existing_file(&dir, "tie-b.pdf");
+        let tie_a = an_existing_file(&dir, "tie-a.pdf");
+        let undated = an_existing_file(&dir, "undated.pdf");
+
+        let source = history_source(
+            &dir,
+            &xbel(&[
+                // Deliberately not in the expected order: the source sorts, it does not rely on
+                // the history's own ordering.
+                bookmark(&undated, None, None),
+                bookmark(&tie_b, None, Some(SEPTEMBER_8TH)),
+                bookmark(&newest, None, Some(SEPTEMBER_9TH)),
+                bookmark(&tie_a, None, Some(SEPTEMBER_8TH)),
+            ]),
+        );
+
+        let reported = source.recent(10).expect("read the fixture");
+        let order: Vec<&PathBuf> = reported.iter().map(|document| &document.path).collect();
+        assert_eq!(
+            order,
+            vec![&newest, &tie_a, &tie_b, &undated],
+            "newest first, equal times on the path's bytes, no time at the end"
+        );
+        assert_eq!(reported[0].last_used_unix, Some(SEPTEMBER_9TH_UNIX));
+        assert_eq!(reported[1].last_used_unix, Some(SEPTEMBER_8TH_UNIX));
+        assert_eq!(
+            reported[3].last_used_unix, None,
+            "an undated document is reported with no time, not as 1970"
+        );
+
+        // At most `limit` entries, and `0` returns none.
+        assert_eq!(source.recent(2).expect("read the fixture").len(), 2);
+        assert!(source.recent(0).expect("read the fixture").is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_history_is_an_error_and_a_missing_one_is_an_empty_list() {
+        // Two different facts: "nothing was opened this way" and "cannot read what is there".
+        let dir = TempDir::new("recent-unreadable");
+        let missing = XbelRecentDocuments::at(dir.path.join("absent.xbel"));
+        assert!(missing.recent(10).expect("absent is empty").is_empty());
+
+        // A directory where the history should be exists and cannot be read as a file.
+        let directory = dir.path.join("a-directory.xbel");
+        std::fs::create_dir_all(&directory).expect("create the directory fixture");
+        let broken = XbelRecentDocuments::at(&directory);
+        assert!(matches!(broken.recent(10), Err(MirkError::Io(_))));
     }
 
     // --- T9: the Evince GVFS progress provider and the Linux launcher -----------------------
@@ -1609,7 +2046,7 @@ mod tests {
 
     #[test]
     fn not_supported_errors_name_the_capability_and_the_platform() {
-        let error = not_supported("open-document detection", PLATFORM);
+        let error = crate::not_supported("open-document detection", PLATFORM);
         let rendered = error.to_string();
         assert!(rendered.contains("open-document detection"), "{rendered}");
         assert!(rendered.contains("Linux"), "{rendered}");

@@ -30,17 +30,57 @@ use mirk_core::MirkError;
 /// The file a GNOME/GTK desktop keeps its recent-files history in, relative to `$XDG_DATA_HOME`.
 const RECENTLY_USED_FILE: &str = "recently-used.xbel";
 
+/// The mime type a bookmark records when its document is a PDF.
+const PDF_MIME_TYPE: &str = "application/pdf";
+
+/// The name of the attribute, or of the element, GTK writes a document's mime type into.
+///
+/// Real histories carry it as a child element — `<mime:mime-type type="application/pdf"/>` inside
+/// `<info><metadata>` — but the name is used for both spellings, because the rule this module
+/// answers is which mime type was recorded and not which XML shape carried it.
+const MIME_TYPE: &str = "mime:mime-type";
+
+/// One `<bookmark>` that named a local path, with everything the suggestion queue needs to know
+/// about it.
+///
+/// This is the shape [`RecentDocuments::documents`] answers with, and it exists because
+/// [`RecentDocuments::read_at`] answers a narrower question — *when* was this read? — and can only
+/// say "no moment" for a document it knows perfectly well. A caller that has to decide whether a
+/// document is worth suggesting needs the path even when its moment is unknown, and needs the
+/// recorded type on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEntry {
+    /// The decoded local path the bookmark named.
+    pub path: PathBuf,
+    /// The newest time this path's bookmarks recorded, or `None` when none of them carried a usable
+    /// one. `None` is "the history has no moment for this document", never 1970.
+    pub last_used_unix: Option<i64>,
+    /// Whether the bookmark recorded [`PDF_MIME_TYPE`] as the document's type.
+    ///
+    /// The extension rule is deliberately **not** applied here: this module reports what the history
+    /// said, and the platform layer takes the union with the `.pdf` test it already uses, so the two
+    /// axes cannot disagree about what a PDF is.
+    pub recorded_as_pdf: bool,
+}
+
 /// The desktop's recent-files history: what the system's own applications recorded about the files
 /// a person opened, and when.
 ///
 /// Only `file://` entries that name a local path are represented. A path maps to the newest time
 /// any bookmark recorded for it; an entry whose timestamps are missing entirely is counted by
 /// [`len`](Self::len) but answers `None` from [`read_at`](Self::read_at), because "the history has
-/// no time for this" and "the history does not know this" must not be confused with epoch.
+/// no time for this" and "the history does not know this" must not be confused with epoch. It is
+/// nevertheless present in [`documents`](Self::documents), because a document the reader opened is
+/// still a document when no moment was recorded for it.
 pub struct RecentDocuments {
-    /// Newest observed time per decoded local path. Absent means no bookmark carried a usable time.
-    entries: HashMap<PathBuf, i64>,
-    /// Every `file://` bookmark that decoded to a local path, with or without a timestamp.
+    /// Every distinct local path the history names, in the order each was first seen, with the
+    /// newest time its bookmarks recorded and whether any of them typed it as a PDF.
+    documents: Vec<HistoryEntry>,
+    /// Where each path's entry lives in `documents`, so a bookmark repeated for one path merges into
+    /// one entry instead of appearing twice. A lookup, not a second copy of the fact.
+    index: HashMap<PathBuf, usize>,
+    /// Every `file://` bookmark that decoded to a local path, with or without a timestamp and
+    /// counted once per bookmark. This is what [`len`](Self::len) reports.
     parsed: usize,
 }
 
@@ -66,7 +106,17 @@ impl RecentDocuments {
     /// When the history last recorded opening `path`, in Unix seconds. `None` means the history
     /// does not know this document, which is a different fact from "opened long ago".
     pub fn read_at(&self, path: &Path) -> Option<i64> {
-        self.entries.get(path).copied()
+        let position = *self.index.get(path)?;
+        self.documents[position].last_used_unix
+    }
+
+    /// Every distinct local path the history names, in the order each was first seen.
+    ///
+    /// Unlike [`read_at`](Self::read_at), this keeps a document whose bookmark recorded no time at
+    /// all: the caller that decides whether to suggest it needs the path, and
+    /// [`HistoryEntry::last_used_unix`] says honestly that its moment is unknown.
+    pub fn documents(&self) -> &[HistoryEntry] {
+        &self.documents
     }
 
     /// How many `file://` entries were parsed. Callers report it; a silent empty history and a
@@ -83,7 +133,8 @@ impl RecentDocuments {
     /// The history a machine with no readable recent-files list has: nothing, with no error.
     fn empty() -> Self {
         Self {
-            entries: HashMap::new(),
+            documents: Vec::new(),
+            index: HashMap::new(),
             parsed: 0,
         }
     }
@@ -92,10 +143,10 @@ impl RecentDocuments {
     fn parse(contents: &str) -> Self {
         let mut history = Self::empty();
 
-        for tag in bookmark_tags(contents) {
-            let attributes = parse_attributes(tag);
-
+        for bookmark in bookmarks(contents) {
             // Attribute order is not guaranteed, so every lookup is by name.
+            let attributes = parse_attributes(bookmark.tag);
+
             let Some(href) = attribute(&attributes, "href") else {
                 continue;
             };
@@ -110,22 +161,81 @@ impl RecentDocuments {
             // `added` is ignored: when GTK first saw the document is not when a person read it.
             let modified = attribute(&attributes, "modified").and_then(parse_iso8601_utc);
             let visited = attribute(&attributes, "visited").and_then(parse_iso8601_utc);
-            let Some(time) = newest_of(modified, visited) else {
-                // Neither attribute was present or usable. Leaving the path out would lose the
-                // fact that it was parsed; storing `0` would read as 1970 and make a document
-                // look ancient. It is counted, and answers `None`.
-                continue;
-            };
+            // Neither attribute present or usable leaves this `None`. Leaving the path out would
+            // lose the fact that it was parsed; storing `0` would read as 1970 and make a document
+            // look ancient. It is kept as a document with no known moment.
+            let time = newest_of(modified, visited);
+            let recorded_as_pdf = recorded_pdf_mime(&attributes, bookmark.body);
 
-            history
-                .entries
-                .entry(path)
-                .and_modify(|existing| *existing = (*existing).max(time))
-                .or_insert(time);
+            match history.index.get(&path) {
+                Some(&position) => {
+                    let entry = &mut history.documents[position];
+                    entry.last_used_unix = newest_of(entry.last_used_unix, time);
+                    entry.recorded_as_pdf |= recorded_as_pdf;
+                }
+                None => {
+                    history.index.insert(path.clone(), history.documents.len());
+                    history.documents.push(HistoryEntry {
+                        path,
+                        last_used_unix: time,
+                        recorded_as_pdf,
+                    });
+                }
+            }
         }
 
         history
     }
+}
+
+/// Whether a bookmark recorded [`PDF_MIME_TYPE`] as the document's type.
+///
+/// Both spellings are honoured — the child element GTK actually writes, and the same name on the
+/// bookmark's own tag — because the question is which type was recorded, and a history from a
+/// writer nobody has seen yet should not lose a PDF to a detail of the dialect.
+fn recorded_pdf_mime(attributes: &[(String, String)], body: &str) -> bool {
+    if attribute(attributes, MIME_TYPE)
+        .map(is_pdf_mime_value)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    mime_element_records_pdf(body)
+}
+
+/// Whether any `<mime:mime-type>` inside an element body names a PDF.
+fn mime_element_records_pdf(body: &str) -> bool {
+    const MARKER: &str = "<mime:mime-type";
+
+    let mut rest = body;
+    while let Some(position) = rest.find(MARKER) {
+        rest = &rest[position + MARKER.len()..];
+        let Some(end) = tag_end(rest) else {
+            // Truncated: no closing `>` remains, so this element has no attributes to read.
+            return false;
+        };
+
+        if attribute(&parse_attributes(&rest[..end]), "type")
+            .map(is_pdf_mime_value)
+            .unwrap_or(false)
+        {
+            return true;
+        }
+
+        rest = &rest[end..];
+    }
+
+    false
+}
+
+/// Whether a mime-type value names a PDF, ignoring parameters and ASCII case.
+fn is_pdf_mime_value(value: &str) -> bool {
+    value
+        .split(';')
+        .next()
+        .map(|kind| kind.trim().eq_ignore_ascii_case(PDF_MIME_TYPE))
+        .unwrap_or(false)
 }
 
 /// Where the history lives, following XDG: `$XDG_DATA_HOME/recently-used.xbel`, falling back to
@@ -166,15 +276,25 @@ fn recently_used_path_for(
     Ok(base.join(RECENTLY_USED_FILE))
 }
 
-/// The `<bookmark ...>` tag bodies in `contents`, without the leading `<bookmark` or the closing
-/// `>`.
+/// One `<bookmark>` element found in a history.
+struct Bookmark<'a> {
+    /// The opening tag's body, without the leading `<bookmark` and without the closing `>`.
+    tag: &'a str,
+    /// The element's own content, from just after the opening tag to before `</bookmark>`. Empty for
+    /// a self-closing tag or for an element that was never closed.
+    body: &'a str,
+}
+
+/// The `<bookmark>` elements in `contents`.
 ///
 /// The scan deliberately does not validate XML: it finds the marker, ends the tag at the first `>`
 /// outside quotes, and moves on. Malformed content costs the entries it contains and nothing else.
-fn bookmark_tags(contents: &str) -> Vec<&str> {
+/// The element's body is taken as well, because the mime type GTK records lives inside it rather
+/// than on the tag.
+fn bookmarks(contents: &str) -> Vec<Bookmark<'_>> {
     const MARKER: &str = "<bookmark";
 
-    let mut tags = Vec::new();
+    let mut found = Vec::new();
     let mut rest = contents;
 
     while let Some(position) = rest.find(MARKER) {
@@ -192,11 +312,40 @@ fn bookmark_tags(contents: &str) -> Vec<&str> {
             // Truncated: no closing `>` remains, so the tail has no complete tag.
             break;
         };
-        tags.push(&rest[..end]);
-        rest = &rest[end..];
+        let tag = &rest[..end];
+        let after_tag = &rest[end + 1..];
+
+        // A self-closing tag has no content of its own.
+        let (body, consumed) = if tag.trim_end().ends_with('/') {
+            ("", 0)
+        } else {
+            element_body(after_tag)
+        };
+
+        found.push(Bookmark { tag, body });
+        rest = &after_tag[consumed..];
     }
 
-    tags
+    found
+}
+
+/// The content of a bookmark element, plus how much of `after_tag` it consumed.
+///
+/// The body ends at the closing tag, and never runs past the next opening one: a bookmark that was
+/// never closed must not borrow the next bookmark's mime type, which would make one document's
+/// facts another document's.
+fn element_body(after_tag: &str) -> (&str, usize) {
+    const CLOSE: &str = "</bookmark";
+    const OPEN: &str = "<bookmark";
+
+    match (after_tag.find(CLOSE), after_tag.find(OPEN)) {
+        // Truncated: no closing tag remains, so the tail is whatever this element holds.
+        (None, None) => (after_tag, after_tag.len()),
+        (None, Some(next)) => (&after_tag[..next], next),
+        (Some(close), None) => (&after_tag[..close], close + CLOSE.len()),
+        (Some(close), Some(next)) if next < close => (&after_tag[..next], next),
+        (Some(close), _) => (&after_tag[..close], close + CLOSE.len()),
+    }
 }
 
 /// The byte offset of the `>` that closes a tag, respecting double-quoted attribute values.
@@ -762,6 +911,133 @@ mod tests {
                 len = history.len()
             );
         }
+    }
+
+    #[test]
+    fn the_parsed_documents_include_a_bookmark_without_a_time() {
+        // The map `read_at` reads keeps only paths that carry a time, and its caller only asks for a
+        // date. The suggestion producer asks a different question — is this a document I should
+        // offer? — so the parsed history has to answer with the path even when no moment was
+        // recorded for it, and say honestly that the moment is unknown.
+        let (_directory, path) = write_history(
+            "<xbel>\n\
+             <bookmark href=\"file:///data/dated.pdf\" \
+             visited=\"2026-09-08T07:06:05.000000Z\"/>\n\
+             <bookmark href=\"file:///data/undated.pdf\" added=\"2024-03-01T10:11:12.123456Z\"/>\n\
+             </xbel>\n",
+        );
+
+        let history = RecentDocuments::read(&path).expect("read the fixture");
+        let documents = history.documents();
+        assert_eq!(documents.len(), 2, "both bookmarks are documents");
+        assert_eq!(documents[0].path, Path::new("/data/dated.pdf"));
+        assert_eq!(documents[0].last_used_unix, Some(1_788_851_165));
+        assert_eq!(documents[1].path, Path::new("/data/undated.pdf"));
+        assert_eq!(
+            documents[1].last_used_unix, None,
+            "unknown is None, never 1970"
+        );
+
+        // And the narrower answer is unchanged by the wider one existing.
+        assert_eq!(history.read_at(Path::new("/data/undated.pdf")), None);
+    }
+
+    #[test]
+    fn a_bookmark_records_whether_it_typed_the_document_as_a_pdf() {
+        // GTK writes the type one level down, inside the bookmark element, which is why the parser
+        // has to keep the element body and not only the opening tag. A writer that puts the same
+        // name on the tag is honoured too.
+        let (_directory, path) = write_history(
+            "<xbel>\n\
+             <bookmark href=\"file:///data/typed-by-element.bin\" visited=\"2026-09-08T07:06:05.000000Z\">\n\
+             <info><metadata owner=\"http://freedesktop.org\">\n\
+             <mime:mime-type type=\"application/pdf\"/>\n\
+             </metadata></info>\n\
+             </bookmark>\n\
+             <bookmark href=\"file:///data/typed-by-attribute.pdf\" \
+             mime:mime-type=\"Application/PDF; charset=binary\" \
+             visited=\"2026-09-08T07:06:05.000000Z\"/>\n\
+             <bookmark href=\"file:///data/a-text-file.txt\" visited=\"2026-09-08T07:06:05.000000Z\">\n\
+             <info><metadata owner=\"http://freedesktop.org\">\n\
+             <mime:mime-type type=\"text/plain\"/>\n\
+             </metadata></info>\n\
+             </bookmark>\n\
+             <bookmark href=\"file:///data/untyped.pdf\" visited=\"2026-09-08T07:06:05.000000Z\"/>\n\
+             </xbel>\n",
+        );
+
+        let history = RecentDocuments::read(&path).expect("read the fixture");
+        let recorded: Vec<(PathBuf, bool)> = history
+            .documents()
+            .iter()
+            .map(|entry| (entry.path.clone(), entry.recorded_as_pdf))
+            .collect();
+
+        assert_eq!(
+            recorded,
+            vec![
+                (PathBuf::from("/data/typed-by-element.bin"), true),
+                (PathBuf::from("/data/typed-by-attribute.pdf"), true),
+                (PathBuf::from("/data/a-text-file.txt"), false),
+                // The extension is the platform layer's half of the rule: the parser reports what
+                // was recorded and nothing else.
+                (PathBuf::from("/data/untyped.pdf"), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn one_path_named_twice_is_one_document_with_the_newest_time_and_the_pdf_type() {
+        // The same file opened once through its mime-typed bookmark and once through a plain one is
+        // still one document: two entries would make the queue offer it twice.
+        let (_directory, path) = write_history(
+            "<xbel>\n\
+             <bookmark href=\"file:///data/twice.pdf\" visited=\"2026-09-08T07:06:05.000000Z\">\n\
+             <info><metadata owner=\"http://freedesktop.org\">\n\
+             <mime:mime-type type=\"application/pdf\"/>\n\
+             </metadata></info>\n\
+             </bookmark>\n\
+             <bookmark href=\"file:///data/twice.pdf\" visited=\"2026-09-09T07:06:05.000000Z\"/>\n\
+             </xbel>\n",
+        );
+
+        let history = RecentDocuments::read(&path).expect("read the fixture");
+        assert_eq!(history.documents().len(), 1);
+        assert_eq!(history.documents()[0].last_used_unix, Some(1_788_937_565));
+        assert!(history.documents()[0].recorded_as_pdf);
+        assert_eq!(history.len(), 2, "both bookmarks were parsed");
+    }
+
+    #[test]
+    fn a_bookmark_that_was_never_closed_does_not_borrow_the_next_ones_type() {
+        // Malformed content costs the entries it contains, and must not label one document with
+        // another's recorded type: that would send the reader a `.bin` file the history only ever
+        // typed on the next line.
+        let (_directory, path) = write_history(
+            "<xbel>\n\
+             <bookmark href=\"file:///data/unclosed.bin\" visited=\"2026-09-08T07:06:05.000000Z\">\n\
+             <bookmark href=\"file:///data/typed.pdf\" visited=\"2026-09-08T07:06:05.000000Z\">\n\
+             <info><metadata owner=\"http://freedesktop.org\">\n\
+             <mime:mime-type type=\"application/pdf\"/>\n\
+             </metadata></info>\n\
+             </bookmark>\n\
+             </xbel>\n",
+        );
+
+        let history = RecentDocuments::read(&path).expect("read the fixture");
+        let recorded: Vec<(PathBuf, bool)> = history
+            .documents()
+            .iter()
+            .map(|entry| (entry.path.clone(), entry.recorded_as_pdf))
+            .collect();
+
+        assert_eq!(
+            recorded,
+            vec![
+                (PathBuf::from("/data/unclosed.bin"), false),
+                (PathBuf::from("/data/typed.pdf"), true),
+            ]
+        );
     }
 
     #[test]
