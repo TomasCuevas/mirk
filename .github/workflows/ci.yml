@@ -153,9 +153,13 @@ jobs:
     # `#[cfg(target_os = ...)]` that stops compiling is exactly the breakage that reaches `main`
     # unnoticed, because nobody here builds on Windows or macOS. This job buys that and nothing else.
     #
-    # No pdfium is fetched: `pdfium-render` loads the library at runtime, so `cargo check` never needs
-    # it. No system dependencies are installed either — Tauri uses WebView2 on Windows and the system
-    # WebKit on macOS, and neither is a build-time requirement for a type check.
+    # No pdfium is FETCHED: `pdfium-render` loads the library at runtime, so `cargo check` never needs the
+    # real thing. But `tauri-build` validates `bundle.resources` in the build script, before any Rust code
+    # runs, and a glob that matches no file is an error — so the directory has to exist even here. The
+    # first run of this job failed exactly that way (L10), which is the job earning its minutes.
+    #
+    # No system dependencies are installed either: Tauri uses WebView2 on Windows and the system WebKit on
+    # macOS, and neither is a build-time requirement for a type check.
     name: compile (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -173,6 +177,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
+
+      # `shell: bash` because this has to work on all three runners, and Windows defaults to PowerShell.
+      - name: Placeholder so the bundled-resource glob matches
+        shell: bash
+        run: mkdir -p vendor/pdfium/lib && touch vendor/pdfium/lib/placeholder
 
       - name: cargo check --workspace
         run: cargo check --workspace

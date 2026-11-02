@@ -369,3 +369,24 @@ versión sin la otra feature, y la otra entra en su propio commit.
 TAMAÑO DE LA RAMA, dicho sin adorno: **53.583 líneas autoradas en 146 commits** desde `main`. El lector eligió
 merge directo a `main` y etiqueta, así que la entrega no pasa por un PR; queda anotado porque es el número que un
 revisor vería de una vez.
+
+**L10 — el primer CI de la rama encontró el defecto que el job existía para encontrar.**
+
+La corrida real sobre `main` (run **41507917349**, 3m 13s): `rust`, `web` y `capture` en verde; `compile
+(macos-latest)` y `compile (windows-latest)` en rojo, los dos con la misma línea:
+
+```
+glob pattern ../../vendor/pdfium/lib/* path not found or didn't match any files.
+```
+
+La causa no era el updater ni el código por plataforma: `tauri-build` valida `bundle.resources` en el **build
+script**, antes de compilar nada, y un glob sin coincidencias es un error. El razonamiento con el que se armó el
+job —"`cargo check` nunca necesita pdfium"— es verdad sobre la librería, que se abre en runtime, y falso sobre el
+manifiesto que la empaqueta. Este era exactamente el residual que L5 dejó anotado como *razonado y no ejecutado*:
+rompió en la primera corrida, que es para lo que el job existe.
+
+El arreglo es un archivo marcador que el job crea en el runner (`vendor/pdfium/lib/placeholder`, gitignored): hace
+que el glob coincida sin pagar 8 MB por runner. Medido localmente en las dos direcciones, moviendo `libpdfium.so`
+fuera del camino y forzando el build script con un `touch`: sin nada en el directorio aparece el error; con el
+marcador, `cargo check -p mirk-desktop` sale **0**. Y un detalle que casi se pasa: el nombre **no** puede empezar
+con punto — el crate `glob` no matchea dotfiles con `*`, así que un `.keep` no habría servido.
