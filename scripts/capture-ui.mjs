@@ -12,6 +12,11 @@
  * `window.__TAURI_INTERNALS__` before the app boots. `web/src/lib/tauri.ts` forwards every call to
  * that object and is left untouched: the seed lives here, not in the application.
  *
+ * The default capture is the layout the application opens with when nothing is stored: full screen
+ * (`layout::DEFAULT_LAYOUT`). A windowed preset is captured by naming it, because judging the grid
+ * each one pins is the point of `--layout`; the narrowest window is not the shape a first launch
+ * shows, so it is not the default.
+ *
  * Usage:
  *   node scripts/capture-ui.mjs                 # start the dev server if needed, capture, exit
  *   node scripts/capture-ui.mjs --out /tmp/ux  # choose the output directory
@@ -19,7 +24,8 @@
  *   node scripts/capture-ui.mjs --layout columns-4
  *                                              # the size that layout names, and its grid
  *
- * Exit code is non-zero when the page threw: a screenshot of a crashed page is not evidence.
+ * Exit code is non-zero when the page threw or logged a console error: a screenshot of a crashed
+ * page, or of one whose data never loaded, is not evidence about design.
  */
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -56,7 +62,7 @@ const LAYOUTS = {
   auto: { width: 1440, height: 900 },
 };
 
-const LAYOUT = value("--layout", "columns-2");
+const LAYOUT = value("--layout", "auto");
 if (!(LAYOUT in LAYOUTS)) {
   console.error(`--layout must be one of ${Object.keys(LAYOUTS).join(", ")}, not "${LAYOUT}"`);
   process.exit(2);
@@ -64,6 +70,17 @@ if (!(LAYOUT in LAYOUTS)) {
 
 /** The window being captured: the chosen layout's size at device scale factor 2. */
 const WINDOW = { ...LAYOUTS[LAYOUT], deviceScaleFactor: 2 };
+
+/**
+ * The windowed layout the window comes back to, mirroring `layout::preset` (S3 of
+ * `odd/tasks/window-layout.md`).
+ *
+ * It is a second answer beside the layout and the app asks for both at startup: the layout says what
+ * the window is now, `auto` included, and the preset says which rows a window leaving full screen
+ * returns to. Full screen is never a preset, so a capture taken there seeds three per row — the
+ * process's own answer when nothing usable is stored.
+ */
+const PRESET = LAYOUT === "auto" ? "columns-3" : LAYOUT;
 
 /** One entry per screen the navbar can reach, in the order a reader meets them. */
 const SCREENS = [
@@ -133,6 +150,36 @@ const entries = BOOKS.map(({ id, title, authors, pages, fraction, hue }, index) 
 const covers = Object.fromEntries(BOOKS.map(({ id, title, hue }) => [id, cover(title, hue)]));
 
 /**
+ * The queue the suggestions screen shows, so that screen is captured with cards rather than with its
+ * empty state (S1 of `odd/tasks/suggestions-screen.md`).
+ *
+ * The paths are separate from `BOOKS` on purpose: a suggestion is a document *outside* the library, and
+ * reusing a library path would draw a card the application would never show there. `historyAt` carries
+ * the moment the desktop's history recorded, which is what the screen orders by (S4); the second entry
+ * has none, because"no source said when" is a fact the screen has to render too.
+ */
+const SUGGESTIONS = [
+  { id: 1, path: "/home/tomas-cuevas/Books/cita-con-rama.pdf", seenCount: 2, firstSeenAt: now - 5 * DAY, historyAt: now - DAY },
+  { id: 2, path: "/home/tomas-cuevas/Books/el-mundo-y-sus-demonios.pdf", seenCount: 1, firstSeenAt: now - 3 * DAY, historyAt: now - 3 * DAY },
+  { id: 3, path: "/home/tomas-cuevas/Books/historia-del-pensamiento.pdf", seenCount: 1, firstSeenAt: now - DAY, historyAt: null },
+];
+
+/** A cover per suggested document, keyed by the path the screen asks with. */
+const suggestionCovers = Object.fromEntries(
+  SUGGESTIONS.map(({ path }, index) => [
+    path,
+    cover(
+      path
+        .split("/")
+        .pop()
+        .replace(/\.pdf$/i, "")
+        .replace(/-/g, " "),
+      190 + index * 45,
+    ),
+  ]),
+);
+
+/**
  * The object `@tauri-apps/api` calls into, defined before the app boots.
  *
  * `invoke` is the only method the app actually reaches at startup, but `transformCallback` and
@@ -142,22 +189,33 @@ const covers = Object.fromEntries(BOOKS.map(({ id, title, hue }) => [id, cover(t
 const SEED = `
 (() => {
   const covers = ${JSON.stringify(covers)};
+  const suggestionCovers = ${JSON.stringify(suggestionCovers)};
   const answers = {
     "get_language": "en",
     "get_window_layout": ${JSON.stringify(LAYOUT)},
+    "get_window_preset": ${JSON.stringify(PRESET)},
     "list_library": ${JSON.stringify(entries)},
     "progress_providers": [
       { id: "native", capability: "position", availability: "available" },
       { id: "evince-gvfs", capability: "position", availability: "unavailable" }
     ],
     "watched_folders": [{ id: 1, path: "/home/tomas-cuevas/Books", documents: ${entries.length} }],
-    "list_suggestions": [],
+    "list_suggestions": ${JSON.stringify(SUGGESTIONS)},
+    // The app asks the desktop's history once per run, before the first queue read (S10). Without an
+    // answer the capture logs "unmocked command" and exits non-zero, which is the point of the gate.
+    "observe_recent_documents": ${SUGGESTIONS.length},
     "plugin:event|listen": 1,
     "plugin:event|unlisten": null,
   };
   window.__TAURI_INTERNALS__ = {
     invoke: (command, args) => {
       if (command === "document_cover") return Promise.resolve(covers[args && args.id] ?? null);
+      // The card asks with args.path; the command's own parameter is named document. Accepting both means
+      // a rename on either side leaves the capture drawing covers instead of a wall of placeholders, and a
+      // placeholder that looks plausible is exactly what a capture is supposed to catch. (No backticks in
+      // this block: the whole seed is one template literal, and a backtick here ends it.)
+      if (command === "suggestion_cover")
+        return Promise.resolve(suggestionCovers[args && (args.path ?? args.document)] ?? null);
       if (command in answers) return Promise.resolve(answers[command]);
       return Promise.reject(new Error("capture-ui: unmocked command " + command));
     },
@@ -453,6 +511,14 @@ async function main() {
   const windowScreen = await captureScreen(cdp, "settings-window", WINDOW.height);
   manifest.screens["settings-window"] = windowScreen.map((f) => f.slice(OUT.length + 1));
   console.log(`  settings-window: ${windowScreen.length} capture(s)`);
+
+  // S1 of `odd/tasks/suggestions-screen.md`: the queue is a view of its own with no navbar entry, so it
+  // is captured by its address — the same hash a reload or a Back lands on.
+  await cdp.evaluate(`window.location.hash = "#/suggestions"`);
+  await sleep(600);
+  const queue = await captureScreen(cdp, "suggestions", WINDOW.height);
+  manifest.screens["suggestions"] = queue.map((f) => f.slice(OUT.length + 1));
+  console.log(`  suggestions: ${queue.length} capture(s)`);
 
   await goTo(cdp, "Home"); // leave the app where a reader starts
 

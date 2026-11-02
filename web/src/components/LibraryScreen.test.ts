@@ -8,7 +8,12 @@ import type { WindowLayout } from "../lib/window";
 const english = translate("en");
 
 function libraryProps(
-  overrides: { entries?: LibraryEntry[]; inFlight?: boolean; layout?: WindowLayout } = {},
+  overrides: {
+    entries?: LibraryEntry[];
+    inFlight?: boolean;
+    layout?: WindowLayout;
+    suggestionsCount?: number | null;
+  } = {},
 ) {
   return {
     entries: [] as LibraryEntry[],
@@ -20,9 +25,51 @@ function libraryProps(
     onOpenFolder: () => {},
     onOpenDocument: () => {},
     onResetScroll: () => {},
+    suggestionsCount: null as number | null,
+    onOpenSuggestions: () => {},
     ...overrides,
   };
 }
+
+/**
+ * S8 of `odd/tasks/suggestions-screen.md`: the queue is reached from Biblioteca, and the access carries
+ * how much is waiting. Three states, three sentences — `null` is "the queue has not answered yet", and
+ * telling the reader there is nothing to review before the answer arrives is claiming something the
+ * screen does not know.
+ */
+describe("the way to the suggestions queue (S8)", () => {
+  it("claims nothing while the queue has not answered", () => {
+    const { body } = render(LibraryScreen, { props: libraryProps({ suggestionsCount: null }) });
+
+    expect(body).toContain(english("library.suggestions"));
+    expect(body).not.toContain(english("library.suggestionsNone"));
+  });
+
+  it("says there is nothing to review when the queue is empty", () => {
+    const { body } = render(LibraryScreen, { props: libraryProps({ suggestionsCount: 0 }) });
+
+    expect(body).toContain(english("library.suggestionsNone"));
+  });
+
+  it("carries the count when there is something to decide, as a real button", () => {
+    const { body } = render(LibraryScreen, { props: libraryProps({ suggestionsCount: 3 }) });
+
+    expect(body).toContain(english("library.suggestionsPending", { count: 3 }));
+    // A button, so the keyboard reaches the same action the pointer does.
+    expect(body).toMatch(/<button[^>]*class="suggestions-entry\b/);
+  });
+
+  // L10, the reader's report: "No me gusta que ocupe toda una fila el solo". The screen is a flex column,
+  // so a bare button stretches to the full width; inside the title row it keeps its own size. This is a
+  // structural assertion on purpose — the defect WAS structural, and no text change could have shown it.
+  it("keeps the action inside the title row, never on a row of its own", () => {
+    const { body } = render(LibraryScreen, { props: libraryProps({ suggestionsCount: 2 }) });
+
+    expect(body).toMatch(/class="title-row[\s\S]*suggestions-entry/);
+    // The heading and the count stay in the same row, on the other side of the action.
+    expect(body).toMatch(/class="title-text[\s\S]*<h1/);
+  });
+});
 
 /** One document with a recorded reading, which is what puts a card in the grid. */
 function entry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {

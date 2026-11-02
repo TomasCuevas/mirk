@@ -50,12 +50,14 @@ export function hashForScreen(screen: Screen): string {
 
 /**
  * A hash-named view: one of the navbar screens, one home category's list on a screen of its own (B2),
- * or one of Ajustes' sub-screens (R43/S2).
+ * one of Ajustes' sub-screens (R43/S2), or the suggestions screen (S1 of
+ * `odd/tasks/suggestions-screen.md`).
  */
 export type View =
   | { readonly kind: "screen"; readonly screen: Screen }
   | { readonly kind: "category"; readonly category: HomeCategory }
-  | { readonly kind: "settings"; readonly section: SettingsSection };
+  | { readonly kind: "settings"; readonly section: SettingsSection }
+  | { readonly kind: "suggestions" };
 
 /**
  * The sections Ajustes is an index of (R43/S1, plus S5 of `odd/tasks/window-layout.md`).
@@ -81,6 +83,14 @@ export function isSettingsSection(value: string): value is SettingsSection {
 }
 
 /**
+ * The hash the suggestions screen answers to (S1).
+ *
+ * It is its own address and not a flag on Biblioteca, so a reload — or a link the reader keeps — lands on
+ * the queue rather than on the library, exactly as a home category and an Ajustes sub-screen already do.
+ */
+const SUGGESTIONS_HASH = "suggestions";
+
+/**
  * The view a hash names, defaulting to Inicio.
  *
  * A category list is a screen of its own rather than a flag on Inicio (B2), so a reload or a shared
@@ -91,9 +101,18 @@ export function isSettingsSection(value: string): value is SettingsSection {
  * different on purpose: an unknown category belongs to a screen the reader did not ask for, while an
  * unknown sub-screen belongs to Ajustes — so it lands on the index, with the three choices in front of
  * them, rather than on Inicio.
+ *
+ * The suggestions screen is neither a navbar screen nor a child of one in the type's own terms: it is
+ * reached from Biblioteca (S8) but it is not a view OF Biblioteca's listing, so it gets its own kind
+ * rather than a category-like seat inside `screens` — which would have made it a fourth navbar entry,
+ * the thing S8 refuses.
  */
 export function viewFromHash(hash: string): View {
   const name = hashName(hash);
+
+  if (name === SUGGESTIONS_HASH) {
+    return { kind: "suggestions" };
+  }
 
   const categoryPrefix = "category/";
   if (name.startsWith(categoryPrefix)) {
@@ -123,16 +142,21 @@ export function hashForView(view: View): string {
   if (view.kind === "settings") {
     return `#/settings/${view.section}`;
   }
+  if (view.kind === "suggestions") {
+    return `#/${SUGGESTIONS_HASH}`;
+  }
   return hashForScreen(view.screen);
 }
 
 /**
  * The navbar destination a view belongs to.
  *
- * A category list belongs to Inicio and a settings sub-screen belongs to Ajustes, so the navbar keeps
- * that destination marked while the reader is inside one rather than marking nothing — which would
- * leave them with no answer to "where am I". The rule lives here, once, because it is the same rule
- * for every kind of view and a screen must not carry its own version of it.
+ * A category list belongs to Inicio, a settings sub-screen belongs to Ajustes, and the suggestions queue
+ * belongs to Biblioteca — which is the screen it is reached from (S8) — so the navbar keeps that
+ * destination marked while the reader is inside one rather than marking nothing, which would leave them
+ * with no answer to "where am I". The rule lives here, once, because it is the same rule for every kind
+ * of view and a screen must not carry its own version of it. Because Biblioteca is what stays marked,
+ * the suggestions screen is not a fourth navbar entry: the bar still has three.
  */
 export function navbarScreen(view: View): Screen {
   switch (view.kind) {
@@ -140,6 +164,8 @@ export function navbarScreen(view: View): Screen {
       return "home";
     case "settings":
       return "settings";
+    case "suggestions":
+      return "library";
     case "screen":
       return view.screen;
   }

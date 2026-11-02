@@ -62,6 +62,7 @@
   import SettingsLibraryScreen from "./components/SettingsLibraryScreen.svelte";
   import SettingsReadingScreen from "./components/SettingsReadingScreen.svelte";
   import SettingsWindowScreen from "./components/SettingsWindowScreen.svelte";
+  import SuggestionsScreen from "./components/SuggestionsScreen.svelte";
   import WindowBar from "./components/WindowBar.svelte";
 
   const inTauri = runningInTauri();
@@ -110,7 +111,27 @@
   // L56. `null` until the store answers, for the same reason as the providers and the folders: "still
   // checking" and "nothing is waiting for a decision" are different facts, and the section says which.
   let suggestions = $state<Suggestion[] | null>(null);
-  let suggestionError = $state<string | null>(null);
+  /**
+   * The queue itself could not be read. It is its own state, and therefore its own sentence, because a read
+   * that failed is not a decision that was attempted: the panel and the suggestions screen used to share one
+   * sentence whose words claim a decision was not recorded, which is false about a read.
+   */
+  let suggestionReadError = $state<string | null>(null);
+  /**
+   * A decision the reader made was not recorded. Separate from the read failure above for the same reason,
+   * mirrored: this one IS about a decision, and it keeps the sentence that says so.
+   */
+  let suggestionDecisionError = $state<string | null>(null);
+  /**
+   * The desktop's own history could not be read this run (S10 of `odd/tasks/suggestions-screen.md`).
+   *
+   * Its own state rather than a second meaning for `suggestionReadError`, because it is a fact about the
+   * SOURCE and not about the queue: the queue may still hold what earlier runs found, and the screen says
+   * so beside the list rather than instead of it. It is also why `NotSupported` stays distinguishable from
+   * "nothing is waiting" — this stays the failure, and the detector belief stays the claim about the machine
+   * (L61 of `odd/tasks/pdf-progress-tracker.md`).
+   */
+  let historyError = $state<string | null>(null);
   /** Four beliefs, not a flag: only "unsupported" is a permanent fact about the machine (L63). */
   let detector = $state<DetectorBelief>("unknown");
   // True while a decision is being recorded, so neither button can be pressed twice — the backend
@@ -289,12 +310,57 @@
 
   async function loadSuggestions(): Promise<void> {
     void loadSuggestionCapability();
-    suggestionError = null;
+    suggestionReadError = null;
+    // A fresh read of the queue is a fresh answer about it, so it also supersedes the previous cycle's
+    // sentence about a decision that was not recorded. That was the single state's old lifecycle — the read
+    // cleared it — and keeping it would strand the reader on a failure sentence with the list still hidden.
+    suggestionDecisionError = null;
     try {
       suggestions = await invoke<Suggestion[]>("list_suggestions");
     } catch (error) {
-      suggestionError = String(error);
+      suggestionReadError = String(error);
     }
+  }
+
+  /**
+   * Reads the desktop's history of recently opened documents, exactly once per run.
+   *
+   * **Once, at startup, and never on the poll.** Every read registers what the history names, so a read per
+   * tick would inflate `seen_count` for every document already waiting and re-walk an unchanged file — it
+   * would be the interface inventing evidence that the reader opened something again. The queue itself is
+   * re-read every interval, as it always was: what the store holds can change without the history changing
+   * (a decision made, a document added elsewhere).
+   *
+   * A failure is a real answer and it is kept in `historyError`, where the suggestions screen shows it. It
+   * is not a rejection dressed as an empty queue: nothing here clears the queue on failure, so a list that
+   * could not be refreshed still renders what was already read.
+   *
+   * **The command's return value is deliberately dropped.** It is a `usize`, and that number is a diagnostic
+   * of that pass — not the size of the queue: a path whose suggestion was already decided still spends one
+   * unit of the pass's internal window and is counted as recorded even though the store leaves the row
+   * untouched (T1b). A badge built from it would overcount, so the count the reader sees comes from
+   * `list_suggestions`, which is the only thing that knows what is still pending. Invoking the command is
+   * how the history gets INTO the queue; reading the queue is how the count is known.
+   */
+  async function observeRecentDocuments(): Promise<void> {
+    try {
+      await invoke("observe_recent_documents");
+      historyError = null;
+    } catch (error) {
+      historyError = String(error);
+    }
+  }
+
+  /**
+   * The one way the queue is filled at startup: the history is read FIRST, and the queue second.
+   *
+   * The order is the whole point. A queue read before the history would draw the state that preceded this
+   * run and then correct itself a moment later — and the reader would briefly be told there is nothing to
+   * decide by a screen that had not yet asked.
+   */
+  async function loadSuggestionQueue(): Promise<void> {
+    await observeRecentDocuments();
+    await loadSuggestions();
   }
 
   /**
@@ -318,7 +384,7 @@
   }
 
   async function decideSuggestion(id: number, accept: boolean): Promise<void> {
-    suggestionError = null;
+    suggestionDecisionError = null;
     deciding = true;
     const command = accept ? "accept_suggestion" : "discard_suggestion";
     const [settled] = await Promise.allSettled([invoke(command, { id })]);
@@ -326,7 +392,7 @@
 
     const outcome = suggestionOutcome(settled, id);
     if (outcome.kind === "failed") {
-      suggestionError = outcome.message;
+      suggestionDecisionError = outcome.message;
       return;
     }
 
@@ -448,6 +514,16 @@
   function selectScreen(next: Screen): void {
     view = { kind: "screen", screen: next };
     window.location.hash = hashForScreen(next);
+  }
+
+  // S8 of `odd/tasks/suggestions-screen.md`: the queue is reached from Biblioteca, and it is a view
+  // of its own with a hash like every other destination — so Back returns to the library and a reload
+  // lands on the queue instead of dropping it. The bar keeps marking Biblioteca (L72's rule): the
+  // queue is part of the library's business, not a fourth destination.
+  function openSuggestions(): void {
+    const next: View = { kind: "suggestions" };
+    view = next;
+    window.location.hash = hashForView(next);
   }
 
   // B2: a carousel's button opens that category's full list on a screen of its own.
@@ -576,7 +652,8 @@
       void loadLibrary();
       void loadProviders();
       void loadFolders();
-      void loadSuggestions();
+      // S10/T2: the history is read once, before the first queue read, and never again this run.
+      void loadSuggestionQueue();
       // R28: the same interval keeps the listing current, and it starts with the application rather than
       // with a screen, because the listing is what the screens receive. Outside the shell there is no store
       // to re-read, so the clock does not start.
@@ -584,7 +661,8 @@
         void refreshLibrary();
         // The queue fills itself in the desktop process, so the same interval is what keeps the
         // section current — otherwise a document the reader opened in their viewer would sit unseen
-        // until something else happened to re-read it.
+        // until something else happened to re-read it. Only the QUEUE is re-read here: the history was
+        // read once at startup, because asking again would register the same files a second time.
         void loadSuggestions();
       });
       void listen<string>(OPEN_SCREEN_EVENT, (screen) => {
@@ -701,23 +779,38 @@
         onOpenFolder={openContainingFolder}
         onOpenDocument={openDocument}
         onResetScroll={resetScroll}
+        suggestionsCount={suggestions === null ? null : suggestions.length}
+        onOpenSuggestions={openSuggestions}
+      />
+    {:else if view.kind === "suggestions"}
+      <!-- S1 of `odd/tasks/suggestions-screen.md`: the queue on a screen of its own, reached by hash like
+           every other view. It is not a navbar entry: the bar keeps marking Biblioteca while it is open,
+           because that is where it is entered from (`navbarScreen`). -->
+      <SuggestionsScreen
+        {suggestions}
+        readError={suggestionReadError}
+        decisionError={suggestionDecisionError}
+        {historyError}
+        {detector}
+        {deciding}
+        {locale}
+        layout={windowLayout}
+        {t}
+        onDecide={decideSuggestion}
+        onOpenFolder={openSuggestionFolder}
+        onResetScroll={resetScroll}
+        onBack={() => selectScreen("library")}
       />
     {:else if view.kind === "settings" && view.section === "library"}
       <SettingsLibraryScreen
         {folders}
         {foldersError}
-        {suggestions}
-        {detector}
-        {suggestionError}
-        {deciding}
         {t}
         {scanning}
         {scanReport}
         {scanError}
         onScan={scan}
         onOpenFolder={openFolder}
-        onOpenDocument={openSuggestionFolder}
-        onDecide={decideSuggestion}
         {removal}
         onAskRemoval={askRemoval}
         onConfirmRemoval={confirmRemoval}

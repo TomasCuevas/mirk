@@ -107,6 +107,9 @@ recorded is not claimed here.",
   // Only when there is something hidden by a filter or a page: "42 of 42" is arithmetic, not information.
   "library.countAll": "{total} documents",
   "library.pagination": "Pages",
+  "library.suggestions": "Suggestions",
+  "library.suggestionsPending": "Suggestions: {count}",
+  "library.suggestionsNone": "No suggestions to review",
   "library.page": "Page {page}",
   "library.pagePosition": "Page {page} of {pages}",
   "library.previousPage": "Previous page",
@@ -186,9 +189,8 @@ recorded is not claimed here.",
   "settings.back": "Settings",
   "settings.backLabel": "Back to Settings",
   "settings.library.title": "Library",
-  "settings.library.summary": "The folders Mirk reads, the review queue and scanning.",
-  "settings.library.purpose":
-    "What Mirk watches, what it found you reading elsewhere, and how to add a folder.",
+  "settings.library.summary": "The folders Mirk reads, and scanning.",
+  "settings.library.purpose": "What Mirk watches, and how to add a folder.",
   "settings.reading.title": "Reading",
   "settings.reading.summary": "Where Mirk can read your position from.",
   "settings.reading.purpose":
@@ -244,8 +246,8 @@ recorded is not claimed here.",
   "capability.none": "no reading position",
 
   "suggestion.heading": "Suggestions",
-  "suggestion.definition":
-    "Documents Mirk saw you open that are not in the library yet. Nothing is added until you decide.",
+  "suggestions.back": "Library",
+  "suggestions.backLabel": "Back to the library",
   "suggestion.loading": "Checking for documents opened outside Mirk…",
   "suggestion.openFolder": "Open the folder that holds {path}",
   "suggestion.noDetector":
@@ -254,7 +256,25 @@ recorded is not claimed here.",
   "suggestion.acceptLabel": "Add {path} to the library",
   "suggestion.discardLabel": "Discard the suggestion for {path}",
   "suggestion.error": "The decision could not be recorded: {message}",
-  "suggestion.deciding": "Recording the decision…",
+  // T4: the queue read failed is not a decision that was attempted, and saying so would be false. The two
+  // failures are two facts, so they are two sentences — the panel and the screen used to share this one.
+  "suggestion.readError": "The suggestions could not be read: {message}",
+
+  // S1–S3, S5 of `odd/tasks/suggestions-screen.md`: the sentence the suggestions screen adds around the
+  // queue it already had words for. The definitions above are reused verbatim — one queue, one way of
+  // describing it — so what is new here is only what the screen itself needs: its search field, its
+  // order, its count, its pager and the two failures that can keep it from filling.
+  "suggestions.filterLabel": "Search",
+  "suggestions.filterPlaceholder": "Title or path",
+  "suggestions.sortLabel": "Order",
+  "suggestions.sort.recent": "Most recently opened first",
+  "suggestions.sort.oldest": "Least recently opened first",
+  "suggestions.sort.title": "Title",
+  "suggestions.countAll": "{total} suggestions",
+  "suggestions.pagination": "Suggestion pages",
+  "suggestions.noMatches": "No suggestion matches “{query}”.",
+  "suggestions.historyError":
+    "The documents the desktop remembered opening could not be read: {message}",
 
   "scan.heading": "Scan a folder",
   "scan.choose": "Choose folder",
@@ -337,6 +357,9 @@ fuente registró nunca no se listan acá.",
   "library.count": "{shown} de {total}",
   "library.countAll": "{total} documentos",
   "library.pagination": "Páginas",
+  "library.suggestions": "Sugerencias",
+  "library.suggestionsPending": "Sugerencias: {count}",
+  "library.suggestionsNone": "No hay sugerencias para revisar",
   "library.page": "Página {page}",
   "library.pagePosition": "Página {page} de {pages}",
   "library.previousPage": "Página anterior",
@@ -407,9 +430,8 @@ fuente registró nunca no se listan acá.",
   "settings.back": "Ajustes",
   "settings.backLabel": "Volver a Ajustes",
   "settings.library.title": "Biblioteca",
-  "settings.library.summary": "Carpetas vigiladas, cola de sugerencias y escaneo.",
-  "settings.library.purpose":
-    "Qué vigila Mirk, qué le vio leyendo en otro lado y cómo agregar una carpeta.",
+  "settings.library.summary": "Carpetas vigiladas y escaneo.",
+  "settings.library.purpose": "Qué vigila Mirk y cómo agregar una carpeta.",
   "settings.reading.title": "Lectura",
   "settings.reading.summary": "De dónde puede leer Mirk su posición.",
   "settings.reading.purpose":
@@ -461,8 +483,8 @@ fuente registró nunca no se listan acá.",
   "capability.none": "ninguna posición de lectura",
 
   "suggestion.heading": "Sugerencias",
-  "suggestion.definition":
-    "Documentos que Mirk vio abiertos y que todavía no están en la biblioteca. Nada se agrega hasta que usted decida.",
+  "suggestions.back": "Biblioteca",
+  "suggestions.backLabel": "Volver a la biblioteca",
   "suggestion.loading": "Buscando documentos abiertos fuera de Mirk…",
   "suggestion.openFolder": "Abrir la carpeta que contiene {path}",
   "suggestion.noDetector":
@@ -471,7 +493,19 @@ fuente registró nunca no se listan acá.",
   "suggestion.acceptLabel": "Agregar {path} a la biblioteca",
   "suggestion.discardLabel": "Descartar la sugerencia de {path}",
   "suggestion.error": "No se pudo registrar la decisión: {message}",
-  "suggestion.deciding": "Registrando la decisión…",
+  "suggestion.readError": "No se pudieron leer las sugerencias: {message}",
+
+  "suggestions.filterLabel": "Buscar",
+  "suggestions.filterPlaceholder": "Título o ruta",
+  "suggestions.sortLabel": "Orden",
+  "suggestions.sort.recent": "Abiertos más recientemente primero",
+  "suggestions.sort.oldest": "Abiertos hace más tiempo primero",
+  "suggestions.sort.title": "Título",
+  "suggestions.countAll": "{total} sugerencias",
+  "suggestions.pagination": "Páginas de sugerencias",
+  "suggestions.noMatches": "Ninguna sugerencia coincide con «{query}».",
+  "suggestions.historyError":
+    "No se pudieron leer los documentos que el escritorio recordaba haber abierto: {message}",
 
   "scan.heading": "Escanear una carpeta",
   "scan.choose": "Elegir carpeta",

@@ -30,6 +30,8 @@
     onOpenFolder,
     onOpenDocument,
     onResetScroll,
+    suggestionsCount,
+    onOpenSuggestions,
   }: {
     entries: LibraryEntry[];
     inFlight: boolean;
@@ -50,6 +52,17 @@
      * wherever page one was scrolled to, which is the report that opened this round.
      */
     onResetScroll: () => void;
+    /**
+     * How many suggestions are waiting for a decision, or `null` while the queue has not answered.
+     *
+     * The three states are three sentences on purpose (S8 of `odd/tasks/suggestions-screen.md`): `null`
+     * is "the queue has not answered yet", `0` is "there is genuinely nothing waiting", and a count is
+     * a queue to decide. A screen that says "nothing to review" before the answer arrives is claiming
+     * something it does not know.
+     */
+    suggestionsCount: number | null;
+    /** Opens the suggestions screen, which is a view of its own (§8). */
+    onOpenSuggestions: () => void;
   } = $props();
 
   // Filter, sort and page state is local to the screen, because it is a view of the listing and not a
@@ -100,19 +113,37 @@
 </script>
 
 <section class="screen">
-  <h1>{t("library.heading")}</h1>
+  <!-- S8 (L10): the way to the queue sits BESIDE the title, never on a row of its own. The screen is a
+       flex column, so a bare button stretched across the whole width and read as a banner instead of an
+       action; inside this row it keeps its own size and belongs to the screen it is on. -->
+  <div class="title-row">
+    <div class="title-text">
+      <h1>{t("library.heading")}</h1>
 
-  {#if view !== "loading" && error === null && entries.length > 0}
-    <!-- R15: the count says something only when it says something new. "42 of 42 documents" is
-         arithmetic dressed as information; the whole number is stated once, and the filtered
-         fraction appears only when a filter or a page actually hides documents. It sits under the
-         title, where a subtitle belongs, rather than floating at the end of a row of controls. -->
-    <p class="lede">
-      {paged.total === entries.length
-        ? t("library.countAll", { total: entries.length })
-        : t("library.count", { shown: paged.total, total: entries.length })}
-    </p>
-  {/if}
+      {#if view !== "loading" && error === null && entries.length > 0}
+        <!-- R15: the count says something only when it says something new. "42 of 42 documents" is
+             arithmetic dressed as information; the whole number is stated once, and the filtered
+             fraction appears only when a filter or a page actually hides documents. It sits under the
+             title, where a subtitle belongs, rather than floating at the end of a row of controls. -->
+        <p class="lede">
+          {paged.total === entries.length
+            ? t("library.countAll", { total: entries.length })
+            : t("library.count", { shown: paged.total, total: entries.length })}
+        </p>
+      {/if}
+    </div>
+
+    <!-- It stays reachable when the library itself is empty or failed to load — a reader with nothing in
+         the library is the one who most needs the queue — and stays enabled with zero, because the screen
+         that explains what a suggestion is, is the one that opens. -->
+    <button class="suggestions-entry" type="button" onclick={onOpenSuggestions}>
+      {suggestionsCount === null
+        ? t("library.suggestions")
+        : suggestionsCount === 0
+          ? t("library.suggestionsNone")
+          : t("library.suggestionsPending", { count: suggestionsCount })}
+    </button>
+  </div>
 
   {#if view === "loading"}
     <p class="state">{t("library.loading")}</p>
@@ -330,6 +361,38 @@
   input {
     width: 100%;
     min-width: 0;
+  }
+
+  .title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  /* A long title wraps instead of pushing the action out of the row. */
+  .title-text {
+    min-width: 0;
+  }
+
+  .suggestions-entry {
+    flex: none;
+    margin: 0;
+    padding: 0.4rem 0.7rem;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+  }
+
+  .suggestions-entry:hover {
+    background: var(--brand-mid);
+    color: var(--fg-on-loud);
   }
 
   .pager {

@@ -398,9 +398,9 @@ further down; this block is what a worker reads to know what is done and what is
 - [x] **T7** inotify watcher over watched folders (Linux; per-OS backend later) — done (T7a `8355b2d`, T7b `41e11c6`); specs below
 - [x] **T8** `/proc/*/fd` open-document detector — done (`bfcd234`); Linux backend of axis B
 - [x] **UI slice** the first vertical slice over the store — done (`59f542c`); pulled ahead of T12 and the tray (L13, L15)
-- [ ] **T12** `RecentDocumentsSource` for `recently-used.xbel` — Linux backend of axis A
+- [ ] **T12** `RecentDocumentsSource` for `recently-used.xbel` — Linux backend of axis A; **spec below**, with both tasks **blocked on the verdict L63 left open**: whether the reader's *"que no descubra"* closes this task
 - [x] **T9** Progress provider registry plus Evince GVFS adapter — done (`9bc6d9f`); the first real `ProgressProvider` (`Live`), and the first caller of `Launcher`
-- [ ] **T10, T13–T16** Tray, library and UI, manual override, capabilities screen, suggestion queue
+- [ ] **T10, T13–T16** Tray, library and UI, manual override, capabilities screen, suggestion queue — the tray, the library, the capabilities screen and the queue are **done**; **manual progress override is the one still open**
 
 Still unnumbered, implied by the scope change: first-party reader (pdf.js), i18n scaffolding,
 license + CONTRIBUTING + CI, packaging matrix, in-Tauri webview re-verification.
@@ -635,6 +635,120 @@ panics, and no call blocks longer than one `gio` invocation.
 **Deferred on purpose**: Zathura, Okular and SumatraPDF adapters (separate viewers, separate tasks), and
 any caching layer over `gio` — the trait's per-document shape is what the plan locked, and a cache would
 be a workaround for a cost that is already acceptable at library scale.
+
+
+## Specs — T12 (the desktop's recent-documents history, axis A)
+
+The task list's own line is the requirement: *"**T12** `RecentDocumentsSource` for `recently-used.xbel` —
+Linux backend of axis A"*. Written on 2026-11-02, **after** the parser landed for a different purpose:
+L46 (U14/R30) needed the *reading* time of documents already in the library, so
+`crates/mirk-platform/src/recent.rs` (787 lines, 14 tests) has read this file since then, and
+`crates/mirk-desktop/src/track.rs:141` calls it on every sweep. **T12 is therefore not a parser task.**
+A worker briefed with the stale `TODO(T12)` — *"parse `recently-used.xbel`, keep `application/pdf`
+entries, skip entries whose file no longer exists, and return them newest first"* — would write a
+second parser beside the one that already satisfies half of that sentence. T12 is the **trait's
+surface**: `XbelRecentDocuments::recent` (`crates/mirk-platform/src/linux.rs:268`) still returns
+`NotSupported`, and nothing in the workspace consumes `backends.recent_documents`.
+
+Measured on the reference host before specifying anything: the history is **706 KB** and holds
+**1000** bookmarks — a round number, where Phase 0 measured 4875 in the same file, so the list is
+bounded and old entries leave it. Of those 1000, **991 are `file://`** entries, **34** carry
+`mime:mime-type` `application/pdf`, and **29** of those 34 files still exist. The plan already measured
+that for *progress* this list is the shallower source (17 documents versus Evince's 45). Axis A is not
+a progress source; it answers *what did you open*.
+
+**An open verdict, and it gates the tasks at the bottom of this section.** L63 records a closure in
+the reader's own words: *"que no descubra, puede abrumar al usuario con tantos documentos"*, followed
+by *"La biblioteca sigue siendo lo que el lector eligió vigilar, y nada más"*. Whether that verdict
+covers **this** T12 — the desktop's history, whose list is mostly documents outside the library — or
+only a broader discovery sweep is written nowhere, and the two readings give opposite instructions:
+the first makes this task closed on purpose, the second makes it pending. The mechanism below holds
+either way; what the verdict decides is whether T12a is work to do or work that was deliberately not
+done. It is asked rather than assumed, because reopening a decision the reader already made is worse
+than leaving a task pending.
+
+**Answered the same day** (L5 of [`suggestions-screen.md`](suggestions-screen.md)): the reader wants
+the history read, and asked for a dedicated screen to review what it finds. L63's verdict was about
+something else. The mechanism below survives as the inherited rules of that feature's **T1** (S10), and
+its ordering decision became that feature's S4.
+
+- **S1 — The existing parser is reused; a second one is the defect.** `recent()` is built on
+  `RecentDocuments::read` and `recently_used_path`, the tolerant reader L46 shipped. Nothing re-reads
+  `$XDG_DATA_HOME` and nothing re-implements ISO-8601, percent decoding or `file://` filtering: those
+  are already pinned by that module's tests, which is the only reason its fragility is affordable.
+  The module stays platform-independent (it is compiled everywhere; only `recently_used_path` names a
+  Linux location) while the trait implementation stays `#[cfg(target_os = "linux")]`.
+- **S2 — A bookmark is a PDF by its recorded mime type *or* by its extension.** GTK writes
+  `mime:mime-type`, but the parser keeps only `href`, `modified` and `visited`, so this is an additive
+  extension of `RecentDocuments`, not a free filter. The rule is the union: `application/pdf` **or** a
+  path ending in `.pdf`, compared case-insensitively as bytes — the same test the `/proc` detector
+  already uses (`linux.rs:389`), so axis A and axis B cannot disagree about what a PDF is. Mime alone
+  would drop a document whose type was never recorded; the extension alone would drop a correctly
+  typed document renamed without one.
+- **S3 — A path with no time is still a document.** The parser keeps only paths that carry a time
+  (`entries: HashMap<PathBuf, i64>`), so a bookmark with neither `modified` nor `visited` is counted in
+  `parsed` and then dropped. `RecentDocument.last_used_unix` is `Option<i64>` (`domain.rs:355`)
+  precisely because that entry is a document the reader opened, with no known moment; `recent()`
+  returns it with `None`. `read_at` keeps answering `None` for such a path, because its caller only
+  asks for a date. The two differ about the *document*, and this spec says which is which so nobody
+  "normalises" them together later.
+- **S4 — A dead path is omitted, and the omission is counted.** The trait's contract already says so,
+  and on the reference host the difference is real: 34 PDF bookmarks, 29 present, **5 dropped**. A
+  path whose file is gone is not an error and not a placeholder row.
+- **S5 — Newest first, undated last, deterministic on ties.** Order is by time descending; entries with
+  `None` follow every dated one, because sorting them as `0` would claim 1970 — the same mistake the
+  parser deliberately refused when it declined to store `0`. Ties break on the path's bytes, so two
+  runs over one file cannot disagree, and at most `limit` entries are returned (`0` returns none).
+- **S6 — An absent history is an empty list; a broken one is an error; `NotSupported` is gone.**
+  `recently-used.xbel` missing is what a fresh profile looks like — genuinely nothing opened this way
+  — so `Ok(vec![])` is the honest answer, exactly as the parser already decides. A file that exists
+  and cannot be read stays a real `Err`, because "cannot read" and "nothing there" are different
+  facts. `NotSupported` survives only where no backend exists (`unsupported.rs`). This replaces the
+  test at `linux.rs:1161` that asserts the *Linux* stub answers `NotSupported`: that test exists so
+  the stub cannot be forgotten, so landing the real answer is what makes it wrong, and it is replaced
+  by a test of the real answer rather than deleted.
+- **S7 — One read per call, no cache, and the cost is recorded.** The trait is per-call by shape, so
+  `recent()` reads the file once each time: one `fs::read` of 706 KB plus one scan, not a cost per
+  document. A cache would need invalidation and has no consumer yet. The worker measures the cost on
+  the reference host and records it in the log, the way T9 recorded `gio`'s 8.7 ms/file.
+- **S8 — No consumer in this task, and that is deliberate.** T12a lands the surface; **T12b** wires a
+  consumer, and its spec is written once T12a's answer is real — the same order as T7a→T7b, and the
+  same reason T5 deferred listing "because nothing called them yet". The question T12b must answer is
+  not obvious, so it is recorded here instead of being rediscovered: what the queue does with a
+  document the reader **opened** (a double click, possibly long ago) as opposed to one it **is
+  reading**. The queue's rule already makes recording safe — nothing enters the library without the
+  reader's decision — but its `seen_count` and "oldest first" ordering assume an observation
+  happening now, which a history entry does not provide. Recommended answer for T12b: the history
+  feeds the queue as a second producer with a `first_seen_at` of *now*, and the bookmark's own time is
+  not stored, because the queue records observations and the history is not one. Whether the reader
+  wants a second producer **at all** is the verdict above, not a design question.
+- **S9 — Gate.** `mirk-core` untouched (the trait exists), no new dependency, nothing panics (a
+  malformed bookmark is skipped by the parser's tolerance, never surfaced as an error), clippy
+  `--all-targets -D warnings` clean, both non-Linux targets still type-check, and every rule above is
+  pinned by a test that needs neither a display nor the maintainer's history file. The real history is
+  **verification**, never a fixture: the tests build their own xbel in a temp directory.
+
+**Acceptance evidence for T12a** (verification, not a test): on the reference host, `recent(usize::MAX)`
+returns **29** documents, newest first, every one of them present on disk, and the 5 dead PDF bookmarks
+of the 34 are absent. The pre-existing `read_at` tests pass unchanged — that is how the additive
+extension proves it did not move the meaning the carousels depend on.
+
+**Deferred on purpose**: the Windows (`IApplicationDocumentLists`) and macOS (`.sfl3`) backends of the
+same axis, and any caching layer. Neither is a reason to change the trait.
+
+### Tasks — T12
+
+- **T12a** — S1–S7, S9 — the mechanism: `recent()` over the existing parser, the mime attribute
+  retained, undated paths returned, the stale `TODO(T12)` replaced by the truth, and the stub test
+  swapped for the real one. Route: delegated worker, allowed edit surfaces
+  `crates/mirk-platform/src/recent.rs`, `crates/mirk-platform/src/linux.rs`,
+  `crates/mirk-platform/examples/read_history.rs`. **Verdict given on 2026-11-02**: the history is to
+  be read, and the work grew into a screen — this mechanism is **T1 of
+  [`suggestions-screen.md`](suggestions-screen.md)**, whose S10 keeps every rule above. Commit: pending.
+- **T12b** — S8 — a consumer for the list: a second producer beside `observe_open_documents`
+  (`crates/mirk-desktop/src/commands.rs:874`), with the ordering question S8 names settled first.
+  Route: **superseded** — S7–S9 of [`suggestions-screen.md`](suggestions-screen.md) are the consumer,
+  on a screen of its own rather than inside Ajustes.
 
 
 ## Specs — UI slice (the first vertical slice)
@@ -3845,3 +3959,78 @@ LA LECCIÓN, QUE VALE MÁS QUE EL ARREGLO. Un mismo síntoma —"el scroll no se
 VERIFICACIÓN. `App.dom.test.ts` (3 casos, nuevo): navegar con 640 px de scroll deja 0, una sub-pantalla de Ajustes deja 0, y **quedarse leyendo no rebobina** (240 se queda en 240) — el reset responde a navegar, no es un rewind periódico. `LibraryScreen.dom.test.ts` (2 casos nuevos): siguiente y anterior piden el reset una vez, y no se pide si no se pagina. Total **305** pruebas (eran 300), typecheck 0 y 0, build ok, paquete reconstruido antes del binario. Falsificaciones con rojo observado y archivos restaurados: sin el efecto de `App.svelte`, los dos casos de navegación fallan (`expected 640 to be +0`, `expected 320 to be +0`); sin la llamada en `turnTo`, los dos de paginación fallan (`expected "vi.fn()" to be called 1 times, but got 0 times`). El usuario lo confirmó en pantalla antes de autorizar el commit.
 
 RESIDUAL: el reset cubre navegación y paginación, que son los dos casos que existen hoy. Si mañana una pantalla cambia de contenido sin cambiar de página ni de vista (un filtro que recorta la lista, por ejemplo), el navegador ya recorta el scroll al contenido nuevo y no hace falta pedirlo; si alguna vez hace falta, el mecanismo está: la prop existe y el shell la ejecuta.
+
+**L74 — la spec de T12, escrita para que el TODO deje de mentir.** Pedido del usuario: *"Bueno, procede
+con la escritura del spec"*. Al abrir la tarea apareció el problema que la spec tenía que resolver antes
+de escribir una línea: **el TODO describe trabajo ya hecho**. `crates/mirk-platform/src/recent.rs` (787
+líneas, 14 tests) parsea el `recently-used.xbel` desde L46 y `track.rs:141` lo llama en cada barrido
+para llenar `progress.read_at`; un worker briefeado con *"parse `recently-used.xbel`, keep
+`application/pdf` entries…"* habría escrito un segundo parser al lado del primero. Lo que falta es la
+superficie del trait: `XbelRecentDocuments::recent` (`linux.rs:268`) devuelve `NotSupported`, y
+**ningún consumidor lee `backends.recent_documents`** en todo el workspace.
+
+LO QUE SE MIDIÓ ANTES DE ESCRIBIR. Historial de la máquina de referencia: **706 KB**, **1000**
+bookmarks — un tope redondo: la Fase 0 había medido 4875 en el mismo archivo, así que la lista está
+acotada y las entradas viejas se van —, **991** entradas `file://`, **34** con `mime:mime-type`
+`application/pdf` y **29** de esos 34 con el archivo todavía presente. El plan ya había medido que para
+*progreso* esta lista es más débil que Evince (17 vs 45 documentos), así que la spec dice explícitamente
+que el eje A no es una fuente de progreso: responde *qué abriste*.
+
+DOS HALLAZGOS QUE HICIERON LA SPEC NO TRIVIAL, y que solo se ven leyendo el código de hoy. (1) El
+parser **no conserva el mime-type**: guarda `href`, `modified` y `visited`, así que "quedarse con los
+`application/pdf`" no es un filtro gratis sino una extensión aditiva del módulo. (2) El parser solo
+retiene **caminos con hora** en `entries: HashMap<PathBuf, i64>`; un bookmark sin `modified` ni
+`visited` se cuenta en `parsed` y se descarta. `RecentDocument.last_used_unix` es `Option<i64>`
+justamente porque ese documento existe y su momento no se conoce, así que `recent()` **no se podía
+construir** con la estructura actual: la spec lo dice en S3 y separa ese caso del `None` de `read_at`,
+que responde a otra pregunta.
+
+DECISIONES QUE LA SPEC FIJÓ, CON RAZÓN. El filtro de PDF es la **unión** de mime-type y extensión
+`.pdf` (bytes, insensible a mayúsculas) porque es el mismo test que ya usa el detector de `/proc`
+(`linux.rs:389`): los dos ejes no pueden discrepar sobre qué es un PDF. Un historial ausente es
+`Ok(vec![])` y uno ilegible es `Err` — dos hechos distintos —, y `NotSupported` queda solo donde no hay
+backend. Eso obliga a reemplazar el test de `linux.rs:1161`, que hoy exige que el stub de Linux
+responda `NotSupported`: existe para que el stub no se olvide, así que es el propio contrato cumplido
+el que lo vuelve obsoleto. Y el orden: más nuevos primero, los sin fecha al final (ordenar como `0`
+sería afirmar 1970, el error que el parser ya se negó a cometer), desempate por bytes del camino para
+que dos corridas no discrepen.
+
+LA DECISIÓN ABIERTA QUEDÓ REGISTRADA, NO INVENTADA. T12a es el mecanismo sin consumidor, por el mismo
+precedente que T7a→T7b y que T5 dejando el listado "porque nadie lo llamaba todavía". T12b —meter la
+lista en la cola de sugerencias— necesita decidir qué hace la cola con un documento que el lector
+**abrió** (un doble clic, quizá hace años) frente a uno que **está leyendo**: la regla de la cola ya
+hace seguro registrarlo, pero su `seen_count` y su orden "oldest first" asumen una observación de
+ahora, que una entrada del historial no da. Quedó una respuesta recomendada (segundo productor con
+`first_seen_at` de *ahora*, sin guardar la hora del bookmark) y el veredicto es del usuario.
+
+DE PASO, OTRA LÍNEA QUE MENTÍA. El checklist decía `T10, T13–T16` — bandeja, biblioteca, override
+manual, capacidades y cola de sugerencias — como pendientes, cuando bandeja, biblioteca, pantalla de
+capacidades y cola están implementadas y testeadas. Se corrigió en esta misma pasada por ser el mismo
+tipo de deriva que el roadmap del README: queda abierto **solo el override manual de progreso**.
+
+RESIDUAL: T12a no está implementada; esta pasada escribió la spec, el puntero en el checklist y la
+corrección de la línea vecina. Nada de código.
+
+**L75 — la spec de T12 chocó con una decisión ya tomada, y el choque se anotó en vez de resolverse solo.**
+Al releer el registro después de escribir la spec apareció la línea que la spec tenía que haber leído
+primero: L63, *"T12 CERRADO POR DECISIÓN DEL USUARIO"*, con las palabras del lector: *"que no descubra,
+puede abrumar al usuario con tantos documentos"* y *"La biblioteca sigue siendo lo que el lector eligió
+vigilar, y nada más"*. El checklist decía lo contrario —`- [ ] T12` pendiente—, que es la misma clase de
+deriva que el roadmap del README corregido en esta misma sesión, sólo que esta vez la línea vieja y la
+nueva se contradecían sobre si el trabajo **debe** hacerse.
+
+POR QUÉ NO SE RESOLVIÓ POR MI CUENTA, en las dos direcciones. Leer L63 como el cierre de esta tarea es
+plausible: la lista del historial son justamente "tantos documentos", casi todos fuera de la biblioteca
+—34 PDFs sobre 1000 bookmarks, 29 todavía en disco—. Leerlo como el cierre de otra cosa también: la cola
+de sugerencias ya registra documentos abiertos fuera de las carpetas vigiladas y el lector la conservó, así
+que lo rechazado no puede ser "que la aplicación me avise", sino algo más ancho. El alcance de una
+decisión del lector no se adivina y no se reabre con una spec: se pregunta.
+
+LO QUE QUEDÓ ESCRITO MIENTRAS TANTO. La spec conserva S1–S9, porque el mecanismo es verdad en las dos
+lecturas —el parser existe, el TODO miente, `recent()` no se puede construir con la estructura de hoy—, y
+arriba de S1 quedó el veredicto abierto citado textual, con la consecuencia dicha: decide si T12a es
+trabajo por hacer o trabajo que se decidió no hacer. Las dos tareas quedaron **bloqueadas**, no pendientes
+ni cerradas. Si el veredicto cubre T12, la spec queda como registro de por qué no se hace —que es más útil
+que borrarla— y el `TODO` del código pasa a decir "cerrado por decisión", nunca a desaparecer en silencio.
+
+

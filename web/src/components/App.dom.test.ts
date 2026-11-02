@@ -1,8 +1,9 @@
 import { flushSync, mount, unmount } from "svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App.svelte";
 import { DEFAULT_WINDOW_LAYOUT, gridColumns, WINDOW_LAYOUT_CHANGED_EVENT } from "../lib/window";
 import { translate } from "../lib/i18n";
+import { LIBRARY_REFRESH_MS } from "../lib/library";
 
 const english = translate("en");
 
@@ -532,5 +533,286 @@ describe("the layout the window's own gestures change", () => {
     emitLayoutChanged("columns-4");
     await settle();
     expect(columns()).toBe("4");
+  });
+});
+
+/**
+ * The suggestions screen inside the shell (S1, S8, S10 and S11 of `odd/tasks/suggestions-screen.md`).
+ *
+ * The screen's own rules are pinned where they live — the pure search, order and page functions, and the
+ * mounted screen with its cards. What only the shell can show is what this file checks: that the screen has
+ * an address and is NOT a fourth navbar entry (Biblioteca stays marked, per the rule L72 recorded), that the
+ * desktop's history is read exactly once per run and before the first queue read, that the count the reader
+ * sees comes from the QUEUE and never from what the history read returned, and that `NotSupported` still
+ * reaches the reader as a statement about the machine rather than as "nothing is waiting".
+ */
+describe("the suggestions screen in the shell", () => {
+  let component: ReturnType<typeof mount> | null = null;
+  const calls: { command: string; args?: unknown }[] = [];
+
+  afterEach(() => {
+    if (component !== null) {
+      unmount(component);
+      component = null;
+    }
+    calls.length = 0;
+    vi.useRealTimers();
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    delete (window as unknown as Record<string, unknown>).__TAURI_EVENT_PLUGIN_INTERNALS__;
+    window.document.body.innerHTML = "";
+    window.location.hash = "";
+  });
+
+  function fakeDesktop(
+    answers: Record<string, unknown> = {},
+    rejects: readonly string[] = [],
+  ): void {
+    const base: Record<string, unknown> = {
+      get_language: null,
+      get_window_layout: "columns-2",
+      get_window_preset: null,
+      list_library: [],
+      progress_providers: [],
+      watched_folders: [],
+      list_suggestions: [],
+      suggestion_detector: { id: "none", availability: "installed" },
+      suggestion_cover: null,
+      "plugin:event|listen": 1,
+      "plugin:event|unlisten": null,
+      ...answers,
+    };
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
+      invoke: (command: string, args?: unknown) => {
+        calls.push({ command, args });
+        if (rejects.includes(command)) {
+          return Promise.reject(new Error(`${command} failed`));
+        }
+        return Promise.resolve(command in base ? base[command] : null);
+      },
+      transformCallback: () => 1,
+      unregisterCallback: () => {},
+      unregisterListener: () => {},
+      convertFileSrc: (path: string) => path,
+    };
+    (window as unknown as Record<string, unknown>).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+      unregisterListener: () => {},
+    };
+  }
+
+  async function settle(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    flushSync();
+  }
+
+  /** Walks to a hash the way a link, a reload or Back would. */
+  async function navigate(hash: string): Promise<void> {
+    window.location.hash = hash;
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await settle();
+  }
+
+  const oneSuggestion = {
+    id: 1,
+    path: "/library/cosmos.pdf",
+    seenCount: 2,
+    firstSeenAt: 1_776_000_000,
+    historyAt: 1_760_000_000,
+  };
+
+  it("is addressable at #/suggestions and shows the queue there", async () => {
+    fakeDesktop({ list_suggestions: [oneSuggestion] });
+    component = shell.mount();
+    await settle();
+
+    await navigate("#/suggestions");
+
+    expect(window.document.querySelector("h1")?.textContent).toBe(english("suggestion.heading"));
+    expect(window.document.body.textContent).toContain("/library/cosmos.pdf");
+  });
+
+  // S8/T3: the way in is Biblioteca, and the access is the reader's own click — not a hash they have to
+  // know in advance. This is the only place the two halves meet: the library's access and the shell's
+  // navigation, and a broken link between them would leave the screen reachable only by address.
+  it("reaches the queue by clicking Biblioteca's access", async () => {
+    fakeDesktop({ list_suggestions: [oneSuggestion] });
+    component = shell.mount();
+    await settle();
+
+    await navigate("#/library");
+
+    const access = window.document.querySelector(".suggestions-entry");
+    expect(access?.textContent?.trim()).toBe(english("library.suggestionsPending", { count: 1 }));
+
+    (access as HTMLElement).click();
+    await settle();
+
+    expect(window.location.hash).toBe("#/suggestions");
+    expect(window.document.querySelector("h1")?.textContent).toBe(english("suggestion.heading"));
+  });
+
+  // L10: the reader's second report — "Tengo que cliquear en el navbar inferior para volver a la
+  // biblioteca". The queue now answers the question itself, and the answer lands where the reader came
+  // from, with the hash updated so Back and a reload agree.
+  it("goes back to Biblioteca from the queue, without the bar", async () => {
+    fakeDesktop({ list_suggestions: [oneSuggestion] });
+    component = shell.mount();
+    await settle();
+
+    await navigate("#/suggestions");
+
+    const back = window.document.querySelector("button.back");
+    expect(back).not.toBeNull();
+    (back as HTMLElement).click();
+    await settle();
+
+    expect(window.location.hash).toBe("#/library");
+    expect(window.document.querySelector("h1")?.textContent).toBe(english("library.heading"));
+  });
+
+  // S7/S9: the decision is made on the screen the access opens, and only there. The screen only calls its
+  // prop, so this is the half no screen-level test can see: the press reaches the shell's one decision path,
+  // named for the document it acts on.
+  it("decides the queue from the screen the access opens", async () => {
+    fakeDesktop({ list_suggestions: [oneSuggestion] });
+    component = shell.mount();
+    await settle();
+
+    await navigate("#/library");
+    (window.document.querySelector(".suggestions-entry") as HTMLElement).click();
+    await settle();
+
+    (window.document.querySelector("article .accept") as HTMLButtonElement).click();
+    await settle();
+
+    expect(calls.filter((call) => call.command === "accept_suggestion")).toEqual([
+      { command: "accept_suggestion", args: { id: 1 } },
+    ]);
+  });
+
+  // S9/L4: the panel left Ajustes → Biblioteca, so what used to be asserted as present there is now
+  // asserted as gone — on the same route, with the two blocks that stayed still present, so the assertion
+  // cannot pass by the sub-screen failing to render at all.
+  it("no longer shows the queue inside Ajustes → Biblioteca", async () => {
+    fakeDesktop({ list_suggestions: [oneSuggestion] });
+    component = shell.mount();
+    await settle();
+
+    await navigate("#/settings/library");
+
+    const text = window.document.body.textContent ?? "";
+    expect(text).toContain(english("settings.folders.heading"));
+    expect(text).toContain(english("scan.heading"));
+    expect(text).not.toContain(english("suggestion.heading"));
+    expect(window.document.querySelector("article .accept")).toBeNull();
+  });
+
+  // S8 and L72: the screen is not a navbar entry, and Biblioteca is what the bar keeps marked while the
+  // reader is on it — a bar that marked nothing would leave them with no answer to "where am I".
+  it("adds no navbar entry, and keeps Biblioteca marked", async () => {
+    fakeDesktop({ list_suggestions: [oneSuggestion] });
+    component = shell.mount();
+    await settle();
+
+    await navigate("#/suggestions");
+
+    const nav = window.document.querySelector("nav");
+    expect(nav?.querySelectorAll("button")).toHaveLength(3);
+    expect(nav?.querySelector('[aria-current="page"]')?.textContent?.trim()).toBe(
+      english("nav.library"),
+    );
+  });
+
+  // S10/T2: the history is read ONCE, before the first queue read. Reading it before the queue is what
+  // keeps the screen from drawing the previous run's queue and correcting itself a moment later.
+  it("reads the desktop's history once per run, before the first queue read", async () => {
+    fakeDesktop();
+    component = shell.mount();
+    await settle();
+
+    const order = calls.map((call) => call.command);
+
+    expect(order.filter((command) => command === "observe_recent_documents")).toHaveLength(1);
+    expect(order.indexOf("observe_recent_documents")).toBeLessThan(
+      order.indexOf("list_suggestions"),
+    );
+  });
+
+  /**
+   * The other half of "once per run": the queue is still re-read on the library's own interval, and the
+   * history is not. A read per tick would inflate `seen_count` for every document already waiting — the
+   * interface inventing evidence that the reader opened something again.
+   */
+  it("re-reads the queue on the interval and never the history", async () => {
+    fakeDesktop();
+    vi.useFakeTimers();
+    component = shell.mount();
+    // The startup reads travel through dynamic imports, so they need a turn of the loop rather than only
+    // the microtask queue.
+    await vi.advanceTimersByTimeAsync(50);
+    flushSync();
+
+    const count = (command: string): number =>
+      calls.filter((call) => call.command === command).length;
+    expect(count("observe_recent_documents")).toBe(1);
+    const queues = count("list_suggestions");
+
+    await vi.advanceTimersByTimeAsync(LIBRARY_REFRESH_MS);
+    flushSync();
+
+    expect(count("list_suggestions")).toBeGreaterThan(queues);
+    expect(count("observe_recent_documents")).toBe(1);
+  });
+
+  /**
+   * T1b's constraint, pinned where it can fail: `observe_recent_documents` returns a number, and that number
+   * is a diagnostic of the pass — it counts a decided path that spent the pass's window even though nothing
+   * was recorded — so it is NOT the size of the queue and never reaches the reader. The count comes from
+   * `list_suggestions`, which is the only thing that knows what is still pending.
+   */
+  it("counts the queue from the queue, never from what the history read returned", async () => {
+    fakeDesktop({ list_suggestions: [oneSuggestion], observe_recent_documents: 99 });
+    component = shell.mount();
+    await settle();
+
+    await navigate("#/suggestions");
+
+    const text = window.document.body.textContent ?? "";
+    expect(text).toContain(english("suggestions.countAll", { total: 1 }));
+    expect(text).not.toContain("99");
+  });
+
+  /**
+   * L61: `NotSupported` is distinguishable from "the queue is empty". The screen says what the machine
+   * cannot do, not that there is nothing to decide — the two answers are different facts and only one of
+   * them is true here.
+   */
+  it("says the machine cannot tell, rather than saying nothing is waiting", async () => {
+    fakeDesktop({ suggestion_detector: { id: "none", availability: "unsupported" } });
+    component = shell.mount();
+    await settle();
+
+    await navigate("#/suggestions");
+
+    const text = window.document.body.textContent ?? "";
+    expect(text).toContain(english("suggestion.noDetector"));
+    expect(text).not.toContain(english("suggestion.none"));
+  });
+
+  /**
+   * A history that could not be read is a failure of the SOURCE, so it is stated beside the queue and the
+   * queue already read stays decidable — the failure is not an empty queue wearing a new sentence.
+   */
+  it("surfaces a failed history read without emptying the queue", async () => {
+    fakeDesktop({ list_suggestions: [oneSuggestion] }, ["observe_recent_documents"]);
+    component = shell.mount();
+    await settle();
+
+    await navigate("#/suggestions");
+
+    const text = window.document.body.textContent ?? "";
+    expect(text).toContain(
+      english("suggestions.historyError", { message: "Error: observe_recent_documents failed" }),
+    );
+    expect(text).toContain("/library/cosmos.pdf");
   });
 });

@@ -56,8 +56,11 @@ Width 430, height 844, `resizable: false`. **Superseded in part** by `odd/tasks/
 device scale factor 2. No other viewport is a target, and "responsive" is out of scope: the window
 cannot be resized, so a layout judged at 1440 px invents defects the user never sees.
 
-**S5 — the capture fails loudly.** A JavaScript exception during capture is a non-zero exit, not a
-warning: a screenshot of a crashed page is not evidence about design.
+**S5 — the capture fails loudly.** A JavaScript exception **or a console error** during capture is a
+non-zero exit, not a warning: a screenshot of a crashed page is not evidence about design, and
+neither is a screenshot of one whose data never loaded. Corrected on 2026-11-02 (L9): the rule the
+script already enforced in code was broader than this spec said, which is exactly why the drift it
+was meant to catch went unnoticed.
 
 ## Tasks
 
@@ -69,6 +72,7 @@ warning: a screenshot of a crashed page is not evidence about design.
 | T4 | S3 D1, D2, D7 | Dropped: each is a recorded decision, not a defect (S3.3) | — | — |
 | T5 | S3 D5, D6 | Dropped: measurement disproved both claims | — | — |
 | T6 | S1 | Re-capture and confirm both fixes in the image, then report | inline | `ac9ce39` |
+| T7 | S5, S4 | The harness stops drifting: answer `get_window_preset`, default to the app's own layout, and correct the spec | inline | pending |
 
 Verified before closing: `bun run typecheck` 0 errors and 0 warnings; `bun run test` 333 passed in 19
 files (the new pager test is one of them); a fresh `node scripts/capture-ui.mjs` reported no
@@ -113,3 +117,33 @@ already made.
 **L8** — Delivery note: the branch `feat/phase-1-core` is already ~124 commits ahead of `main`, far
 past the ~400-line review slice. The two commits of this feature are small and self-contained, but
 the branch as a whole needs a delivery strategy (chained PRs) before it is reviewable.
+
+**L9 (2026-11-02, parent) — the harness drifted behind the application, and the spec was looser than
+the code.** A fresh `node scripts/capture-ui.mjs` exited **1** with one problem: *“the stored window
+preset could not be read — capture-ui: unmocked command `get_window_preset`”*. The command was added
+by `980902f` (the window's gestures) and calls the app at startup from `web/src/lib/window.ts:122`
+(`crates/mirk-desktop/src/main.rs:468` is the handler), so **every capture taken since that commit**
+ran the Settings → Ventana screen on its error path. The image hid it: the selected row comes from
+`get_window_layout`, so the screen looked right while the preset read had failed.
+
+Three things were wrong, and each one was measured before it was changed:
+
+1. **The answer was missing.** `get_window_preset` is now seeded from the same value the process
+   would give: the layout when it is windowed, and `columns-3` when the capture is full screen,
+   mirroring `layout::preset` (`crates/mirk-desktop/src/layout.rs:122`) — full screen is never a
+   preset.
+2. **The default capture was not the app's default.** The script captured `columns-2` (430×844)
+   while the application opens at `layout::DEFAULT_LAYOUT` = **full screen** (`layout.rs:29`), and a
+   window leaving full screen restores three per row (`RESTORE_LAYOUT`). The default is now `auto`,
+   so a capture without flags shows what a reader meets on first launch — the sidebar layout, not the
+   narrowest grid.
+3. **The README described neither the default nor the roadmap.** The capture block called two per row
+   “the default”, and the roadmap still listed the tray as *Planned* and Phase 1 as untouched while
+   the tray, the review queue, the filters and the editors were implemented and tested. Both now say
+   what the code does, and Phase 4 names the one thing actually missing there: overriding progress by
+   hand.
+
+**RED/GREEN, on the script itself.** This harness has no unit test, so the proof is its own exit code:
+a copy of the script with the one seeding line deleted exits **1** with that message (`/tmp/red-capture.mjs`,
+`/tmp/red.log`); the shipped script exits **0** with `problems: []`. Both runs are in the manifest:
+`auto` (1440×900, 5 captures) and `--layout columns-2` (430×844, 5 captures).

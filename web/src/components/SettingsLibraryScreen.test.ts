@@ -9,7 +9,6 @@ import {
   type FolderRemoval,
   type WatchedFolder,
 } from "../lib/screens";
-import type { DetectorBelief, Suggestion } from "../lib/suggestions";
 
 const english = translate("en");
 const spanish = translate("es");
@@ -20,10 +19,6 @@ interface Overrides {
   folders?: WatchedFolder[] | null;
   removal?: FolderRemoval | null;
   refusal?: FolderRefusal | null;
-  suggestions?: Suggestion[] | null;
-  detector?: DetectorBelief;
-  suggestionError?: string | null;
-  deciding?: boolean;
 }
 
 /**
@@ -50,26 +45,12 @@ function screenProps(overrides: Overrides = {}) {
     refusal: overrides.refusal ?? null,
     onCloseRefusal: () => {},
     inTauri: overrides.inTauri ?? true,
-    suggestions: overrides.suggestions === undefined ? [] : overrides.suggestions,
-    detector: overrides.detector ?? "installed",
-    suggestionError: overrides.suggestionError ?? null,
-    deciding: overrides.deciding ?? false,
-    onDecide: async () => {},
-    onOpenDocument: () => {},
     onBack: () => {},
   };
 }
 
-const suggestion = (overrides: Partial<Suggestion> = {}): Suggestion => ({
-  id: 1,
-  path: "/elsewhere/Cosmos - Carl Sagan.pdf",
-  seenCount: 3,
-  firstSeenAt: 1776000000,
-  ...overrides,
-});
-
 /**
- * R43/S1–S4 (L71). The sub-screen explains itself, and only holds its own three blocks.
+ * R43/S1–S4 (L71). The sub-screen explains itself, and only holds its own blocks.
  *
  * The index answers "what is in there" for someone choosing; this screen answers "what is this for" for
  * someone who has already chosen, and offers the way back to the index it belongs to. Both sentences are
@@ -90,12 +71,20 @@ describe("the Biblioteca sub-screen explains itself", () => {
 
   // S3: the contents moved, they did not follow. A sub-screen that still carried the language selector
   // and the providers would be the old wall with a heading on it.
-  it("holds the library's three blocks and not the other sections'", () => {
+  //
+  // S9 of `odd/tasks/suggestions-screen.md`: and the queue is NOT one of its blocks any more. The screen
+  // of its own is the only place it is read or decided, so the assertion is about its absence — the
+  // heading, the definition line, the cards and their two decisions all left together.
+  it("holds the folders and the scan, and not the queue or the other sections' blocks", () => {
     const { body } = render(SettingsLibraryScreen, { props: screenProps() });
 
     expect(body).toContain(english("settings.folders.heading"));
-    expect(body).toContain(english("suggestion.heading"));
     expect(body).toContain(english("scan.heading"));
+    expect(body).not.toContain(english("suggestion.heading"));
+    // The cards are gone, which is what "the queue left" looks like from the markup: no cover space with
+    // its two decisions, and no path control that would open a suggested document's folder.
+    expect(body).not.toContain("cover-decisions");
+    expect(body).not.toContain(english("suggestion.openFolder", { path: "/elsewhere/x.pdf" }));
     expect(body).not.toContain(english("provider.heading"));
     expect(body).not.toContain("<select");
   });
@@ -106,110 +95,6 @@ describe("the Biblioteca sub-screen explains itself", () => {
     expect(body).toContain(settingsSectionTitle("library", spanish));
     expect(body).toContain(settingsSectionPurpose("library", spanish));
     expect(body).toContain(spanish("settings.back"));
-  });
-});
-
-/**
- * L56. The queue of documents Mirk saw open, and the only place the reader can decide about them.
- *
- * These tests exist because a rule that is computed and then never wired is this project's recurring
- * failure: the pure decisions have their own tests in \`suggestions.test.ts\`, and what is checked here is
- * that the section actually reaches the screen — with both ways out, with an honest failure, and with
- * the three states kept apart.
- */
-describe("the suggestions the reader decides about", () => {
-  it("lists a document waiting for a decision, with both ways out", () => {
-    const { body } = render(
-      SettingsLibraryScreen,
-      { props: screenProps({ suggestions: [suggestion()] }) },
-    );
-
-    // L57: the card reads like a library card — the file's own name as the heading, the path under it.
-    expect(body).toContain("Cosmos - Carl Sagan");
-    expect(body).toContain("/elsewhere/Cosmos - Carl Sagan.pdf");
-    // L58: and the path is a control, not a dead line: it opens the folder that holds the document.
-    expect(body).toContain("Open the folder that holds /elsewhere/Cosmos - Carl Sagan.pdf");
-    // L59: the user does not want the observation count on the card at all — it was this project's
-    // addition, not their request, and it is gone: no sentence, no keys, no helper.
-    expect(body).not.toContain("Opened");
-    expect(body).not.toContain("Se abrió");
-    // Both decisions, as icons: the drawing is hidden from assistive technology and the name comes
-    // from the catalogue, exactly as the card's own icon actions work.
-    expect(body).toContain("Add /elsewhere/Cosmos - Carl Sagan.pdf to the library");
-    expect(body).toContain("Discard the suggestion for /elsewhere/Cosmos - Carl Sagan.pdf");
-    expect(body).toContain("cover-decisions");
-    expect(body).toContain("<svg");
-  });
-
-  // The heading is the file's own name, and the claim stops there: nothing on the card says the
-  // document has a title, because Mirk has not read this file — it only saw it open.
-  it("does not claim a title it never read", () => {
-    const { body } = render(
-      SettingsLibraryScreen,
-      { props: screenProps({ suggestions: [suggestion()] }) },
-    );
-
-    // The heading carries the name without the extension, and the path under it is the one place the
-    // extension belongs — which is why the claim is made about the heading and not about the page.
-    expect(body).toContain(">Cosmos - Carl Sagan</h3>");
-    expect(body).not.toContain(">Cosmos - Carl Sagan.pdf</h3>");
-  });
-
-  // The decision is per document and it is explicit: the control names the path it acts on, so no
-  // button on this screen can be read as "add whatever is pending".
-  it("names the document each decision acts on", () => {
-    const { body } = render(
-      SettingsLibraryScreen,
-      { props: screenProps({ suggestions: [suggestion({ path: "/elsewhere/Otro.pdf" })] }) },
-    );
-
-    expect(body).toContain("Add /elsewhere/Otro.pdf to the library");
-  });
-
-  // The three states, and the difference between the first two is the point: "still checking" and
-  // "nothing is waiting" are different facts, and an empty queue that merely looks like good news is
-  // exactly what the producer's own doc comment refuses.
-  it("says it is still checking rather than that there is nothing to decide", () => {
-    const { body } = render(
-      SettingsLibraryScreen,
-      { props: screenProps({ suggestions: null }) },
-    );
-
-    expect(body).toContain("Checking for documents opened outside Mirk");
-    expect(body).not.toContain("No document is waiting for a decision");
-  });
-
-  it("says nothing is waiting only once the store says so", () => {
-    const { body } = render(SettingsLibraryScreen, { props: screenProps({ suggestions: [] }) });
-
-    expect(body).toContain("No document is waiting for a decision");
-    // Nothing to decide means nothing to press: no card, and therefore no decisions on it.
-    expect(body).not.toContain("cover-decisions");
-  });
-
-  it("reports a decision that could not be recorded, in the section's own words", () => {
-    const { body } = render(
-      SettingsLibraryScreen,
-      {
-        props: screenProps({
-          suggestions: [suggestion()],
-          suggestionError: "the file is gone",
-        }),
-      },
-    );
-
-    expect(body).toContain("The decision could not be recorded");
-    expect(body).toContain("the file is gone");
-  });
-
-  it("speaks Spanish in the section too, because both catalogues carry its words", () => {
-    const { body } = render(
-      SettingsLibraryScreen,
-      { props: screenProps({ spanish: true, suggestions: [suggestion()] }) },
-    );
-
-    expect(body).toContain("Sugerencias");
-    expect(body).toContain("Agregar /elsewhere/Cosmos - Carl Sagan.pdf a la biblioteca");
   });
 });
 

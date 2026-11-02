@@ -11,31 +11,18 @@
     type FolderRemoval,
     type WatchedFolder,
   } from "../lib/screens";
-  import SuggestionCover from "./SuggestionCover.svelte";
-  import {
-    describeSuggestions,
-    suggestionTitle,
-    type DetectorBelief,
-    type Suggestion,
-  } from "../lib/suggestions";
   import { invoke } from "../lib/tauri";
   import Modal from "./Modal.svelte";
 
   let {
     folders,
     foldersError,
-    suggestions,
-    detector,
-    suggestionError,
-    deciding,
     t,
     scanning,
     scanReport,
     scanError,
     onScan,
     onOpenFolder,
-    onOpenDocument,
-    onDecide,
     removal,
     onAskRemoval,
     onConfirmRemoval,
@@ -47,18 +34,12 @@
   }: {
     folders: WatchedFolder[] | null;
     foldersError: string | null;
-    suggestions: Suggestion[] | null;
-    detector: DetectorBelief;
-    suggestionError: string | null;
-    deciding: boolean;
     t: Translate;
     scanning: boolean;
     scanReport: ScanReport | null;
     scanError: string | null;
     onScan: (folder: string) => Promise<void>;
     onOpenFolder: (path: string) => void;
-    onOpenDocument: (path: string) => void;
-    onDecide: (id: number, accept: boolean) => Promise<void>;
     removal: FolderRemoval | null;
     onAskRemoval: (id: number) => void;
     onConfirmRemoval: () => void;
@@ -71,9 +52,6 @@
   } = $props();
 
   const folderMessage = $derived(describeWatchedFolders(folders, t));
-  const suggestionMessage = $derived(
-    describeSuggestions(suggestions, t, detector),
-  );
 
   let folder = $state("");
 
@@ -110,11 +88,17 @@
 </script>
 
 <!--
-  R43/S3 (L71). The Biblioteca sub-screen: watched folders, the queue of suggestions, and the scan.
+  R43/S3 (L71). The Biblioteca sub-screen: watched folders and the scan.
 
-  These three blocks belong together because they answer one question — what mirk reads — and they were
-  three of the five flat blocks that made Ajustes unreadable. Nothing about them changed in the move:
+  These two blocks belong together because they answer one question — what mirk reads — and they were
+  two of the five flat blocks that made Ajustes unreadable. Nothing about them changed in the move:
   every action, its confirmation and its failure sentence came here with its tests.
+
+  S9 of `odd/tasks/suggestions-screen.md` took the third block away: the queue of suggestions has a screen
+  of its own (`#/suggestions`), reached from Biblioteca's own access, and it is the only place the queue is
+  read or decided. Two places showing the same queue are two places that drift apart, so this screen keeps
+  the folders and the scan and states neither the queue nor anything about it — not even its empty-state
+  sentences, which still exist because the suggestions screen still says them.
 -->
 <section class="screen">
   <!-- R43/S2: a way back that does not depend on the bottom navigation, named after the screen it
@@ -188,57 +172,6 @@
           </li>
         {/each}
       </ul>
-    {/if}
-  </div>
-
-  <!--
-    L56, restated in L57 after the user's verdict on the first attempt: a suggestion is shown as a CARD,
-    the same shape as a library card — the cover's reserved space and the text block under it — because
-    it belongs to the same family of things, and it read as a different kind of object before. The two
-    decisions sit INSIDE the cover's space, which is the document's own body and the same place a card's
-    edit and folder actions already live, and they are ICONS: an icon is not a name, so each button's
-    accessible name comes from the catalogue through \`aria-label\`, exactly as the card's own icon
-    actions do. The heading is the file's own name and never the path; the path is stated under it.
-  -->
-  <div class="panel">
-    <div class="panel-head">
-      <h2>{t("suggestion.heading")}</h2>
-      {#if suggestions !== null && suggestions.length > 0}
-        <span class="badge">{suggestions.length}</span>
-      {/if}
-    </div>
-    <p class="state">{t("suggestion.definition")}</p>
-    {#if suggestionError !== null}
-      <p class="state error">{t("suggestion.error", { message: suggestionError })}</p>
-    {:else if suggestionMessage !== null}
-      <p class="state">{suggestionMessage}</p>
-    {:else}
-      <div class="suggestions">
-        {#each suggestions ?? [] as suggestion (suggestion.id)}
-          <article>
-            <SuggestionCover
-              id={suggestion.id}
-              path={suggestion.path}
-              {t}
-              {deciding}
-              onDecide={onDecide}
-            />
-            <div class="body">
-              <h3 class="suggestion-title" title={suggestion.path}>
-                {suggestionTitle(suggestion.path)}
-              </h3>
-              <button
-                type="button"
-                class="suggestion-path"
-
-                title={t("suggestion.openFolder", { path: suggestion.path })}
-                aria-label={t("suggestion.openFolder", { path: suggestion.path })}
-                onclick={() => onOpenDocument(suggestion.path)}
-              >{suggestion.path}</button>
-            </div>
-          </article>
-        {/each}
-      </div>
     {/if}
   </div>
 
@@ -524,56 +457,6 @@
   .detail {
     font-size: var(--text-xs);
     color: var(--fg-muted);
-  }
-
-  /* L57: the suggestion cards, shaped like the library's. Two columns, because the window is 430 wide
-     and a card needs the room for its heading; nothing here scrolls sideways. */
-  .suggestions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.7rem;
-    margin-top: 0.7rem;
-  }
-
-  .suggestions article {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  /* Two lines at most, like a library card's title, so two suggestions never differ in height and the
-     block under the cover keeps one shape down the row. The whole name is still there for a pointer
-     through \`title=\` and for a screen reader. */
-  /* L58: the path is a small control that opens the document's own folder, the way a library card's
-     folder action does — a path a person cannot use is a dead line on the card. */
-  .suggestion-path {
-    background: none;
-    border: 0;
-    padding: 0;
-    text-align: left;
-    font-size: var(--text-xs);
-    color: var(--fg-muted);
-    cursor: pointer;
-    overflow-wrap: anywhere;
-    transition: color var(--fast) var(--ease);
-  }
-
-  .suggestion-path:hover {
-    color: var(--fg);
-    text-decoration: underline;
-  }
-
-  .suggestion-title {
-    margin: 0;
-    font-size: var(--text-sm);
-    font-weight: var(--weight-semibold);
-    line-height: 1.2;
-    color: var(--fg);
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
   }
 
   .path {

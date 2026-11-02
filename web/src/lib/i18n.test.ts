@@ -97,6 +97,53 @@ describe("the Spanish catalogue speaks with one voice", () => {
   });
 });
 
+/**
+ * S11 of `odd/tasks/suggestions-screen.md`: every word the suggestions screen adds lives in the catalogue,
+ * in both languages — and with the same placeholders, because a Spanish sentence that forgot `{message}`
+ * would drop the only thing that says what went wrong, and one that forgot `{query}` would state a search
+ * nobody made.
+ *
+ * The keys the screen reuses — `suggestion.heading`, `suggestion.error`, `library.count`, `library.page` —
+ * are already covered by their own files' checks and are deliberately not repeated here: one queue, one way
+ * of describing it. `suggestion.readError` IS listed: it is the sentence this screen needed that the panel
+ * never had, because the panel and the screen used to share one sentence for two different failures.
+ */
+describe("the suggestions screen's words", () => {
+  const keys = [
+    "suggestions.filterLabel",
+    "suggestions.filterPlaceholder",
+    "suggestions.sortLabel",
+    "suggestions.sort.recent",
+    "suggestions.sort.oldest",
+    "suggestions.sort.title",
+    "suggestions.countAll",
+    "suggestions.pagination",
+    "suggestions.noMatches",
+    "suggestions.historyError",
+    "suggestion.readError",
+  ] as const;
+
+  function placeholders(value: string): string[] {
+    return [...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? "").sort();
+  }
+
+  it("exists in both catalogues, and is not the key standing in for a word", () => {
+    for (const key of keys) {
+      expect(catalogues.en[key], key).toBeTruthy();
+      expect(catalogues.es[key], key).toBeTruthy();
+      expect(catalogues.en[key], key).not.toBe(key);
+      expect(catalogues.es[key], key).not.toBe(key);
+      expect(catalogues.es[key], key).not.toBe(catalogues.en[key]);
+    }
+  });
+
+  it("carries the same placeholders in both languages", () => {
+    for (const key of keys) {
+      expect(placeholders(catalogues.es[key]), key).toEqual(placeholders(catalogues.en[key]));
+    }
+  });
+});
+
 describe("the languages this build knows", () => {
   // The list is the type's own source, so the check cannot drift from `Locale`. It exists because a
   // locale arrives from outside the interface — the store, which the desktop process also writes —
@@ -111,3 +158,4 @@ describe("the languages this build knows", () => {
     expect(isLocale(3)).toBe(false);
   });
 });
+

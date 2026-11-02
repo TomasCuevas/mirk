@@ -34,9 +34,22 @@ export interface Suggestion {
   seenCount: number;
   /**
    * Unix seconds of the first observation, which is what the backend orders the queue by. The screen
-   * inherits that order rather than deciding one of its own.
+   * does not decide its order from this field (S4 of `odd/tasks/suggestions-screen.md`), and it is kept
+   * because the queue's own read still orders by it.
    */
   firstSeenAt: number;
+  /**
+   * Unix seconds of the date the DESKTOP's history recorded for this document — when the reader opened
+   * it, not when the application noticed (S4, S10).
+   *
+   * It is deliberately a fact of its own and never `firstSeenAt`: the two answer different questions, and
+   * sharing one column between them has already produced a wrong answer once (L46).
+   *
+   * `null` and absent are one fact and not two — "no date was recorded" — because the column did not
+   * always exist. Neither is "long ago": the order puts an undated suggestion **after** every dated one
+   * rather than pretending it happened in 1970.
+   */
+  historyAt?: number | null;
 }
 
 /** What a finished preview request means for a card (L60). */
@@ -146,9 +159,157 @@ export function suggestionOutcome(
  * The list without the decided item.
  *
  * The backend refuses a second decision on the same row, so leaving the item visible would offer a
- * promise the application cannot keep. The remaining items keep the order they arrived in: the queue
- * is oldest first because the backend says so, and the screen does not re-sort it.
+ * promise the application cannot keep. The remaining items keep the order they arrived in; the order
+ * the screen draws them in is a separate, pure decision ([`sortSuggestions`]), so a decision made in the
+ * middle of a page does not shuffle what is left under the reader's cursor.
  */
 export function withoutSuggestion(suggestions: readonly Suggestion[], id: number): Suggestion[] {
   return suggestions.filter((suggestion) => suggestion.id !== id);
+}
+
+/**
+ * The orders the suggestions screen offers (S3 of `odd/tasks/suggestions-screen.md`).
+ *
+ * `recent` is the default and it is the reader's own decision (L2): the date the DESKTOP recorded for the
+ * document, descending. `oldest` is its inverse, and `title` is the third choice Biblioteca's own selector
+ * offers, kept because a queue of forty files is easier to scan by name.
+ *
+ * There is no author order and no author filter: a suggestion is a file the application saw open, not a
+ * document it read, so it has no authors — and a control that can only empty the grid is exactly what
+ * this project refuses to offer.
+ */
+export type SuggestionSort = "recent" | "oldest" | "title";
+
+/** Every order the selector offers, the default first. */
+export const suggestionSorts: readonly SuggestionSort[] = ["recent", "oldest", "title"];
+
+/**
+ * The form two strings are compared in: case folded, then stripped of its accents.
+ *
+ * The rule is the one Biblioteca's search follows (S3), which is `toLowerCase` and nothing more — this
+ * module goes one step further on purpose, because a suggestion's title comes from a FILE NAME, and a
+ * collection with `Anónimo.pdf` and `Analisis.pdf` is searched with the same fingers. NFD splits an
+ * accented letter into the letter and its combining mark, and the mark is what gets dropped, so `on` finds
+ * `ón` and `Ó` alike; `toLowerCase` then folds the case. It never invents letters: a `ñ` folds to `n` for
+ * SEARCH only, and nothing is ever displayed folded.
+ */
+export function foldForSearch(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase();
+}
+
+/**
+ * Whether a suggestion answers `query` (S3): its preset title first, and the path when the title does not.
+ *
+ * Both are compared folded, so case and accents do not have to be remembered by the reader. An empty or
+ * whitespace-only query matches everything, which is what makes clearing the box restore the whole queue.
+ */
+export function suggestionMatches(suggestion: Suggestion, query: string): boolean {
+  const needle = foldForSearch(query.trim());
+  if (needle === "") {
+    return true;
+  }
+  return (
+    foldForSearch(suggestionTitle(suggestion.path)).includes(needle) ||
+    foldForSearch(suggestion.path).includes(needle)
+  );
+}
+
+/** The suggestions matching `query`, in the order they arrived. */
+export function filterSuggestions(
+  suggestions: readonly Suggestion[],
+  query: string,
+): Suggestion[] {
+  return suggestions.filter((suggestion) => suggestionMatches(suggestion, query));
+}
+
+/**
+ * The queue in `sort` order, as a new array (S3, S4).
+ *
+ * **The default is the history's own date, newest first**, and it is the date the desktop recorded for the
+ * document rather than the one the application wrote when it noticed (`firstSeenAt`) — the reader's choice
+ * in L2, and the reason the bookmark date is a stored fact of its own.
+ *
+ * **An undated suggestion goes after every dated one, in both directions.** `oldest` reverses the dates
+ * and deliberately does not reverse that rule: an absent date is not 1970 and not "earlier than
+ * everything", so it stays where it is — last. Sorting it first would assert that the reader opened it
+ * before anything else, which is precisely what the absence of a date denies.
+ *
+ * **Every order breaks ties on the path**, compared with the reader's locale and then by row id, so two
+ * runs over one queue cannot disagree about which of two equally-named or equally-dated files comes first.
+ * The input array is never reordered in place.
+ */
+export function sortSuggestions(
+  suggestions: readonly Suggestion[],
+  sort: SuggestionSort = "recent",
+  locale = "en",
+): Suggestion[] {
+  const dated = (suggestion: Suggestion): number | null => suggestion.historyAt ?? null;
+
+  const byPath = (a: Suggestion, b: Suggestion): number =>
+    a.path.localeCompare(b.path, locale) || a.id - b.id;
+
+  const byHistory = (a: Suggestion, b: Suggestion): number => {
+    const left = dated(a);
+    const right = dated(b);
+    if (left === null && right === null) {
+      return 0;
+    }
+    // The absence of a date is the one fact that does not flip with the direction.
+    if (left === null) {
+      return 1;
+    }
+    if (right === null) {
+      return -1;
+    }
+    return sort === "oldest" ? left - right : right - left;
+  };
+
+  const byKey = (a: Suggestion, b: Suggestion): number =>
+    sort === "title"
+      ? suggestionTitle(a.path).localeCompare(suggestionTitle(b.path), locale)
+      : byHistory(a, b);
+
+  return [...suggestions].sort((a, b) => byKey(a, b) || byPath(a, b));
+}
+
+/**
+ * The sentence for a search that emptied the grid, or `null` when no search was made (S3).
+ *
+ * It names the query, because a reader who typed something and sees nothing deserves to read back what
+ * they typed rather than a bare "no results" — the same rule Biblioteca's no-matches sentence follows. A
+ * blank query is `null` and never a sentence: an empty grid with nothing typed into the box is not a
+ * failed search, and saying it was would blame the reader for something they did not do.
+ */
+export function describeNoSuggestionMatches(query: string, t: Translate): string | null {
+  const needle = query.trim();
+  return needle === "" ? null : t("suggestions.noMatches", { query: needle });
+}
+
+/**
+ * The sentence for a desktop history that could not be read, or `null` when there is nothing to add.
+ *
+ * The read happens once per run (S10), so its failure is a fact about this run and not about the queue:
+ * the list may still hold what earlier runs found, and the screen keeps showing it. Two cases say nothing:
+ *
+ * - **No failure.** Nothing happened, so nothing is said.
+ * - **The platform has no detector at all.** "This system cannot tell which documents are open" already
+ *   explains why there is no history to read, and a second sentence about the same absence would be noise
+ *   dressed as detail. `NotSupported` therefore stays one sentence, and stays distinguishable from an
+ *   empty queue — the failure is `null` there, and the detector belief is what speaks.
+ *
+ * Everything else reaches the reader: a history that exists and cannot be parsed is an error (S10), and a
+ * queue that silently looks shorter than it is would be the screen claiming there is nothing to decide.
+ */
+export function describeHistoryFailure(
+  historyError: string | null,
+  detector: DetectorBelief,
+  t: Translate,
+): string | null {
+  if (historyError === null || detector === "unsupported") {
+    return null;
+  }
+  return t("suggestions.historyError", { message: historyError });
 }

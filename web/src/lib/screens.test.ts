@@ -70,6 +70,27 @@ describe("which screen is shown", () => {
   });
 });
 
+/**
+ * S1 and S8 of `odd/tasks/suggestions-screen.md`: the suggestions screen is a view of its own, addressed by
+ * the hash like every other one, and it is NOT a fourth navbar entry — the bar already has three, and the
+ * width is the scarce resource (L3). Biblioteca is the entry the bar keeps marked while the reader is on
+ * the queue, because Biblioteca is where the queue is entered from.
+ */
+describe("the suggestions screen's own address", () => {
+  it("is named by the hash and comes back from it", () => {
+    expect(hashForView({ kind: "suggestions" })).toBe("#/suggestions");
+    expect(viewFromHash("#/suggestions")).toEqual({ kind: "suggestions" });
+  });
+
+  it("leaves the navbar with the three entries it has, and keeps Biblioteca marked", () => {
+    expect(screens).toEqual(["home", "library", "settings"]);
+    expect(navbarScreen({ kind: "suggestions" })).toBe("library");
+    // A hash that merely resembles it is still not a destination: it falls back to Inicio.
+    expect(viewFromHash("#/suggestion")).toEqual({ kind: "screen", screen: "home" });
+    expect(viewFromHash("#/suggestions/more")).toEqual({ kind: "screen", screen: "home" });
+  });
+});
+
 /** How many sentences a value holds, by the rule the "one plain sentence" claim is read with. */
 function sentenceCount(value: string): number {
   return value.split(/(?<=[.!?…])\s+/u).filter((part) => part.trim() !== "").length;

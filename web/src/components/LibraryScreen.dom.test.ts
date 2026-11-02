@@ -134,6 +134,8 @@ describe("choosing an author in Biblioteca", () => {
         onOpenFolder: () => {},
         onOpenDocument: () => {},
     onResetScroll: () => {},
+    suggestionsCount: null,
+    onOpenSuggestions: () => {},
       },
     });
     flushSync();
@@ -257,6 +259,8 @@ describe("the editor's author list on a paged library", () => {
         onOpenFolder: () => {},
         onOpenDocument: () => {},
     onResetScroll: () => {},
+    suggestionsCount: null,
+    onOpenSuggestions: () => {},
       },
     });
     flushSync();
@@ -354,6 +358,8 @@ describe("a co-authored document in Biblioteca (R42/S7)", () => {
         onOpenFolder: () => {},
         onOpenDocument: () => {},
     onResetScroll: () => {},
+    suggestionsCount: null,
+    onOpenSuggestions: () => {},
       },
     });
     flushSync();
@@ -451,6 +457,8 @@ describe("a page turn asks the shell for the top", () => {
         onOpenFolder: () => {},
         onOpenDocument: () => {},
         onResetScroll,
+        suggestionsCount: null,
+        onOpenSuggestions: () => {},
       },
     });
     flushSync();
@@ -476,6 +484,8 @@ describe("a page turn asks the shell for the top", () => {
         onOpenFolder: () => {},
         onOpenDocument: () => {},
         onResetScroll,
+        suggestionsCount: null,
+        onOpenSuggestions: () => {},
       },
     });
     flushSync();
@@ -514,6 +524,8 @@ describe("a single page draws no pager", () => {
         onOpenFolder: () => {},
         onOpenDocument: () => {},
         onResetScroll: () => {},
+        suggestionsCount: null,
+        onOpenSuggestions: () => {},
       },
     });
     flushSync();
