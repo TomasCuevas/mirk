@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use mirk_platform::recent::{RecentDocuments, recently_used_path};
+use mirk_platform::recent::{recently_used_path, RecentDocuments};
 
 fn main() -> ExitCode {
     let paths: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();

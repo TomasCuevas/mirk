@@ -10,10 +10,10 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use mirk_core::{
-    Availability, Confidence, Document, FileId, FolderWatcher, LaunchOutcome, MirkError,
-    OpenDocument, Platform, ProgressCapability, ProgressProvider, ProgressSource, RecentDocument,
-    RecentDocumentsSource, StoredProgress, WatchEvent, WatchTarget, FileIdentity, Launcher,
-    OpenDocumentDetector,
+    Availability, Confidence, Document, FileId, FileIdentity, FolderWatcher, LaunchOutcome,
+    Launcher, MirkError, OpenDocument, OpenDocumentDetector, Platform, ProgressCapability,
+    ProgressProvider, ProgressSource, RecentDocument, RecentDocumentsSource, StoredProgress,
+    WatchEvent, WatchTarget,
 };
 
 /// A provider that implements every method with the cheapest honest answer.
@@ -215,7 +215,10 @@ fn a_registry_of_heterogeneous_providers_can_be_built() {
     assert_eq!(trackable, vec!["evince-gvfs"]);
 
     let doc = Document::new("/tmp/x.pdf");
-    let progress = registry[1].read(&doc).expect("read should not fail").expect("value");
+    let progress = registry[1]
+        .read(&doc)
+        .expect("read should not fail")
+        .expect("value");
     assert_eq!(progress.fraction(), Some(72.0 / 436.0));
     assert_eq!(progress.source.id(), "evince-gvfs");
 }

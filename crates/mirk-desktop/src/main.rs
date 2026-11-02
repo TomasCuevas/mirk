@@ -109,7 +109,9 @@ impl ShellActions for AppShell {
         // A minimized window is not something the user can see, so the tray reports it as hidden;
         // `show` alone does not restore it on every window manager, so the restore is explicit
         // rather than assumed. Without this the tray could offer "Show Mirk" and do nothing.
-        self.window.unminimize().map_err(|error| error.to_string())?;
+        self.window
+            .unminimize()
+            .map_err(|error| error.to_string())?;
         self.window.show().map_err(|error| error.to_string())?;
         self.window.set_focus().map_err(|error| error.to_string())
     }
@@ -480,9 +482,8 @@ fn get_window_preset() -> Result<String, String> {
 /// reconciliation loop calls, so the two cannot remember different things.
 #[tauri::command]
 fn set_window_layout(layout: String, window: WebviewWindow) -> Result<(), String> {
-    let chosen = self::layout::WindowLayout::parse(&layout).ok_or_else(|| {
-        format!("`{layout}` is not a window layout this build knows")
-    })?;
+    let chosen = self::layout::WindowLayout::parse(&layout)
+        .ok_or_else(|| format!("`{layout}` is not a window layout this build knows"))?;
     let store = open_store()?;
     remember_layout(&store, chosen).map_err(error_message)?;
     apply_window_layout(&window, chosen)
@@ -555,15 +556,18 @@ fn chosen_folder(chosen: Option<FilePath>) -> Result<Option<String>, String> {
     match chosen {
         None => Ok(None),
         Some(path) => {
-            let path = path
-                .into_path()
-                .map_err(|error| format!("the chosen folder could not be read as a path: {error}"))?;
+            let path = path.into_path().map_err(|error| {
+                format!("the chosen folder could not be read as a path: {error}")
+            })?;
             // Paths are opaque UTF-8 everywhere in this project (R7), and the store only ever holds
             // valid UTF-8, so a path that cannot be spelled as UTF-8 is a real failure rather than a
             // value silently mangled by a lossy conversion.
             match path.to_str() {
                 Some(path) => Ok(Some(path.to_string())),
-                None => Err(format!("the chosen folder is not valid UTF-8: {}", path.display())),
+                None => Err(format!(
+                    "the chosen folder is not valid UTF-8: {}",
+                    path.display()
+                )),
             }
         }
     }
@@ -578,12 +582,15 @@ fn chosen_file(chosen: Option<FilePath>) -> Result<Option<String>, String> {
     match chosen {
         None => Ok(None),
         Some(path) => {
-            let path = path
-                .into_path()
-                .map_err(|error| format!("the chosen image could not be read as a path: {error}"))?;
+            let path = path.into_path().map_err(|error| {
+                format!("the chosen image could not be read as a path: {error}")
+            })?;
             match path.to_str() {
                 Some(path) => Ok(Some(path.to_string())),
-                None => Err(format!("the chosen image is not valid UTF-8: {}", path.display())),
+                None => Err(format!(
+                    "the chosen image is not valid UTF-8: {}",
+                    path.display()
+                )),
             }
         }
     }
@@ -884,10 +891,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), String> {
 ///   reports `true` while the window keeps its size. The compositor's own maximise does fill the work
 ///   area, so "Pantalla completa" is carried by `maximize()` and the grid's `auto-fill` does the rest —
 ///   the request asks for the documents that fit, and this is the state in which the width decides.
-fn apply_window_layout(
-    window: &WebviewWindow,
-    layout: layout::WindowLayout,
-) -> Result<(), String> {
+fn apply_window_layout(window: &WebviewWindow, layout: layout::WindowLayout) -> Result<(), String> {
     // A pin from the previous layout would clamp the size being asked for, so both hints are released
     // before anything else. The order matters: setting the maximum below a still-pinned minimum is
     // refused by GTK, and clearing them first is what makes every transition work in both directions.
@@ -990,7 +994,8 @@ fn start_tracking() {
                     // threading the snapshot through `track` would put queue policy inside the
                     // ingestion loop that deliberately keeps it out (a document the store does not
                     // know is ignored there rather than added, so the queue stays the only producer).
-                    if let Err(error) = commands::observe_open_documents(&store, detector.as_ref()) {
+                    if let Err(error) = commands::observe_open_documents(&store, detector.as_ref())
+                    {
                         eprintln!("suggestion detection: {error}");
                     }
                 }
@@ -1186,7 +1191,10 @@ fn start_reconciling(app: AppHandle) {
 /// screen for either, so stderr is where they go.
 fn report_tracking(report: &track::TrackReport) {
     for missing in &report.missing_capabilities {
-        eprintln!("missing capability ({}): {}", missing.source, missing.reason);
+        eprintln!(
+            "missing capability ({}): {}",
+            missing.source, missing.reason
+        );
     }
     for failure in &report.failures {
         eprintln!("ingestion: {failure}");
@@ -1281,7 +1289,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{authored, commands, layout, preset_from, remember_layout, LibraryEntryView, Store};
+    use super::{
+        authored, commands, layout, preset_from, remember_layout, LibraryEntryView, Store,
+    };
 
     /// R42/S5, corrected after a native review: a caller that still sends the pre-list `author` must not
     /// lose its edit in silence.
@@ -1292,7 +1302,10 @@ mod tests {
     #[test]
     fn the_naming_command_accepts_both_author_spellings_and_the_list_wins() {
         assert_eq!(
-            authored(Some(vec!["Carl Sagan".into()]), Some(Some("Ignored".into()))),
+            authored(
+                Some(vec!["Carl Sagan".into()]),
+                Some(Some("Ignored".into()))
+            ),
             Some(vec!["Carl Sagan".to_string()]),
             "the list is the order and it wins when both are sent"
         );
@@ -1311,7 +1324,11 @@ mod tests {
             Some(Vec::new()),
             "a blank legacy name is *no author of my own*, never an author called spaces"
         );
-        assert_eq!(authored(None, None), None, "neither key means the action said nothing");
+        assert_eq!(
+            authored(None, None),
+            None,
+            "neither key means the action said nothing"
+        );
     }
 
     /// The transient single-author projection must keep serialising `null`, not omit the key.
@@ -1373,7 +1390,10 @@ mod tests {
             !window.resizable,
             "A1: dragging an edge must not resize the window; the layouts are the only way"
         );
-        assert!(!window.maximizable, "A2: the window must not be maximisable");
+        assert!(
+            !window.maximizable,
+            "A2: the window must not be maximisable"
+        );
         assert!(window.minimizable, "A2: the window must be minimisable");
         assert!(
             !window.fullscreen,
@@ -1402,8 +1422,9 @@ mod tests {
 
         // The phone proportion belongs to the two-per-row window, which is the narrowest one; the default
         // three-per-row window is deliberately wider than that shape (S2 of `desktop-chrome.md`).
-        let (narrow_width, narrow_height) =
-            layout::WindowLayout::Columns2.window_size().expect("a windowed layout");
+        let (narrow_width, narrow_height) = layout::WindowLayout::Columns2
+            .window_size()
+            .expect("a windowed layout");
         let ratio = narrow_height / narrow_width;
         assert!(
             (1.9..=2.4).contains(&ratio),
@@ -1440,7 +1461,9 @@ mod tests {
             "the layout itself is stored, as it always was"
         );
         assert_eq!(
-            store.get_setting(layout::PRESET_SETTING).expect("read the preset"),
+            store
+                .get_setting(layout::PRESET_SETTING)
+                .expect("read the preset"),
             Some("columns-4".to_string()),
             "the windowed choice is what a window leaving full screen comes back to"
         );
@@ -1458,7 +1481,9 @@ mod tests {
             "full screen is the layout in force"
         );
         assert_eq!(
-            store.get_setting(layout::PRESET_SETTING).expect("read the preset"),
+            store
+                .get_setting(layout::PRESET_SETTING)
+                .expect("read the preset"),
             Some("columns-2".to_string()),
             "full screen is not a preset, so the rows the reader chose survive it"
         );
@@ -1502,7 +1527,9 @@ mod tests {
     fn a_store_with_no_preset_reads_as_three_per_row() {
         let store = in_memory_store();
         assert_eq!(
-            store.get_setting(layout::PRESET_SETTING).expect("read the preset"),
+            store
+                .get_setting(layout::PRESET_SETTING)
+                .expect("read the preset"),
             None,
             "a fresh store has no preset, so the build's own fallback decides"
         );

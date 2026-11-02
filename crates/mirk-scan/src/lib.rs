@@ -180,7 +180,11 @@ fn bind_pdfium(library: &PdfiumLibrary) -> Result<Pdfium, MirkError> {
 /// A library that cannot be found or loaded is one actionable [`MirkError::ComponentUnavailable`],
 /// exactly as [`Scanner::scan`] reports it.
 pub fn bind_pdfium_library() -> Result<Pdfium, MirkError> {
-    bind_pdfium_specifying(std::env::var_os("MIRK_PDFIUM_LIB").map(PathBuf::from).as_deref())
+    bind_pdfium_specifying(
+        std::env::var_os("MIRK_PDFIUM_LIB")
+            .map(PathBuf::from)
+            .as_deref(),
+    )
 }
 
 /// [`bind_pdfium_library`]'s testable core: the explicit library path is a parameter rather than
@@ -442,8 +446,9 @@ impl<'a> Scanner<'a> {
                         // there, which is the failure mode this project exists to avoid.
                         Extension::Undecodable => failures.push(ScanFailure {
                             path,
-                            reason: "the file name is not valid UTF-8, so its path cannot be stored"
-                                .to_string(),
+                            reason:
+                                "the file name is not valid UTF-8, so its path cannot be stored"
+                                    .to_string(),
                         }),
                         Extension::Other => {}
                     }

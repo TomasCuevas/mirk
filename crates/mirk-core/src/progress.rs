@@ -110,7 +110,12 @@ impl StoredProgress {
     ///
     /// No reading time is attached: a caller that does not know when something was read must not be
     /// taken to claim it does. Attach one with [`StoredProgress::with_read_at`].
-    pub fn new(page: u32, total: Option<u32>, source: ProgressSource, confidence: Confidence) -> Self {
+    pub fn new(
+        page: u32,
+        total: Option<u32>,
+        source: ProgressSource,
+        confidence: Confidence,
+    ) -> Self {
         Self {
             page,
             total,

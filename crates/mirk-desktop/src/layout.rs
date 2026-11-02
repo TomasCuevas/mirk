@@ -160,13 +160,25 @@ mod tests {
     fn every_offered_layout_parses_and_round_trips() {
         for key in LAYOUT_KEYS {
             let layout = WindowLayout::parse(key).unwrap_or_else(|| panic!("`{key}` must parse"));
-            assert_eq!(layout.key(), key, "a layout's key is the one it parsed from");
+            assert_eq!(
+                layout.key(),
+                key,
+                "a layout's key is the one it parsed from"
+            );
         }
     }
 
     #[test]
     fn a_value_this_build_does_not_know_is_not_a_layout() {
-        for value in ["", "columns-5", "columns-1", "3", "Columns-3", "auto-fill", "grid"] {
+        for value in [
+            "",
+            "columns-5",
+            "columns-1",
+            "3",
+            "Columns-3",
+            "auto-fill",
+            "grid",
+        ] {
             assert_eq!(WindowLayout::parse(value), None, "`{value}` must not parse");
         }
     }
@@ -185,7 +197,11 @@ mod tests {
     fn the_window_that_restore_returns_to_is_three_per_row() {
         assert_eq!(RESTORE_LAYOUT, WindowLayout::Columns3);
         assert_eq!(RESTORE_LAYOUT.window_size(), Some((634.0, WINDOW_HEIGHT)));
-        assert_eq!(preset(None), RESTORE_LAYOUT, "nothing stored is the fallback");
+        assert_eq!(
+            preset(None),
+            RESTORE_LAYOUT,
+            "nothing stored is the fallback"
+        );
     }
 
     // --- S3: the stored preset -----------------------------------------------------------------
@@ -197,7 +213,11 @@ mod tests {
             ("columns-3", WindowLayout::Columns3),
             ("columns-4", WindowLayout::Columns4),
         ] {
-            assert_eq!(preset(Some(stored)), expected, "`{stored}` names {expected:?}");
+            assert_eq!(
+                preset(Some(stored)),
+                expected,
+                "`{stored}` names {expected:?}"
+            );
         }
     }
 
@@ -208,12 +228,21 @@ mod tests {
             RESTORE_LAYOUT,
             "full screen cannot be the rows a window comes back to, so it reads as nothing stored"
         );
-        assert!(preset(Some("auto")).columns().is_some(), "a preset always counts its columns");
+        assert!(
+            preset(Some("auto")).columns().is_some(),
+            "a preset always counts its columns"
+        );
     }
 
     #[test]
     fn a_stored_preset_this_build_does_not_know_and_a_missing_one_both_fall_back_to_three() {
-        for stored in [None, Some(""), Some("columns-5"), Some("Columns-3"), Some("auto-fill")] {
+        for stored in [
+            None,
+            Some(""),
+            Some("columns-5"),
+            Some("Columns-3"),
+            Some("auto-fill"),
+        ] {
             assert_eq!(
                 preset(stored),
                 RESTORE_LAYOUT,
@@ -281,7 +310,9 @@ mod tests {
     /// L7: the cards keep the size they have with two per row. The window is what grows.
     #[test]
     fn every_preset_gives_its_cards_the_two_per_row_width() {
-        let two = WindowLayout::Columns2.window_size().expect("a windowed layout");
+        let two = WindowLayout::Columns2
+            .window_size()
+            .expect("a windowed layout");
         let two_card = (two.0 - SHELL_PADDING - GRID_GAP) / 2.0;
 
         for key in ["columns-2", "columns-3", "columns-4"] {

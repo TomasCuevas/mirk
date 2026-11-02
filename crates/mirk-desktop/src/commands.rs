@@ -22,7 +22,7 @@ use mirk_core::{
 };
 use mirk_scan::{cover_for, CoverOutcome, ScanReport, Scanner};
 use mirk_store::{
-    DocumentRecord, covering_folder, AuthorEdit, FolderRemoval, LibraryEntry, Store, Suggestion,
+    covering_folder, AuthorEdit, DocumentRecord, FolderRemoval, LibraryEntry, Store, Suggestion,
     SuggestionDecision, WatchedFolder,
 };
 use serde::Serialize;
@@ -139,7 +139,9 @@ impl From<LibraryEntry> for LibraryEntryView {
             pages: document.document.pages,
             cover_page: document.document.cover_page,
             cover_image: document.document.cover_image.clone(),
-            cover_source: document.cover_source.map(|source| source.as_str().to_string()),
+            cover_source: document
+                .cover_source
+                .map(|source| source.as_str().to_string()),
             progress: progress
                 .as_ref()
                 .map(|progress| ProgressView::new(progress, progress_recorded_at)),
@@ -1338,7 +1340,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == unread_id)
             .expect("the unread document");
-        assert_eq!(unread.progress, None, "no progress must stay absent, not become zero");
+        assert_eq!(
+            unread.progress, None,
+            "no progress must stay absent, not become zero"
+        );
     }
 
     #[test]
@@ -1368,7 +1373,11 @@ mod tests {
         let progress = entries[0].progress.as_ref().expect("progress present");
         // `ProgressView` derives `Serialize` with `rename_all = "camelCase"`, so `read_at` reaches
         // the interface as `readAt`, exactly as `recorded_at` reaches it as `recordedAt`.
-        assert_eq!(progress.read_at, Some(old), "the reading time must reach the view");
+        assert_eq!(
+            progress.read_at,
+            Some(old),
+            "the reading time must reach the view"
+        );
         assert!(
             progress.recorded_at.is_some(),
             "the row still records when the app wrote it"
@@ -1431,7 +1440,10 @@ mod tests {
         let entries = library_entries(&store).expect("list again");
         // `authors` is the displayed list, and `readerAuthors` marks it as the reader's.
         assert_eq!(entries[0].authors, vec!["What the reader called them"]);
-        assert_eq!(entries[0].reader_authors, vec!["What the reader called them"]);
+        assert_eq!(
+            entries[0].reader_authors,
+            vec!["What the reader called them"]
+        );
     }
 
     #[test]
@@ -1552,8 +1564,7 @@ mod tests {
         assert_eq!(saved[0].title, "What the reader called it");
         assert_eq!(saved[0].authors, vec!["What the reader called them"]);
 
-        set_document_naming(&store, id, None, None)
-            .expect("restore the document's own title");
+        set_document_naming(&store, id, None, None).expect("restore the document's own title");
 
         let restored = library_entries(&store).expect("list again");
         assert_eq!(restored[0].title, "The document's own title");
@@ -1605,8 +1616,8 @@ mod tests {
         let identity = mirk_platform::backends().file_identity;
         // The scanner's own committed fixtures: two real PDFs, read-only, never the maintainer's
         // library. Using them here exercises the same code path the command wraps.
-        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../crates/mirk-scan/tests/fixtures");
+        let fixtures =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../crates/mirk-scan/tests/fixtures");
 
         let report = scan_path(&store, identity.as_ref(), &fixtures).expect("scan the fixtures");
         assert_eq!(report.discovered.len(), 2, "two fixtures: {report:?}");
@@ -1704,10 +1715,8 @@ mod tests {
 
     impl TempDir {
         fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "mirk-desktop-{label}-{}",
-                std::process::id()
-            ));
+            let path =
+                std::env::temp_dir().join(format!("mirk-desktop-{label}-{}", std::process::id()));
             std::fs::create_dir_all(&path).expect("create the temporary directory");
             Self { path }
         }
@@ -1728,7 +1737,9 @@ mod tests {
         );
 
         store.record_folder("/library", true).expect("record");
-        store.record_folder("/library/short", false).expect("record");
+        store
+            .record_folder("/library/short", false)
+            .expect("record");
 
         let folders = watched_folders(&store).expect("list folders");
         assert_eq!(folders.len(), 2);
@@ -1765,7 +1776,10 @@ mod tests {
         let removed = remove_folder(&store, doomed)
             .expect("remove")
             .expect("the watch was known");
-        assert_eq!(removed, planned, "the removal carries out the plan it showed");
+        assert_eq!(
+            removed, planned,
+            "the removal carries out the plan it showed"
+        );
         assert_eq!(store.document_count().expect("count"), 1);
         let folders = watched_folders(&store).expect("list folders");
         assert_eq!(folders.len(), 1);
@@ -1834,7 +1848,11 @@ mod tests {
             other => panic!("expected an InvalidPath error, got {other:?}"),
         }
         assert!(
-            launcher.calls.lock().expect("the recording lock").is_empty(),
+            launcher
+                .calls
+                .lock()
+                .expect("the recording lock")
+                .is_empty(),
             "a folder that is gone must not be launched"
         );
     }
@@ -1848,7 +1866,11 @@ mod tests {
             matches!(result, Err(MirkError::InvalidPath(_))),
             "got {result:?}"
         );
-        assert!(launcher.calls.lock().expect("the recording lock").is_empty());
+        assert!(launcher
+            .calls
+            .lock()
+            .expect("the recording lock")
+            .is_empty());
     }
 
     #[test]
@@ -1978,12 +2000,19 @@ mod tests {
 
         match result {
             Err(MirkError::InvalidPath(message)) => {
-                assert!(message.contains("Cosmos.pdf"), "names the document: {message}");
+                assert!(
+                    message.contains("Cosmos.pdf"),
+                    "names the document: {message}"
+                );
             }
             other => panic!("expected an InvalidPath error, got {other:?}"),
         }
         assert!(
-            launcher.calls.lock().expect("the recording lock").is_empty(),
+            launcher
+                .calls
+                .lock()
+                .expect("the recording lock")
+                .is_empty(),
             "a document that is gone must not be launched"
         );
         assert!(!file.exists());
@@ -1997,14 +2026,25 @@ mod tests {
         let result = open_document(&store, &launcher, 404);
 
         match result {
-            Err(MirkError::InvalidInput { field, value, expected }) => {
+            Err(MirkError::InvalidInput {
+                field,
+                value,
+                expected,
+            }) => {
                 assert_eq!(field, "id");
                 assert_eq!(value, "404");
-                assert!(!expected.is_empty(), "the error says what is accepted instead");
+                assert!(
+                    !expected.is_empty(),
+                    "the error says what is accepted instead"
+                );
             }
             other => panic!("expected an InvalidInput error, got {other:?}"),
         }
-        assert!(launcher.calls.lock().expect("the recording lock").is_empty());
+        assert!(launcher
+            .calls
+            .lock()
+            .expect("the recording lock")
+            .is_empty());
     }
 
     #[test]
@@ -2099,7 +2139,10 @@ mod tests {
         };
         let message = error.to_string();
 
-        assert!(message.contains("/library/pdfs/book"), "names the choice: {message}");
+        assert!(
+            message.contains("/library/pdfs/book"),
+            "names the choice: {message}"
+        );
         assert!(
             message.contains("/library/pdfs"),
             "names the covering folder: {message}"
@@ -2149,7 +2192,11 @@ mod tests {
             other => panic!("expected an InvalidPath error, got {other:?}"),
         }
         assert!(
-            launcher.calls.lock().expect("the recording lock").is_empty(),
+            launcher
+                .calls
+                .lock()
+                .expect("the recording lock")
+                .is_empty(),
             "a folder that is gone must not be launched"
         );
     }
@@ -2349,7 +2396,11 @@ mod tests {
             .expect("store an image name");
 
         assert_eq!(
-            store.document_by_id(id).expect("read").expect("row").cover_choice(),
+            store
+                .document_by_id(id)
+                .expect("read")
+                .expect("row")
+                .cover_choice(),
             CoverChoice::Image("chosen.png".to_string())
         );
 
@@ -2364,7 +2415,11 @@ mod tests {
 
         use_cover_image(&store, id).expect("use the stored image");
         assert_eq!(
-            store.document_by_id(id).expect("read").expect("row").cover_choice(),
+            store
+                .document_by_id(id)
+                .expect("read")
+                .expect("row")
+                .cover_choice(),
             CoverChoice::Image("chosen.png".to_string())
         );
     }
@@ -2382,15 +2437,17 @@ mod tests {
 
         set_cover_page(&store, id, Some(2)).expect("page");
         assert_eq!(
-            library_entries(&store).expect("list")[0].cover_source.as_deref(),
+            library_entries(&store).expect("list")[0]
+                .cover_source
+                .as_deref(),
             Some("page")
         );
 
-        store
-            .set_cover_image(id, Some("mine.png"))
-            .expect("image");
+        store.set_cover_image(id, Some("mine.png")).expect("image");
         assert_eq!(
-            library_entries(&store).expect("list")[0].cover_source.as_deref(),
+            library_entries(&store).expect("list")[0]
+                .cover_source
+                .as_deref(),
             Some("image")
         );
     }
@@ -2421,8 +2478,11 @@ mod tests {
 
         let directory = TempDir::new("cover-image");
         let source = directory.path.join("chosen.png");
-        fs::write(&source, b"\x89PNG\r\n\x1a\nnot really a full png, but the bytes say image")
-            .expect("write the reader's image");
+        fs::write(
+            &source,
+            b"\x89PNG\r\n\x1a\nnot really a full png, but the bytes say image",
+        )
+        .expect("write the reader's image");
         set_cover_image(&store, id, &directory.path, Some(&source)).expect("copy the image");
 
         let cover = document_cover(&store, id, &directory.path)
@@ -2448,11 +2508,7 @@ mod tests {
 
         let store = in_memory_store();
         let id = store
-            .upsert_document(&document(
-                pdf.to_str().expect("utf-8 path"),
-                6,
-                6,
-            ))
+            .upsert_document(&document(pdf.to_str().expect("utf-8 path"), 6, 6))
             .expect("insert");
 
         set_cover_page(&store, id, Some(1)).expect("choose page two");
@@ -2631,11 +2687,13 @@ mod tests {
             .record_folder("/library/pdfs", true)
             .expect("watch the folder");
 
-        let detector =
-            FixedDetector::seeing(&["/library/pdfs/inside.pdf", "/elsewhere/open.pdf"]);
+        let detector = FixedDetector::seeing(&["/library/pdfs/inside.pdf", "/elsewhere/open.pdf"]);
         let recorded = observe_open_documents(&store, &detector).expect("observe");
 
-        assert_eq!(recorded, 1, "only the document outside the watch is a suggestion");
+        assert_eq!(
+            recorded, 1,
+            "only the document outside the watch is a suggestion"
+        );
         let suggestions = list_suggestions(&store).expect("list");
         assert_eq!(suggestions.len(), 1);
         assert_eq!(suggestions[0].path, "/elsewhere/open.pdf");
@@ -2649,7 +2707,10 @@ mod tests {
             .expect("insert");
 
         let detector = FixedDetector::seeing(&["/library/known.pdf"]);
-        assert_eq!(observe_open_documents(&store, &detector).expect("observe"), 0);
+        assert_eq!(
+            observe_open_documents(&store, &detector).expect("observe"),
+            0
+        );
         assert!(list_suggestions(&store).expect("list").is_empty());
     }
 
@@ -2674,15 +2735,24 @@ mod tests {
             ],
         };
 
-        assert_eq!(observe_open_documents(&store, &detector).expect("observe"), 1);
+        assert_eq!(
+            observe_open_documents(&store, &detector).expect("observe"),
+            1
+        );
         let suggestions = list_suggestions(&store).expect("list");
         assert_eq!(suggestions.len(), 1);
-        assert_eq!(suggestions[0].seen_count, 1, "one observation, one sighting");
+        assert_eq!(
+            suggestions[0].seen_count, 1,
+            "one observation, one sighting"
+        );
 
         observe_open_documents(&store, &detector).expect("observe again");
         let suggestions = list_suggestions(&store).expect("list");
         assert_eq!(suggestions.len(), 1, "still one row");
-        assert_eq!(suggestions[0].seen_count, 2, "the next observation is the second");
+        assert_eq!(
+            suggestions[0].seen_count, 2,
+            "the next observation is the second"
+        );
     }
 
     #[test]
@@ -2724,8 +2794,7 @@ mod tests {
         let missing = PathBuf::from("/library/gone-before-accept-7f31.pdf");
         let id = store.record_suggestion(&missing).expect("record");
 
-        let error =
-            accept_suggestion(&store, identity.as_ref(), id).expect_err("the file is gone");
+        let error = accept_suggestion(&store, identity.as_ref(), id).expect_err("the file is gone");
         assert!(matches!(error, MirkError::InvalidPath(_)), "got {error:?}");
 
         let suggestion = store.suggestion(id).expect("read").expect("present");
@@ -2734,7 +2803,10 @@ mod tests {
             "no decision may exist without its document"
         );
         assert!(
-            list_suggestions(&store).expect("list").iter().any(|s| s.id == id),
+            list_suggestions(&store)
+                .expect("list")
+                .iter()
+                .any(|s| s.id == id),
             "the undecided suggestion is still offered"
         );
     }

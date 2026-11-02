@@ -39,7 +39,10 @@ impl FileIdentity for HarnessIdentity {
                 });
             }
         }
-        Ok(FileId::ContentHash(format!("fnv1a64:{:016x}", fnv1a64(path)?)))
+        Ok(FileId::ContentHash(format!(
+            "fnv1a64:{:016x}",
+            fnv1a64(path)?
+        )))
     }
 }
 

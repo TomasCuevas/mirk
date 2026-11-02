@@ -582,11 +582,7 @@ impl FolderRemovalPlan {
     fn into_removal(self) -> FolderRemoval {
         FolderRemoval {
             folder: self.folder,
-            documents: self
-                .documents
-                .into_iter()
-                .map(|(_, path)| path)
-                .collect(),
+            documents: self.documents.into_iter().map(|(_, path)| path).collect(),
             kept: self.kept,
         }
     }
@@ -639,7 +635,8 @@ fn normalize_user_title(title: Option<&str>) -> Result<Option<&str>, MirkError> 
                 return Err(MirkError::InvalidInput {
                     field: "title",
                     value: value.to_string(),
-                    expected: "a non-empty title, or no value to restore the document's own".to_string(),
+                    expected: "a non-empty title, or no value to restore the document's own"
+                        .to_string(),
                 });
             }
             Ok(Some(trimmed))
@@ -1104,8 +1101,9 @@ impl Store {
                     return Err(MirkError::InvalidInput {
                         field: "cover image",
                         value: value.to_string(),
-                        expected: "a file name inside the covers directory, or no value to remove it"
-                            .to_string(),
+                        expected:
+                            "a file name inside the covers directory, or no value to remove it"
+                                .to_string(),
                     });
                 }
                 if trimmed.contains('/') || trimmed.contains('\\') {
@@ -1203,14 +1201,12 @@ impl Store {
             index.as_deref(),
             hash.as_deref(),
         )?;
-        let pages = pages
-            .map(u32::try_from)
-            .transpose()
-            .map_err(|_| MirkError::Storage("stored page count is not a valid page number".into()))?;
-        let cover_page = cover_page
-            .map(u32::try_from)
-            .transpose()
-            .map_err(|_| MirkError::Storage("stored cover page is not a valid page number".into()))?;
+        let pages = pages.map(u32::try_from).transpose().map_err(|_| {
+            MirkError::Storage("stored page count is not a valid page number".into())
+        })?;
+        let cover_page = cover_page.map(u32::try_from).transpose().map_err(|_| {
+            MirkError::Storage("stored cover page is not a valid page number".into())
+        })?;
 
         Ok(Some(DocumentRecord {
             id,
@@ -1322,14 +1318,13 @@ impl Store {
         let mut progress = Vec::new();
         for row in rows {
             let (page, total, source, confidence, read_at) = row.map_err(storage_error)?;
-            let page = u32::try_from(page)
-                .map_err(|_| MirkError::Storage(format!("stored page {page} is not a page number")))?;
+            let page = u32::try_from(page).map_err(|_| {
+                MirkError::Storage(format!("stored page {page} is not a page number"))
+            })?;
             let total = total
                 .map(u32::try_from)
                 .transpose()
-                .map_err(|_| {
-                    MirkError::Storage("stored total is not a valid page count".into())
-                })?;
+                .map_err(|_| MirkError::Storage("stored total is not a valid page count".into()))?;
 
             progress.push(
                 StoredProgress::new(
@@ -1355,11 +1350,7 @@ impl Store {
     /// accepted residual applies, because `mirk` opens one store per process today. A second writer
     /// that loses the race cannot duplicate the folder: `folders.path` is UNIQUE, so it fails with
     /// a [`MirkError::Storage`] constraint error instead.
-    pub fn record_folder(
-        &self,
-        path: impl AsRef<Path>,
-        recursive: bool,
-    ) -> Result<i64, MirkError> {
+    pub fn record_folder(&self, path: impl AsRef<Path>, recursive: bool) -> Result<i64, MirkError> {
         let path = path_to_string(path.as_ref())?;
         let recursive = if recursive { 1 } else { 0 };
 
@@ -1539,18 +1530,17 @@ impl Store {
                 let cover_source: Option<String> = row.get(18)?;
                 // The LEFT JOIN leaves every `progress` column NULL for a document with none, so
                 // `p.page` is the presence check: it is NOT NULL whenever the row exists.
-                let progress: Option<LatestProgressColumns> =
-                    match row.get::<_, Option<i64>>(12)? {
-                        Some(page) => Some((
-                            page,
-                            row.get(13)?,
-                            row.get(14)?,
-                            row.get(15)?,
-                            row.get(16)?,
-                            row.get(17)?,
-                        )),
-                        None => None,
-                    };
+                let progress: Option<LatestProgressColumns> = match row.get::<_, Option<i64>>(12)? {
+                    Some(page) => Some((
+                        page,
+                        row.get(13)?,
+                        row.get(14)?,
+                        row.get(15)?,
+                        row.get(16)?,
+                        row.get(17)?,
+                    )),
+                    None => None,
+                };
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
@@ -2264,7 +2254,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
     // next open retries the same step instead of finding half a schema.
     if version < 1 {
         let transaction = connection.transaction().map_err(storage_error)?;
-        transaction.execute_batch(SCHEMA_V1).map_err(storage_error)?;
+        transaction
+            .execute_batch(SCHEMA_V1)
+            .map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 1i64)
             .map_err(storage_error)?;
@@ -2274,7 +2266,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
 
     if version < 2 {
         let transaction = connection.transaction().map_err(storage_error)?;
-        transaction.execute_batch(SCHEMA_V2).map_err(storage_error)?;
+        transaction
+            .execute_batch(SCHEMA_V2)
+            .map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 2i64)
             .map_err(storage_error)?;
@@ -2283,7 +2277,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
 
     if version < 3 {
         let transaction = connection.transaction().map_err(storage_error)?;
-        transaction.execute_batch(SCHEMA_V3).map_err(storage_error)?;
+        transaction
+            .execute_batch(SCHEMA_V3)
+            .map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 3i64)
             .map_err(storage_error)?;
@@ -2292,7 +2288,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
 
     if version < 4 {
         let transaction = connection.transaction().map_err(storage_error)?;
-        transaction.execute_batch(SCHEMA_V4).map_err(storage_error)?;
+        transaction
+            .execute_batch(SCHEMA_V4)
+            .map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 4i64)
             .map_err(storage_error)?;
@@ -2302,7 +2300,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
 
     if version < 5 {
         let transaction = connection.transaction().map_err(storage_error)?;
-        transaction.execute_batch(SCHEMA_V5).map_err(storage_error)?;
+        transaction
+            .execute_batch(SCHEMA_V5)
+            .map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 5i64)
             .map_err(storage_error)?;
@@ -2312,7 +2312,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
 
     if version < 6 {
         let transaction = connection.transaction().map_err(storage_error)?;
-        transaction.execute_batch(SCHEMA_V6).map_err(storage_error)?;
+        transaction
+            .execute_batch(SCHEMA_V6)
+            .map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 6i64)
             .map_err(storage_error)?;
@@ -2321,7 +2323,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
 
     if version < 7 {
         let transaction = connection.transaction().map_err(storage_error)?;
-        transaction.execute_batch(SCHEMA_V7).map_err(storage_error)?;
+        transaction
+            .execute_batch(SCHEMA_V7)
+            .map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 7i64)
             .map_err(storage_error)?;
@@ -2330,7 +2334,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
 
     if version < 8 {
         let transaction = connection.transaction().map_err(storage_error)?;
-        transaction.execute_batch(SCHEMA_V8).map_err(storage_error)?;
+        transaction
+            .execute_batch(SCHEMA_V8)
+            .map_err(storage_error)?;
         transaction
             .pragma_update(None, "user_version", 8i64)
             .map_err(storage_error)?;
@@ -2345,7 +2351,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
         // and the rows are written — leaves the version at 8 with every row where it was, so the next
         // open retries the whole step instead of finding half a schema (the V9 atomicity test pins it).
         let transaction = connection.transaction().map_err(storage_error)?;
-        transaction.execute_batch(SCHEMA_V9).map_err(storage_error)?;
+        transaction
+            .execute_batch(SCHEMA_V9)
+            .map_err(storage_error)?;
         backfill_reader_authors(&transaction)?;
         transaction
             .execute_batch(SCHEMA_V9_RETIRE_USER_AUTHOR)
@@ -2363,7 +2371,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
         // interrupted upgrade, or a database built from the current shape and stamped older — must
         // not fail the whole open. The column is asked for, then added only if it is missing.
         if !column_exists(&transaction, "documents", "cover_source")? {
-            transaction.execute_batch(SCHEMA_V10_ADD).map_err(storage_error)?;
+            transaction
+                .execute_batch(SCHEMA_V10_ADD)
+                .map_err(storage_error)?;
         }
         transaction
             .execute_batch(SCHEMA_V10_BACKFILL)
@@ -2444,8 +2454,9 @@ fn read_schema_version(connection: &Connection) -> Result<u32, MirkError> {
     let raw: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(storage_error)?;
-    u32::try_from(raw)
-        .map_err(|_| MirkError::Storage(format!("database reports an invalid schema version {raw}")))
+    u32::try_from(raw).map_err(|_| {
+        MirkError::Storage(format!("database reports an invalid schema version {raw}"))
+    })
 }
 
 /// Splits a [`FileId`] into its storage columns: `(kind, volume_id, file_index, content_hash)`.
@@ -2453,12 +2464,7 @@ fn encode_identity(
     identity: &FileId,
 ) -> (&'static str, Option<String>, Option<String>, Option<String>) {
     match identity {
-        FileId::Posix { dev, ino } => (
-            "posix",
-            Some(dev.to_string()),
-            Some(ino.to_string()),
-            None,
-        ),
+        FileId::Posix { dev, ino } => ("posix", Some(dev.to_string()), Some(ino.to_string()), None),
         FileId::Windows {
             volume_serial,
             file_index,
@@ -2528,12 +2534,14 @@ fn decode_document(
         index.as_deref(),
         hash.as_deref(),
     )?;
-    let pages = pages.map(u32::try_from).transpose().map_err(|_| {
-        MirkError::Storage("stored page count is not a valid page number".into())
-    })?;
-    let cover_page = cover_page.map(u32::try_from).transpose().map_err(|_| {
-        MirkError::Storage("stored cover page is not a valid page number".into())
-    })?;
+    let pages = pages
+        .map(u32::try_from)
+        .transpose()
+        .map_err(|_| MirkError::Storage("stored page count is not a valid page number".into()))?;
+    let cover_page = cover_page
+        .map(u32::try_from)
+        .transpose()
+        .map_err(|_| MirkError::Storage("stored cover page is not a valid page number".into()))?;
 
     Ok(Document {
         path: PathBuf::from(path),
@@ -2549,10 +2557,12 @@ fn decode_document(
 }
 
 fn parse_u64(value: Option<&str>, column: &str) -> Result<u64, MirkError> {
-    let value =
-        value.ok_or_else(|| MirkError::Storage(format!("identity column `{column}` is missing")))?;
+    let value = value
+        .ok_or_else(|| MirkError::Storage(format!("identity column `{column}` is missing")))?;
     value.parse::<u64>().map_err(|_| {
-        MirkError::Storage(format!("identity column `{column}` is not a valid u64: `{value}`"))
+        MirkError::Storage(format!(
+            "identity column `{column}` is not a valid u64: `{value}`"
+        ))
     })
 }
 
@@ -2631,7 +2641,9 @@ fn suggestion_columns(row: &rusqlite::Row<'_>) -> rusqlite::Result<SuggestionCol
 fn suggestion_from_columns(columns: SuggestionColumns) -> Result<Suggestion, MirkError> {
     let (id, path, seen_count, first_seen_at, decision, decided_at) = columns;
     let seen_count = u32::try_from(seen_count).map_err(|_| {
-        MirkError::Storage(format!("suggestion {id} has an invalid seen count {seen_count}"))
+        MirkError::Storage(format!(
+            "suggestion {id} has an invalid seen count {seen_count}"
+        ))
     })?;
     let decision = match decision.as_deref() {
         None => None,
@@ -2826,7 +2838,10 @@ mod tests {
         let (_dir, path) = a_version_4_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), Store::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
 
         // The document's own title survives the V4 -> V5 step untouched, and it reads back with no
         // reader's title: the migration adds a fact, it does not invent one.
@@ -2859,7 +2874,10 @@ mod tests {
             Some("The document's own title"),
             "the reader's title must not overwrite the document's own"
         );
-        assert_eq!(library[0].document.document.display_title(), "The reader's title");
+        assert_eq!(
+            library[0].document.document.display_title(),
+            "The reader's title"
+        );
     }
 
     #[test]
@@ -2867,7 +2885,10 @@ mod tests {
         let (_dir, path) = a_version_3_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), Store::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
 
         // The watch, the document and its position all survive the V3 -> V4 step.
         let folders = store.folders().expect("list folders");
@@ -2901,7 +2922,11 @@ mod tests {
         let rows = store.progress_for_document(doc_id).expect("read positions");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].read_at, None, "the old row keeps its unknown time");
-        assert_eq!(rows[1].read_at, Some(1234), "the new time survives the migration");
+        assert_eq!(
+            rows[1].read_at,
+            Some(1234),
+            "the new time survives the migration"
+        );
     }
 
     #[test]
@@ -2909,7 +2934,10 @@ mod tests {
         let (_dir, path) = a_version_2_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), Store::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -2937,7 +2965,10 @@ mod tests {
         let (_dir, path) = a_version_1_database();
 
         let store = Store::open(&path).expect("opening migrates the database");
-        assert_eq!(store.schema_version().expect("schema version"), Store::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
 
         // What the older build recorded survives, including the flags the user owns.
         let folders = store.folders().expect("list folders");
@@ -2974,11 +3005,17 @@ mod tests {
         let before = std::fs::read(&path).expect("read the database bytes");
 
         let store = Store::open(&path).expect("reopen");
-        assert_eq!(store.schema_version().expect("schema version"), Store::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
         drop(store);
 
         let after = std::fs::read(&path).expect("read the database bytes");
-        assert_eq!(after, before, "a database already current must not be rewritten");
+        assert_eq!(
+            after, before,
+            "a database already current must not be rewritten"
+        );
     }
 
     /// A watched folder whose single document has a position and an open event, for the removal tests

@@ -116,8 +116,7 @@ fn discovers_nested_pdfs_case_insensitively_and_keeps_paths_byte_for_byte() {
     let identity = FakeIdentity;
 
     let nested = root.join("sub dir").join("nested.pdf");
-    let accented = root
-        .join("Comparación de Métodos entre JavaScript y Python.pdf");
+    let accented = root.join("Comparación de Métodos entre JavaScript y Python.pdf");
     let multibyte = root.join("café ☕").join("日本語.PDF");
     let ignored = root.join("notes.txt");
 
@@ -130,7 +129,11 @@ fn discovers_nested_pdfs_case_insensitively_and_keeps_paths_byte_for_byte() {
         .scan(&root)
         .expect("scan completes");
 
-    assert_eq!(report.discovered_count(), 3, "the non-PDF file is not discovered");
+    assert_eq!(
+        report.discovered_count(),
+        3,
+        "the non-PDF file is not discovered"
+    );
     assert_eq!(report.failure_count(), 0);
     for path in [&nested, &accented, &multibyte] {
         assert!(
@@ -224,8 +227,14 @@ fn reads_title_and_author_and_never_invents_absent_metadata() {
         .iter()
         .find(|document| document.path == without_info)
         .expect("the object-stream fixture was counted");
-    assert_eq!(unknown.title, None, "an absent title is None, not an empty string");
-    assert_eq!(unknown.author, None, "an absent author is None, not an empty string");
+    assert_eq!(
+        unknown.title, None,
+        "an absent title is None, not an empty string"
+    );
+    assert_eq!(
+        unknown.author, None,
+        "an absent author is None, not an empty string"
+    );
 }
 
 // --- S4: honest failures ---------------------------------------------------------------------
@@ -234,14 +243,8 @@ fn write_encrypted_fixture(source: &Path, destination: &Path) {
     // Encryption derives its key from the trailer `/ID`, which the fixtures do not carry; add one
     // so the encrypted copy can be produced at all.
     let file_id = lopdf::Object::Array(vec![
-        lopdf::Object::String(
-            b"0123456789abcdef".to_vec(),
-            lopdf::StringFormat::Literal,
-        ),
-        lopdf::Object::String(
-            b"0123456789abcdef".to_vec(),
-            lopdf::StringFormat::Literal,
-        ),
+        lopdf::Object::String(b"0123456789abcdef".to_vec(), lopdf::StringFormat::Literal),
+        lopdf::Object::String(b"0123456789abcdef".to_vec(), lopdf::StringFormat::Literal),
     ]);
     let mut borrowed = lopdf::Document::load(source).expect("load fixture for encryption");
     borrowed.trailer.set(b"ID", file_id.clone());
@@ -400,7 +403,9 @@ fn a_file_that_disappears_between_discovery_and_parsing_is_reported_not_fatal() 
     assert_eq!(outcome.failures[0].path, vanishes);
     assert!(!outcome.failures[0].reason.is_empty());
 
-    let identity = identity.identity(&vanishes).expect("fake identity never fails");
+    let identity = identity
+        .identity(&vanishes)
+        .expect("fake identity never fails");
     let stored = store
         .find_document_by_identity(&identity)
         .expect("lookup succeeds")
@@ -439,7 +444,9 @@ fn scanning_twice_leaves_the_same_rows_and_records_the_folder_once() {
         .expect("lookup succeeds")
         .expect("flat.pdf is stored");
     assert_eq!(flat_record.document.pages, Some(3));
-    let nested_identity = identity.identity(&nested).expect("fake identity never fails");
+    let nested_identity = identity
+        .identity(&nested)
+        .expect("fake identity never fails");
     let nested_record = store
         .find_document_by_identity(&nested_identity)
         .expect("lookup succeeds")
@@ -447,7 +454,11 @@ fn scanning_twice_leaves_the_same_rows_and_records_the_folder_once() {
     assert_eq!(nested_record.document.pages, Some(4));
 
     let folders = store.folders().expect("list folders");
-    assert_eq!(folders.len(), 1, "the watched folder is recorded exactly once");
+    assert_eq!(
+        folders.len(),
+        1,
+        "the watched folder is recorded exactly once"
+    );
     assert_eq!(
         folders[0].path,
         root.canonicalize().expect("canonical root")

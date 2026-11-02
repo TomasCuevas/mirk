@@ -303,7 +303,11 @@ mod tests {
             ("es", true, (MENU_HIDE, "Ocultar Mirk")),
             ("es", false, (MENU_SHOW, "Mostrar Mirk")),
         ] {
-            let settings = if language == "es" { "Ajustes" } else { "Settings" };
+            let settings = if language == "es" {
+                "Ajustes"
+            } else {
+                "Settings"
+            };
             let quit = if language == "es" { "Salir" } else { "Quit" };
             assert_eq!(
                 tray_menu_entries(Some(language), visible),
@@ -359,8 +363,7 @@ mod tests {
                     .filter(|item| matches!(item, TrayMenuItem::Divider))
                     .count();
                 assert_eq!(
-                    dividers,
-                    2,
+                    dividers, 2,
                     "language {language:?}, visible {visible}: a line between each entry"
                 );
             }

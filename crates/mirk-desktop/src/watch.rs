@@ -289,10 +289,7 @@ fn watch_until_stopped(store: Store, targets: &[WatchTarget], stop: &AtomicBool)
     let mut report = |outcome: WatchOutcome| report_outcome(&outcome);
 
     if let Err(error) = bridge.watch(targets, stop, &mut report) {
-        eprintln!(
-            "watching {} folder(s) failed: {error}",
-            targets.len()
-        );
+        eprintln!("watching {} folder(s) failed: {error}", targets.len());
     }
 }
 
@@ -317,7 +314,10 @@ fn report_outcome(outcome: &WatchOutcome) {
             );
         }
         WatchOutcome::Lost(path) => {
-            eprintln!("watched: events were dropped for {}; rescanned", path.display());
+            eprintln!(
+                "watched: events were dropped for {}; rescanned",
+                path.display()
+            );
         }
         WatchOutcome::Unwatchable(path) => {
             eprintln!("watched: {} cannot be watched", path.display());
@@ -338,10 +338,8 @@ mod tests {
 
     impl TempDir {
         fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "mirk-live-watch-{label}-{}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("mirk-live-watch-{label}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).expect("create the temporary directory");
             Self { path }
@@ -456,8 +454,8 @@ mod tests {
     }
 
     #[test]
-    fn a_document_that_arrived_while_the_application_was_closed_enters_the_library_on_the_next_launch()
-    {
+    fn a_document_that_arrived_while_the_application_was_closed_enters_the_library_on_the_next_launch(
+    ) {
         // The reader's case, exactly: the folder was already recorded, the document arrived while
         // the application was not running, and the watch never heard of it.
         let directory = TempDir::new("catch-up-arrival");
@@ -490,7 +488,9 @@ mod tests {
                     .path
                     .ends_with("The Demon-Haunted World.pdf")
             })
-            .expect("the document that arrived while the application was closed must enter the library");
+            .expect(
+                "the document that arrived while the application was closed must enter the library",
+            );
         assert_eq!(
             arrived.document.document.pages,
             Some(4),
@@ -521,7 +521,10 @@ mod tests {
             .iter()
             .filter(|entry| entry.document.document.path == document)
             .count();
-        assert_eq!(rows, 1, "a second pass must not add a second row for one path");
+        assert_eq!(
+            rows, 1,
+            "a second pass must not add a second row for one path"
+        );
 
         let fresh = unseen(&store, &folders).expect("list what the library does not hold");
         assert!(
@@ -559,17 +562,11 @@ mod tests {
             "the folder that is still there is caught up, and nothing is removed"
         );
         assert!(
-            listed[0]
-                .document
-                .document
-                .path
-                .ends_with("Kept.pdf"),
+            listed[0].document.document.path.ends_with("Kept.pdf"),
             "the surviving document is the one in the folder that exists"
         );
         assert!(
-            fresh
-                .iter()
-                .all(|path| path.ends_with("Kept.pdf")),
+            fresh.iter().all(|path| path.ends_with("Kept.pdf")),
             "the vanished folder contributes no paths: {fresh:?}"
         );
     }

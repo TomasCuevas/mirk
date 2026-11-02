@@ -73,10 +73,7 @@ pub enum FileId {
     /// POSIX: `st_dev` plus `st_ino`.
     Posix { dev: u64, ino: u64 },
     /// Windows: `dwVolumeSerialNumber` plus `nFileIndexHigh`/`Low`.
-    Windows {
-        volume_serial: u64,
-        file_index: u64,
-    },
+    Windows { volume_serial: u64, file_index: u64 },
     /// Fallback for filesystems with no usable identity: a hash of the file's contents.
     ContentHash(String),
 }
@@ -434,7 +431,10 @@ mod tests {
     #[test]
     fn a_document_with_no_choice_shows_the_first_page() {
         // The first page is the default, and this is the one place that default lives.
-        assert_eq!(Document::new("/library/report.pdf").cover_choice(), CoverChoice::Page(0));
+        assert_eq!(
+            Document::new("/library/report.pdf").cover_choice(),
+            CoverChoice::Page(0)
+        );
     }
 
     #[test]
@@ -504,7 +504,10 @@ mod tests {
         let mut document = Document::new("/library/report.pdf");
         document.author = Some("Embedded author".to_string());
 
-        assert_eq!(document.display_author().as_deref(), Some("Embedded author"));
+        assert_eq!(
+            document.display_author().as_deref(),
+            Some("Embedded author")
+        );
         assert_eq!(document.display_authors(), vec!["Embedded author"]);
     }
 
@@ -512,7 +515,9 @@ mod tests {
     fn a_document_with_no_author_at_all_shows_none() {
         // An author is optional, and there is no file-name fallback: inventing one would be a lie.
         assert_eq!(Document::new("/library/report.pdf").display_author(), None);
-        assert!(Document::new("/library/report.pdf").display_authors().is_empty());
+        assert!(Document::new("/library/report.pdf")
+            .display_authors()
+            .is_empty());
     }
 
     #[test]
@@ -532,17 +537,29 @@ mod tests {
         // it must still be treated as no entry rather than as an author named "  ".
         document.authors = vec!["  ".to_string()];
 
-        assert_eq!(document.display_author().as_deref(), Some("Embedded author"));
+        assert_eq!(
+            document.display_author().as_deref(),
+            Some("Embedded author")
+        );
         assert_eq!(document.display_authors(), vec!["Embedded author"]);
     }
 
     #[test]
     fn the_file_name_fallback_keeps_a_leading_dot_and_a_middle_dot() {
         assert_eq!(Document::new("/u/.hidden").display_title(), ".hidden");
-        assert_eq!(Document::new("/u/report.v2.pdf").display_title(), "report.v2");
-        assert_eq!(Document::new("/u/no-extension").display_title(), "no-extension");
+        assert_eq!(
+            Document::new("/u/report.v2.pdf").display_title(),
+            "report.v2"
+        );
+        assert_eq!(
+            Document::new("/u/no-extension").display_title(),
+            "no-extension"
+        );
         // The separator comparison is a path operation, not a character search: a dot in a
         // directory's name must not be mistaken for the file's extension.
-        assert_eq!(Document::new("/u/libros.v2/report.pdf").display_title(), "report");
+        assert_eq!(
+            Document::new("/u/libros.v2/report.pdf").display_title(),
+            "report"
+        );
     }
 }

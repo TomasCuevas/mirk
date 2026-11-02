@@ -283,7 +283,11 @@ fn attribute_value(tag: &str, start: usize) -> Option<(String, usize)> {
             index += 1;
         }
         let value = decode_entities(&tag[value_start..index]);
-        let next = if index < bytes.len() { index + 1 } else { index };
+        let next = if index < bytes.len() {
+            index + 1
+        } else {
+            index
+        };
         return Some((value, next));
     }
 
@@ -500,12 +504,7 @@ fn parse_iso8601_utc(value: &str) -> Option<i64> {
     }
 
     let days = days_from_civil(i64::from(year), i64::from(month), i64::from(day));
-    Some(
-        days * 86_400
-            + i64::from(hour) * 3_600
-            + i64::from(minute) * 60
-            + i64::from(second),
-    )
+    Some(days * 86_400 + i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second))
 }
 
 /// The unsigned number spelled by `bytes`, or `None` if any byte is not an ASCII digit.
@@ -679,7 +678,10 @@ mod tests {
 
         let history = RecentDocuments::read(&path).expect("read the fixture");
         assert_eq!(history.len(), 1, "only the local file:// entry counts");
-        assert_eq!(history.read_at(Path::new("/data/kept.pdf")), Some(1_788_851_165));
+        assert_eq!(
+            history.read_at(Path::new("/data/kept.pdf")),
+            Some(1_788_851_165)
+        );
         assert_eq!(history.read_at(Path::new("/share/doc.pdf")), None);
     }
 
@@ -712,10 +714,22 @@ mod tests {
         //   2024-03-01T00:00:00Z -> 1709251200  (day after the leap day)
         //   2000-01-01T00:00:00Z -> 946684800   (a leap year divisible by 400)
         //   1970-01-01T00:00:00Z -> 0
-        assert_eq!(parse_iso8601_utc("2026-09-08T07:06:05.654321Z"), Some(1_788_851_165));
-        assert_eq!(parse_iso8601_utc("2024-02-29T00:00:00.000000Z"), Some(1_709_164_800));
-        assert_eq!(parse_iso8601_utc("2024-03-01T00:00:00.000000Z"), Some(1_709_251_200));
-        assert_eq!(parse_iso8601_utc("2000-01-01T00:00:00.000000Z"), Some(946_684_800));
+        assert_eq!(
+            parse_iso8601_utc("2026-09-08T07:06:05.654321Z"),
+            Some(1_788_851_165)
+        );
+        assert_eq!(
+            parse_iso8601_utc("2024-02-29T00:00:00.000000Z"),
+            Some(1_709_164_800)
+        );
+        assert_eq!(
+            parse_iso8601_utc("2024-03-01T00:00:00.000000Z"),
+            Some(1_709_251_200)
+        );
+        assert_eq!(
+            parse_iso8601_utc("2000-01-01T00:00:00.000000Z"),
+            Some(946_684_800)
+        );
         assert_eq!(parse_iso8601_utc("1970-01-01T00:00:00Z"), Some(0));
     }
 

@@ -115,14 +115,18 @@ fn a_reading_time_round_trips_through_library_and_per_document_reads() {
     let rows = store.progress_for_document(doc_id).expect("read progress");
     assert_eq!(rows.len(), 1);
     assert_eq!(
-        rows[0].read_at, Some(read_at),
+        rows[0].read_at,
+        Some(read_at),
         "the reading time must survive the round trip"
     );
 
     let library = store.library().expect("list the library");
     assert_eq!(library.len(), 1);
     assert_eq!(
-        library[0].progress.as_ref().and_then(|progress| progress.read_at),
+        library[0]
+            .progress
+            .as_ref()
+            .and_then(|progress| progress.read_at),
         Some(read_at),
         "the listing must carry the reading time with the rest of the row"
     );
@@ -169,11 +173,17 @@ fn progress_written_without_a_reading_time_reads_back_as_unknown() {
     let library = store.library().expect("list the library");
     let entry = &library[0];
     assert_eq!(
-        entry.progress.as_ref().and_then(|progress| progress.read_at),
+        entry
+            .progress
+            .as_ref()
+            .and_then(|progress| progress.read_at),
         None
     );
     assert_ne!(
-        entry.progress.as_ref().and_then(|progress| progress.read_at),
+        entry
+            .progress
+            .as_ref()
+            .and_then(|progress| progress.read_at),
         entry.progress_recorded_at,
         "the reading time must not be filled in from the row's write time"
     );
@@ -220,7 +230,10 @@ fn writing_a_row_stamps_its_own_time_even_when_the_reading_time_is_old() {
         "the write time must not be the year-old reading time"
     );
     assert_eq!(
-        entry.progress.as_ref().and_then(|progress| progress.read_at),
+        entry
+            .progress
+            .as_ref()
+            .and_then(|progress| progress.read_at),
         Some(old),
         "the reading time must stay what the source reported"
     );
@@ -342,7 +355,10 @@ fn leaves_the_legacy_directory_alone_when_the_new_one_exists() {
     std::fs::create_dir(base.path().join("mirk")).expect("create current dir");
 
     assert!(adopt_legacy_data_dir(base.path()).is_none());
-    assert!(base.path().join("oct").exists(), "the legacy directory is untouched");
+    assert!(
+        base.path().join("oct").exists(),
+        "the legacy directory is untouched"
+    );
     assert!(base.path().join("mirk").exists());
 }
 
@@ -364,7 +380,10 @@ fn adopts_the_previous_name_as_well_as_the_oldest_one() {
     let adopted = adopt_legacy_data_dir(base.path()).expect("the previous name is adopted");
 
     assert_eq!(adopted, base.path().join("mirk"));
-    assert!(adopted.join("mirk.sqlite3").exists(), "the file takes the new name");
+    assert!(
+        adopted.join("mirk.sqlite3").exists(),
+        "the file takes the new name"
+    );
     assert!(!adopted.join("loci.sqlite3").exists());
 }
 
@@ -401,7 +420,9 @@ fn adopts_a_real_sqlite_database_that_still_opens_afterwards() {
     // The proof that matters: the file is still a database this build can open and read.
     let store = Store::open(database_file_in(&adopted)).expect("reopen the adopted database");
     assert_eq!(
-        store.document_count().expect("read through the adopted database"),
+        store
+            .document_count()
+            .expect("read through the adopted database"),
         0
     );
 }
@@ -420,8 +441,14 @@ fn moves_the_write_ahead_log_with_its_database() {
     // The trio travels together: a database renamed without its WAL is a database that lost its last
     // transaction.
     for suffix in ["", "-wal", "-shm"] {
-        assert!(adopted.join(format!("mirk.sqlite3{suffix}")).exists(), "{suffix} moved");
-        assert!(!adopted.join(format!("oct.sqlite3{suffix}")).exists(), "{suffix} left behind");
+        assert!(
+            adopted.join(format!("mirk.sqlite3{suffix}")).exists(),
+            "{suffix} moved"
+        );
+        assert!(
+            !adopted.join(format!("oct.sqlite3{suffix}")).exists(),
+            "{suffix} left behind"
+        );
     }
 }
 
@@ -440,7 +467,10 @@ fn merges_a_real_database_into_an_empty_modern_directory_and_it_still_opens() {
     let adopted = adopt_legacy_data_dir(base.path()).expect("the database is merged in");
 
     assert_eq!(adopted, base.path().join("mirk"));
-    assert!(adopted.join("covers").join("cover-1.png").exists(), "the covers moved");
+    assert!(
+        adopted.join("covers").join("cover-1.png").exists(),
+        "the covers moved"
+    );
     // The proof that matters: the merged file is a database this build can open and read.
     let store = Store::open(database_file_in(&adopted)).expect("reopen the merged database");
     assert_eq!(store.document_count().expect("read it"), 0);
@@ -501,7 +531,10 @@ fn finds_the_legacy_database_file_when_the_modern_one_is_absent() {
     let dir = tempfile::tempdir().expect("temp dir");
 
     // Nothing there: the modern name, which the store will create.
-    assert_eq!(database_file_in(dir.path()), dir.path().join("mirk.sqlite3"));
+    assert_eq!(
+        database_file_in(dir.path()),
+        dir.path().join("mirk.sqlite3")
+    );
 
     // Only the legacy file: it wins, so a failed file rename cannot orphan a full library behind an
     // empty database created beside it.
@@ -510,7 +543,10 @@ fn finds_the_legacy_database_file_when_the_modern_one_is_absent() {
 
     // Both: the modern one, because that is the one this build writes.
     std::fs::write(dir.path().join("mirk.sqlite3"), b"rows").expect("write modern db");
-    assert_eq!(database_file_in(dir.path()), dir.path().join("mirk.sqlite3"));
+    assert_eq!(
+        database_file_in(dir.path()),
+        dir.path().join("mirk.sqlite3")
+    );
 }
 
 #[test]
@@ -545,8 +581,7 @@ fn user_data_directory_follows_the_platform_conventions() {
     );
 
     assert_eq!(
-        user_data_dir_for(Platform::MacOs, None, Some(Path::new("/Users/u")), None)
-            .expect("macos"),
+        user_data_dir_for(Platform::MacOs, None, Some(Path::new("/Users/u")), None).expect("macos"),
         PathBuf::from("/Users/u/Library/Application Support/mirk")
     );
 
@@ -587,7 +622,10 @@ fn database_path_is_under_the_xdg_data_home_and_never_the_working_directory() {
     assert!(resolved.ends_with("mirk/mirk.sqlite3"), "{resolved:?}");
 
     let cwd = std::env::current_dir().expect("current dir");
-    assert!(!resolved.starts_with(&cwd), "database path must not be in the cwd");
+    assert!(
+        !resolved.starts_with(&cwd),
+        "database path must not be in the cwd"
+    );
 }
 
 // --- S6: versioned, forward-only, idempotent migrations ---------------------------------------
@@ -617,7 +655,10 @@ fn a_fresh_database_is_migrated_and_reopening_it_changes_nothing() {
     }
 
     let after = std::fs::read(&path).expect("read database bytes");
-    assert_eq!(before, after, "reopening a current database must change nothing");
+    assert_eq!(
+        before, after,
+        "reopening a current database must change nothing"
+    );
 }
 
 // --- S9: settings, the single source the interface and the tray share -------------------------
@@ -653,7 +694,9 @@ fn reopening_a_current_database_changes_nothing() {
             store.schema_version().expect("version"),
             Store::CURRENT_SCHEMA_VERSION
         );
-        store.set_setting("language", "es").expect("write a setting");
+        store
+            .set_setting("language", "es")
+            .expect("write a setting");
     }
     let before = std::fs::read(&path).expect("read the database bytes");
 
@@ -682,7 +725,10 @@ fn a_database_from_a_newer_build_is_refused_rather_than_downgraded() {
     let (_dir, path) = temp_db();
     {
         let store = Store::open(&path).expect("open");
-        assert_eq!(store.schema_version().expect("version"), Store::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store.schema_version().expect("version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
     }
 
     // Simulate a future build having written a higher version, then reopen with this build.
@@ -694,7 +740,10 @@ fn a_database_from_a_newer_build_is_refused_rather_than_downgraded() {
     }
 
     let error = Store::open(&path).expect_err("a newer schema must be refused");
-    assert!(matches!(error, MirkError::Storage(_)), "unexpected: {error:?}");
+    assert!(
+        matches!(error, MirkError::Storage(_)),
+        "unexpected: {error:?}"
+    );
 }
 
 #[test]
@@ -729,7 +778,9 @@ fn a_step_that_fails_on_the_way_to_v4_leaves_the_database_at_v3_untouched() {
                 .with_read_at(Some(read_at)),
             )
             .expect("record the position");
-        store.set_setting("language", "es").expect("write a setting");
+        store
+            .set_setting("language", "es")
+            .expect("write a setting");
     }
 
     // The write time is stamped by `unix_now`, so it is captured before the failure rather than
@@ -750,7 +801,8 @@ fn a_step_that_fails_on_the_way_to_v4_leaves_the_database_at_v3_untouched() {
     }
 
     // 1. The failing step reaches the caller rather than being swallowed or papered over.
-    let error = Store::open(&path).expect_err("the V4 step must fail when `read_at` already exists");
+    let error =
+        Store::open(&path).expect_err("the V4 step must fail when `read_at` already exists");
     assert!(
         matches!(error, MirkError::Storage(_)),
         "a failed migration must surface as a storage error, got {error:?}"
@@ -814,9 +866,11 @@ fn a_step_that_fails_on_the_way_to_v4_leaves_the_database_at_v3_untouched() {
     );
 
     let language: String = raw
-        .query_row("SELECT value FROM settings WHERE key = 'language'", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'language'",
+            [],
+            |row| row.get(0),
+        )
         .expect("the setting must survive the failed migration");
     assert_eq!(language, "es");
 
@@ -831,7 +885,10 @@ fn a_step_that_fails_on_the_way_to_v4_leaves_the_database_at_v3_untouched() {
         .map(|row| row.expect("row"))
         .collect();
     assert_eq!(
-        columns.iter().filter(|name| name.as_str() == "read_at").count(),
+        columns
+            .iter()
+            .filter(|name| name.as_str() == "read_at")
+            .count(),
         1,
         "the failed ADD COLUMN must not have left a second `read_at`; columns: {columns:?}"
     );
@@ -931,7 +988,9 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
                 .with_read_at(Some(1_700_000_000)),
             )
             .expect("record the position");
-        store.set_setting("language", "es").expect("write a setting");
+        store
+            .set_setting("language", "es")
+            .expect("write a setting");
     }
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
@@ -988,9 +1047,11 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
     assert_eq!(stored_read_at, Some(1_700_000_000));
 
     let language: String = raw
-        .query_row("SELECT value FROM settings WHERE key = 'language'", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'language'",
+            [],
+            |row| row.get(0),
+        )
         .expect("the setting must survive the failed migration");
     assert_eq!(language, "es");
 
@@ -1005,7 +1066,10 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
         .map(|row| row.expect("row"))
         .collect();
     assert_eq!(
-        columns.iter().filter(|name| name.as_str() == "user_title").count(),
+        columns
+            .iter()
+            .filter(|name| name.as_str() == "user_title")
+            .count(),
         1,
         "the failed ADD COLUMN must not have left a second `user_title`; columns: {columns:?}"
     );
@@ -1128,7 +1192,9 @@ fn a_step_that_fails_on_the_way_to_v6_leaves_the_database_at_v5_untouched() {
                 .with_read_at(Some(1_700_000_000)),
             )
             .expect("record the position");
-        store.set_setting("language", "es").expect("write a setting");
+        store
+            .set_setting("language", "es")
+            .expect("write a setting");
     }
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
@@ -1194,9 +1260,11 @@ fn a_step_that_fails_on_the_way_to_v6_leaves_the_database_at_v5_untouched() {
     assert_eq!(stored_read_at, Some(1_700_000_000));
 
     let language: String = raw
-        .query_row("SELECT value FROM settings WHERE key = 'language'", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'language'",
+            [],
+            |row| row.get(0),
+        )
         .expect("the setting must survive the failed migration");
     assert_eq!(language, "es");
 
@@ -1212,12 +1280,18 @@ fn a_step_that_fails_on_the_way_to_v6_leaves_the_database_at_v5_untouched() {
         .map(|row| row.expect("row"))
         .collect();
     assert_eq!(
-        columns.iter().filter(|name| name.as_str() == "cover_page").count(),
+        columns
+            .iter()
+            .filter(|name| name.as_str() == "cover_page")
+            .count(),
         1,
         "the failed ADD COLUMN must not have left a second `cover_page`; columns: {columns:?}"
     );
     assert_eq!(
-        columns.iter().filter(|name| name.as_str() == "cover_image").count(),
+        columns
+            .iter()
+            .filter(|name| name.as_str() == "cover_image")
+            .count(),
         1,
         "the failed batch must not have added `cover_image` twice; columns: {columns:?}"
     );
@@ -1313,7 +1387,9 @@ fn a_step_that_fails_on_the_way_to_v7_leaves_the_database_at_v6_untouched() {
                 .with_read_at(Some(1_700_000_000)),
             )
             .expect("record the position");
-        store.set_setting("language", "es").expect("write a setting");
+        store
+            .set_setting("language", "es")
+            .expect("write a setting");
     }
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
@@ -1392,9 +1468,11 @@ fn a_step_that_fails_on_the_way_to_v7_leaves_the_database_at_v6_untouched() {
     assert_eq!(stored_read_at, Some(1_700_000_000));
 
     let language: String = raw
-        .query_row("SELECT value FROM settings WHERE key = 'language'", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'language'",
+            [],
+            |row| row.get(0),
+        )
         .expect("the setting must survive the failed migration");
     assert_eq!(language, "es");
 
@@ -1409,7 +1487,10 @@ fn a_step_that_fails_on_the_way_to_v7_leaves_the_database_at_v6_untouched() {
         .map(|row| row.expect("row"))
         .collect();
     assert_eq!(
-        columns.iter().filter(|name| name.as_str() == "user_author").count(),
+        columns
+            .iter()
+            .filter(|name| name.as_str() == "user_author")
+            .count(),
         1,
         "the failed ADD COLUMN must not have left a second `user_author`; columns: {columns:?}"
     );
@@ -1481,7 +1562,9 @@ fn a_v8_database_keeps_every_readers_author_when_the_migration_gives_it_a_list()
 
         let mut cosmos = document("/library/cosmos.pdf", FileId::Posix { dev: 9, ino: 1 });
         cosmos.author = Some("Sagan, Carl; Druyan, Ann".to_string());
-        named = store.upsert_document(&cosmos).expect("insert the named document");
+        named = store
+            .upsert_document(&cosmos)
+            .expect("insert the named document");
         store
             .set_user_naming(named, Some("Cosmos"), AuthorEdit::Untouched)
             .expect("the reader's title, which must survive too");
@@ -1557,7 +1640,10 @@ fn a_v8_database_keeps_every_readers_author_when_the_migration_gives_it_a_list()
 
     // The other spelling of the same person is the SAME person, and the spelling that arrived first
     // wins — the migration deduplicates through the same key the write path uses.
-    let second = store.document_by_id(lowercase).expect("read").expect("present");
+    let second = store
+        .document_by_id(lowercase)
+        .expect("read")
+        .expect("present");
     assert_eq!(second.document.authors, vec!["Carl Sagan"]);
 
     // A blank was never an author: no row, and the document falls back to its embedded string.
@@ -1567,7 +1653,10 @@ fn a_v8_database_keeps_every_readers_author_when_the_migration_gives_it_a_list()
         blanked.document.display_authors(),
         vec!["The document's own author"]
     );
-    let absent = store.document_by_id(absent).expect("read").expect("present");
+    let absent = store
+        .document_by_id(absent)
+        .expect("read")
+        .expect("present");
     assert!(absent.document.authors.is_empty());
     assert!(absent.document.display_authors().is_empty());
 
@@ -1587,7 +1676,9 @@ fn a_v8_database_keeps_every_readers_author_when_the_migration_gives_it_a_list()
         "one row per person, deduplicated case-insensitively, first spelling wins"
     );
     let list_rows: i64 = raw
-        .query_row("SELECT COUNT(*) FROM document_authors", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM document_authors", [], |row| {
+            row.get(0)
+        })
         .expect("count the list rows");
     assert_eq!(
         list_rows, 2,
@@ -1600,7 +1691,11 @@ fn a_v8_database_keeps_every_readers_author_when_the_migration_gives_it_a_list()
         .expect("query")
         .map(|row| row.expect("row"))
         .collect();
-    assert_eq!(positions, vec![0, 0], "a backfilled list is one entry, at position 0");
+    assert_eq!(
+        positions,
+        vec![0, 0],
+        "a backfilled list is one entry, at position 0"
+    );
 
     // And the retired column is really gone: there is no second home for this fact to disagree from.
     let mut statement = raw
@@ -1658,7 +1753,9 @@ fn a_step_that_fails_on_the_way_to_v9_leaves_the_database_at_v8_untouched() {
                 .with_read_at(Some(1_700_000_000)),
             )
             .expect("record the position");
-        store.set_setting("language", "es").expect("write a setting");
+        store
+            .set_setting("language", "es")
+            .expect("write a setting");
     }
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
@@ -1730,9 +1827,11 @@ fn a_step_that_fails_on_the_way_to_v9_leaves_the_database_at_v8_untouched() {
         .expect("count the positions");
     assert_eq!(progress_count, 1, "no position may be lost");
     let language: String = raw
-        .query_row("SELECT value FROM settings WHERE key = 'language'", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'language'",
+            [],
+            |row| row.get(0),
+        )
         .expect("the setting must survive the failed migration");
     assert_eq!(language, "es");
 
@@ -1771,7 +1870,10 @@ fn a_step_that_fails_on_the_way_to_v9_leaves_the_database_at_v8_untouched() {
         .map(|row| row.expect("row"))
         .collect();
     assert_eq!(
-        columns.iter().filter(|name| name.as_str() == "user_author").count(),
+        columns
+            .iter()
+            .filter(|name| name.as_str() == "user_author")
+            .count(),
         1,
         "the retired column must still be there exactly once; columns: {columns:?}"
     );
@@ -1791,7 +1893,10 @@ fn the_readers_cover_choice_round_trips_and_survives_a_restart() {
     {
         let store = Store::open(&path).expect("open");
         document_id = store
-            .upsert_document(&document("/library/read.pdf", FileId::Posix { dev: 7, ino: 7 }))
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 7, ino: 7 },
+            ))
             .expect("insert");
 
         // Neither choice exists until the reader makes one: the first page is the rule's default and
@@ -1800,7 +1905,9 @@ fn the_readers_cover_choice_round_trips_and_survives_a_restart() {
         assert_eq!(entries[0].document.document.cover_page, None);
         assert_eq!(entries[0].document.document.cover_image, None);
 
-        store.set_cover_page(document_id, Some(12)).expect("choose a page");
+        store
+            .set_cover_page(document_id, Some(12))
+            .expect("choose a page");
         store
             .set_cover_image(document_id, Some("7-cover.jpg"))
             .expect("choose an image");
@@ -1842,7 +1949,9 @@ fn a_rescan_does_not_clear_the_readers_cover_choice() {
     let document_id = store
         .upsert_document(&document("/library/read.pdf", identity.clone()))
         .expect("insert");
-    store.set_cover_page(document_id, Some(3)).expect("choose a page");
+    store
+        .set_cover_page(document_id, Some(3))
+        .expect("choose a page");
     store
         .set_cover_image(document_id, Some("8-cover.png"))
         .expect("choose an image");
@@ -1858,7 +1967,11 @@ fn a_rescan_does_not_clear_the_readers_cover_choice() {
     let entries = store.library().expect("list");
     let document = &entries[0].document.document;
     assert_eq!(document.pages, Some(240), "the scan's own fact still lands");
-    assert_eq!(document.cover_page, Some(3), "a rescan must not clear the page");
+    assert_eq!(
+        document.cover_page,
+        Some(3),
+        "a rescan must not clear the page"
+    );
     assert_eq!(
         document.cover_image.as_deref(),
         Some("8-cover.png"),
@@ -1871,7 +1984,10 @@ fn a_blank_or_pathlike_cover_image_name_is_refused_as_an_invalid_argument() {
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");
     let id = store
-        .upsert_document(&document("/library/read.pdf", FileId::Posix { dev: 9, ino: 9 }))
+        .upsert_document(&document(
+            "/library/read.pdf",
+            FileId::Posix { dev: 9, ino: 9 },
+        ))
         .expect("insert");
 
     for refused in ["", "   ", "/etc/passwd", "a/../b.png", "dir\\x.png"] {
@@ -1944,7 +2060,10 @@ fn opening_something_that_is_not_a_database_is_an_honest_storage_error() {
     std::fs::write(&path, b"this is definitely not SQLite").expect("write junk");
 
     let error = Store::open(&path).expect_err("junk must not open as a database");
-    assert!(matches!(error, MirkError::Storage(_)), "unexpected: {error:?}");
+    assert!(
+        matches!(error, MirkError::Storage(_)),
+        "unexpected: {error:?}"
+    );
 }
 
 // --- S1, again: the column contract, not just the table names ---------------------------------
@@ -1985,10 +2104,7 @@ fn the_schema_has_the_documented_columns_of_every_table() {
         ),
         // R42/S1-S3: the readers' authors are facts in their own tables, and the order is a column.
         ("authors", &["id", "name", "name_key"]),
-        (
-            "document_authors",
-            &["doc_id", "author_id", "position"],
-        ),
+        ("document_authors", &["doc_id", "author_id", "position"]),
         (
             "progress",
             &[
@@ -2008,7 +2124,15 @@ fn the_schema_has_the_documented_columns_of_every_table() {
         ),
         (
             "viewers",
-            &["id", "exe", "desktop_id", "bundle_id", "platform", "capability", "detail"],
+            &[
+                "id",
+                "exe",
+                "desktop_id",
+                "bundle_id",
+                "platform",
+                "capability",
+                "detail",
+            ],
         ),
         (
             "folders",
@@ -2198,11 +2322,7 @@ fn the_readers_title_is_a_separate_fact_and_is_the_one_displayed() {
     assert_eq!(found.document.display_title(), "The document's own title");
 
     store
-        .set_user_naming(
-            id,
-            Some("What the reader called it"),
-            AuthorEdit::Untouched,
-        )
+        .set_user_naming(id, Some("What the reader called it"), AuthorEdit::Untouched)
         .expect("name the document");
 
     let found = store
@@ -2280,11 +2400,7 @@ fn an_upsert_never_erases_the_readers_title() {
         .upsert_document(&document("/library/named.pdf", identity.clone()))
         .expect("insert the document");
     store
-        .set_user_naming(
-            id,
-            Some("What the reader called it"),
-            AuthorEdit::Untouched,
-        )
+        .set_user_naming(id, Some("What the reader called it"), AuthorEdit::Untouched)
         .expect("name the document");
 
     // The rescan knows the same identity and fresher metadata, and nothing about the reader's title.
@@ -2327,7 +2443,10 @@ fn the_readers_author_is_a_separate_fact_and_is_the_one_displayed() {
         .expect("lookup")
         .expect("present");
     assert!(found.document.authors.is_empty());
-    assert_eq!(found.document.display_author().as_deref(), Some("The document's own author"));
+    assert_eq!(
+        found.document.display_author().as_deref(),
+        Some("The document's own author")
+    );
 
     store
         .set_user_naming(
@@ -2348,7 +2467,10 @@ fn the_readers_author_is_a_separate_fact_and_is_the_one_displayed() {
         "the reader's author must not overwrite the document's own"
     );
     assert_eq!(found.document.authors, vec!["What the reader called them"]);
-    assert_eq!(found.document.display_author().as_deref(), Some("What the reader called them"));
+    assert_eq!(
+        found.document.display_author().as_deref(),
+        Some("What the reader called them")
+    );
 }
 
 #[test]
@@ -2612,9 +2734,14 @@ fn the_readers_authors_are_one_row_per_person_in_the_readers_order() {
         "one row per person, and the spelling that arrived first is the one kept"
     );
     let list_rows: i64 = raw
-        .query_row("SELECT COUNT(*) FROM document_authors", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM document_authors", [], |row| {
+            row.get(0)
+        })
         .expect("count the list rows");
-    assert_eq!(list_rows, 3, "three entries, and none of them the same person twice");
+    assert_eq!(
+        list_rows, 3,
+        "three entries, and none of them the same person twice"
+    );
 
     // The order is the reader's, so the reverse list is a different — and equally legitimate — answer.
     store
@@ -2659,10 +2786,7 @@ fn the_readers_authors_are_one_row_per_person_in_the_readers_order() {
     // The list is a stored fact, not something a running process remembers: a fresh open reads the
     // same people in the same order back.
     let reopened = Store::open(&path).expect("reopen");
-    let found = reopened
-        .document_by_id(id)
-        .expect("read")
-        .expect("present");
+    let found = reopened.document_by_id(id).expect("read").expect("present");
     assert_eq!(found.document.authors, vec!["Ann Druyan", "Carl Sagan"]);
 }
 
@@ -2744,11 +2868,17 @@ fn the_listing_carries_the_readers_authors_and_the_one_rule_that_decides_what_is
 
     // 3. Neither: no displayed author at all, and nothing invented in its place.
     let none_id = store
-        .upsert_document(&document("/library/c-none.pdf", FileId::Posix { dev: 6, ino: 3 }))
+        .upsert_document(&document(
+            "/library/c-none.pdf",
+            FileId::Posix { dev: 6, ino: 3 },
+        ))
         .expect("insert");
 
     // 4. An embedded string that looks like a list and is not one: it is not split on " and " either.
-    let mut conjunction = document("/library/d-embedded-and.pdf", FileId::Posix { dev: 6, ino: 4 });
+    let mut conjunction = document(
+        "/library/d-embedded-and.pdf",
+        FileId::Posix { dev: 6, ino: 4 },
+    );
     conjunction.author = Some("Carl Sagan and Ann Druyan".to_string());
     let conjunction_id = store.upsert_document(&conjunction).expect("insert");
 
@@ -2786,12 +2916,10 @@ fn the_listing_carries_the_readers_authors_and_the_one_rule_that_decides_what_is
     );
 
     // The single-document read must agree with the listing for every one of them: one rule, one read.
-    for (entry, expected_id) in entries.iter().zip([
-        comma_id,
-        readers_id,
-        none_id,
-        conjunction_id,
-    ]) {
+    for (entry, expected_id) in entries
+        .iter()
+        .zip([comma_id, readers_id, none_id, conjunction_id])
+    {
         assert_eq!(entry.document.id, expected_id);
         let by_id = store
             .document_by_id(entry.document.id)
@@ -2863,10 +2991,17 @@ fn recording_the_same_folder_twice_keeps_one_row_and_the_first_added_time() {
     assert_eq!(first, second, "re-recording must update, not insert");
     assert_eq!(store.folders().expect("list folders").len(), 1);
 
-    let recorded = store.folders().expect("list folders").pop().expect("one folder");
+    let recorded = store
+        .folders()
+        .expect("list folders")
+        .pop()
+        .expect("one folder");
     assert_eq!(recorded.path, PathBuf::from("/library"));
     assert!(recorded.recursive);
-    assert!(recorded.enabled, "the scanner does not touch the user's enabled flag");
+    assert!(
+        recorded.enabled,
+        "the scanner does not touch the user's enabled flag"
+    );
 
     // A different recursion flag updates the existing row rather than forking it.
     store
@@ -2948,7 +3083,9 @@ fn forgetting_a_folder_takes_the_documents_and_positions_it_covers_with_it() {
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");
     let keep = store.record_folder("/library/keep", true).expect("record");
-    let doomed = store.record_folder("/library/doomed", true).expect("record");
+    let doomed = store
+        .record_folder("/library/doomed", true)
+        .expect("record");
 
     let doc_id = store
         .upsert_document(&document(
@@ -2979,7 +3116,10 @@ fn forgetting_a_folder_takes_the_documents_and_positions_it_covers_with_it() {
         removal.documents,
         vec!["/library/doomed/Cosmos.pdf".to_string()]
     );
-    assert!(removal.kept.is_empty(), "no other watch covers this document");
+    assert!(
+        removal.kept.is_empty(),
+        "no other watch covers this document"
+    );
 
     let folders = store.folders().expect("list folders");
     assert_eq!(folders.len(), 1);
@@ -2987,7 +3127,11 @@ fn forgetting_a_folder_takes_the_documents_and_positions_it_covers_with_it() {
 
     // The counts, not merely the absence of a row: the user asked for the watch's documents to
     // leave the library, so the document, its position and the listing entry all go with it.
-    assert_eq!(store.document_count().expect("count"), 0, "the document goes");
+    assert_eq!(
+        store.document_count().expect("count"),
+        0,
+        "the document goes"
+    );
     assert!(
         store
             .progress_for_document(doc_id)
@@ -3007,13 +3151,18 @@ fn removing_the_outer_watch_keeps_documents_the_inner_watch_still_covers() {
     // watch must not empty the folder that is still watched.
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");
-    let outer = store.record_folder("/lib", true).expect("record the outer watch");
+    let outer = store
+        .record_folder("/lib", true)
+        .expect("record the outer watch");
     let inner = store
         .record_folder("/lib/inner", true)
         .expect("record the inner watch");
 
     store
-        .upsert_document(&document("/lib/direct.pdf", FileId::Posix { dev: 1, ino: 1 }))
+        .upsert_document(&document(
+            "/lib/direct.pdf",
+            FileId::Posix { dev: 1, ino: 1 },
+        ))
         .expect("insert a document directly under the outer watch");
     let nested = store
         .upsert_document(&document(
@@ -3049,7 +3198,9 @@ fn removing_the_inner_watch_keeps_its_documents_because_the_outer_watch_still_co
     // contract's `covering_folder` guard keeps them, and this test pins that contract. See risks.)
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");
-    let outer = store.record_folder("/lib", true).expect("record the outer watch");
+    let outer = store
+        .record_folder("/lib", true)
+        .expect("record the outer watch");
     let inner = store
         .record_folder("/lib/inner", true)
         .expect("record the inner watch");
@@ -3114,12 +3265,10 @@ fn a_document_outside_every_watch_is_never_touched() {
         library[0].document.id, outside,
         "a document outside every watch stays"
     );
-    assert!(
-        store
-            .progress_for_document(inside)
-            .expect("progress")
-            .is_empty()
-    );
+    assert!(store
+        .progress_for_document(inside)
+        .expect("progress")
+        .is_empty());
 }
 
 #[test]
@@ -3157,19 +3306,19 @@ fn a_document_in_a_sibling_folder_sharing_a_string_prefix_is_never_touched() {
         store.library().expect("list the library")[0].document.id,
         sibling
     );
-    assert!(
-        store
-            .progress_for_document(inside)
-            .expect("progress")
-            .is_empty()
-    );
+    assert!(store
+        .progress_for_document(inside)
+        .expect("progress")
+        .is_empty());
 }
 
 #[test]
 fn the_removal_names_the_documents_that_go_and_the_ones_that_stay_sorted_by_path() {
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");
-    let outer = store.record_folder("/lib", true).expect("record the outer watch");
+    let outer = store
+        .record_folder("/lib", true)
+        .expect("record the outer watch");
     store
         .record_folder("/lib/inner", true)
         .expect("record the inner watch");
@@ -3222,7 +3371,10 @@ fn folder_removal_plans_exactly_what_forget_folder_does_and_changes_nothing() {
         ))
         .expect("insert");
     store
-        .upsert_document(&document("/lib/kept/stays.pdf", FileId::Posix { dev: 5, ino: 2 }))
+        .upsert_document(&document(
+            "/lib/kept/stays.pdf",
+            FileId::Posix { dev: 5, ino: 2 },
+        ))
         .expect("insert");
 
     // The plan is read-only: two consecutive calls agree, and neither changes the store.
@@ -3333,9 +3485,8 @@ fn watched(id: i64, path: &str) -> WatchedFolder {
 #[test]
 fn a_watched_folder_covers_itself_and_its_subfolders_but_not_a_lookalike_sibling() {
     let folders = vec![watched(1, "/library/pdfs")];
-    let covering = |candidate: &str| {
-        covering_folder(&folders, Path::new(candidate)).map(|folder| folder.id)
-    };
+    let covering =
+        |candidate: &str| covering_folder(&folders, Path::new(candidate)).map(|folder| folder.id);
 
     // The trap this test exists for: `/library/pdfs-old` shares the entire character prefix
     // `/library/pdfs` and is an unrelated folder. `str::starts_with` says it is inside; comparing
@@ -3345,8 +3496,16 @@ fn a_watched_folder_covers_itself_and_its_subfolders_but_not_a_lookalike_sibling
     assert_eq!(covering("/library/pdfs-2024"), None);
 
     // The answers that must be a refusal.
-    assert_eq!(covering("/library/pdfs"), Some(1), "the watched folder itself");
-    assert_eq!(covering("/library/pdfs/book.pdf"), Some(1), "a real subfolder");
+    assert_eq!(
+        covering("/library/pdfs"),
+        Some(1),
+        "the watched folder itself"
+    );
+    assert_eq!(
+        covering("/library/pdfs/book.pdf"),
+        Some(1),
+        "a real subfolder"
+    );
     assert_eq!(
         covering("/library/pdfs/deep/inside"),
         Some(1),
@@ -3354,17 +3513,24 @@ fn a_watched_folder_covers_itself_and_its_subfolders_but_not_a_lookalike_sibling
     );
 
     // ... and the ones that must not be.
-    assert_eq!(covering("/library"), None, "the parent is not inside its child");
+    assert_eq!(
+        covering("/library"),
+        None,
+        "the parent is not inside its child"
+    );
     assert_eq!(covering("/library/other"), None, "an unrelated sibling");
-    assert_eq!(covering("/"), None, "the filesystem root is not inside anything");
+    assert_eq!(
+        covering("/"),
+        None,
+        "the filesystem root is not inside anything"
+    );
 }
 
 #[test]
 fn a_trailing_separator_on_the_watched_path_changes_nothing() {
     let folders = vec![watched(1, "/library/pdfs/")];
-    let covering = |candidate: &str| {
-        covering_folder(&folders, Path::new(candidate)).map(|folder| folder.id)
-    };
+    let covering =
+        |candidate: &str| covering_folder(&folders, Path::new(candidate)).map(|folder| folder.id);
 
     assert_eq!(covering("/library/pdfs/book"), Some(1));
     assert_eq!(covering("/library/pdfs"), Some(1));
@@ -3377,9 +3543,8 @@ fn the_tightest_covering_folder_is_the_one_that_gets_named() {
     // the rule existed. The refusal names the folder that actually bounds the choice, so the reader
     // is handed the narrowest true answer rather than a technically-correct ancestor.
     let folders = vec![watched(1, "/library"), watched(2, "/library/pdfs")];
-    let covering = |candidate: &str| {
-        covering_folder(&folders, Path::new(candidate)).map(|folder| folder.id)
-    };
+    let covering =
+        |candidate: &str| covering_folder(&folders, Path::new(candidate)).map(|folder| folder.id);
 
     assert_eq!(covering("/library/pdfs/book"), Some(2));
     assert_eq!(covering("/library/other"), Some(1));
@@ -3519,11 +3684,17 @@ fn the_library_keeps_two_documents_with_the_same_page_distinguishable_by_provena
         .expect("manual document");
 
     assert_eq!(
-        from_viewer.progress.as_ref().map(|progress| &progress.source),
+        from_viewer
+            .progress
+            .as_ref()
+            .map(|progress| &progress.source),
         Some(&ProgressSource::External("evince-gvfs"))
     );
     assert_eq!(
-        from_viewer.progress.as_ref().map(|progress| progress.confidence),
+        from_viewer
+            .progress
+            .as_ref()
+            .map(|progress| progress.confidence),
         Some(Confidence::Exact)
     );
     assert_eq!(
@@ -3531,7 +3702,10 @@ fn the_library_keeps_two_documents_with_the_same_page_distinguishable_by_provena
         Some(&ProgressSource::Manual)
     );
     assert_eq!(
-        by_hand.progress.as_ref().map(|progress| progress.confidence),
+        by_hand
+            .progress
+            .as_ref()
+            .map(|progress| progress.confidence),
         Some(Confidence::Manual)
     );
 }
@@ -3633,7 +3807,10 @@ fn a_suggestion_is_decided_once_and_a_second_decision_is_refused() {
         .decide_suggestion(id, SuggestionDecision::Accepted)
         .expect("accept");
     assert_eq!(decided.decision, Some(SuggestionDecision::Accepted));
-    assert!(decided.decided_at.is_some(), "the decision records when it happened");
+    assert!(
+        decided.decided_at.is_some(),
+        "the decision records when it happened"
+    );
 
     // The queue offers only what still needs an answer, so the decided row is absent now.
     assert!(store.suggestions().expect("list").is_empty());
@@ -3729,7 +3906,9 @@ fn a_stored_decision_this_build_does_not_know_is_an_error_not_an_undecided_row()
     let (_dir, path) = temp_db();
     {
         let store = Store::open(&path).expect("open");
-        store.record_suggestion("/library/future.pdf").expect("record");
+        store
+            .record_suggestion("/library/future.pdf")
+            .expect("record");
     }
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
@@ -3792,7 +3971,8 @@ fn a_step_that_fails_on_the_way_to_v8_leaves_the_database_at_v7_untouched() {
     }
 
     // 1. The failing step reaches the caller rather than being swallowed or papered over.
-    let error = Store::open(&path).expect_err("the V8 step must fail when `decision` already exists");
+    let error =
+        Store::open(&path).expect_err("the V8 step must fail when `decision` already exists");
     assert!(
         matches!(error, MirkError::Storage(_)),
         "a failed migration must surface as a storage error, got {error:?}"
@@ -3848,7 +4028,6 @@ fn a_step_that_fails_on_the_way_to_v8_leaves_the_database_at_v7_untouched() {
     );
 }
 
-
 // --- R19: a page and an image can both be kept, and the source decides -------------------------
 
 #[test]
@@ -3856,7 +4035,10 @@ fn a_page_can_be_the_cover_while_the_image_is_kept() {
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");
     let id = store
-        .upsert_document(&document("/library/cover.pdf", FileId::Posix { dev: 5, ino: 1 }))
+        .upsert_document(&document(
+            "/library/cover.pdf",
+            FileId::Posix { dev: 5, ino: 1 },
+        ))
         .expect("insert");
 
     store.set_cover_page(id, Some(4)).expect("choose a page");
@@ -3864,14 +4046,20 @@ fn a_page_can_be_the_cover_while_the_image_is_kept() {
         .set_cover_image(id, Some("cover.png"))
         .expect("choose an image");
     assert_eq!(
-        store.document_by_id(id).expect("read").expect("row").cover_choice(),
+        store
+            .document_by_id(id)
+            .expect("read")
+            .expect("row")
+            .cover_choice(),
         CoverChoice::Image("cover.png".to_string()),
         "choosing an image makes it the cover"
     );
 
     // The user's defect: this used to change a column the choice ignored. Now it takes over, and the
     // image stays exactly where it is.
-    store.set_cover_page(id, Some(2)).expect("choose a page again");
+    store
+        .set_cover_page(id, Some(2))
+        .expect("choose a page again");
     let record = store.document_by_id(id).expect("read").expect("row");
     assert_eq!(record.cover_choice(), CoverChoice::Page(2));
     assert_eq!(
@@ -3885,14 +4073,22 @@ fn a_page_can_be_the_cover_while_the_image_is_kept() {
         .set_cover_source(id, CoverSource::Image)
         .expect("use the stored image");
     assert_eq!(
-        store.document_by_id(id).expect("read").expect("row").cover_choice(),
+        store
+            .document_by_id(id)
+            .expect("read")
+            .expect("row")
+            .cover_choice(),
         CoverChoice::Image("cover.png".to_string())
     );
 
     // Removing the image hands the cover back to the page the reader had.
     store.set_cover_image(id, None).expect("remove the image");
     assert_eq!(
-        store.document_by_id(id).expect("read").expect("row").cover_choice(),
+        store
+            .document_by_id(id)
+            .expect("read")
+            .expect("row")
+            .cover_choice(),
         CoverChoice::Page(2)
     );
 }
@@ -3903,15 +4099,23 @@ fn a_v9_database_gets_its_cover_source_from_the_image_it_had() {
     let (with_image, without) = {
         let store = Store::open(&path).expect("build a current database");
         let with_image = store
-            .upsert_document(&document("/library/with.png", FileId::Posix { dev: 6, ino: 1 }))
+            .upsert_document(&document(
+                "/library/with.png",
+                FileId::Posix { dev: 6, ino: 1 },
+            ))
             .expect("insert");
         store
             .set_cover_image(with_image, Some("chosen.png"))
             .expect("choose an image");
         let without = store
-            .upsert_document(&document("/library/without.pdf", FileId::Posix { dev: 6, ino: 2 }))
+            .upsert_document(&document(
+                "/library/without.pdf",
+                FileId::Posix { dev: 6, ino: 2 },
+            ))
             .expect("insert");
-        store.set_cover_page(without, Some(3)).expect("choose a page");
+        store
+            .set_cover_page(without, Some(3))
+            .expect("choose a page");
         (with_image, without)
     };
     {
@@ -3927,11 +4131,19 @@ fn a_v9_database_gets_its_cover_source_from_the_image_it_had() {
     // The backfill reproduces the old rule exactly: an image means image, otherwise the page. A
     // library opens on the same cover it showed before the upgrade.
     assert_eq!(
-        store.document_by_id(with_image).expect("read").expect("row").cover_choice(),
+        store
+            .document_by_id(with_image)
+            .expect("read")
+            .expect("row")
+            .cover_choice(),
         CoverChoice::Image("chosen.png".to_string())
     );
     assert_eq!(
-        store.document_by_id(without).expect("read").expect("row").cover_choice(),
+        store
+            .document_by_id(without)
+            .expect("read")
+            .expect("row")
+            .cover_choice(),
         CoverChoice::Page(3)
     );
 }

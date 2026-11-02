@@ -208,7 +208,11 @@ fn an_added_pdf_is_counted_and_stored_with_its_real_page_count() {
         .find_document_by_identity(&identity.identity(&path).expect("fake identity never fails"))
         .expect("lookup succeeds")
         .expect("the added PDF is stored");
-    assert_eq!(stored.document.pages, Some(3), "the real page count is stored");
+    assert_eq!(
+        stored.document.pages,
+        Some(3),
+        "the real page count is stored"
+    );
 }
 
 #[test]
@@ -255,7 +259,11 @@ fn a_changed_file_is_updated_in_place_and_never_duplicated() {
         .find_document_by_identity(&identity.identity(&path).expect("fake identity never fails"))
         .expect("lookup succeeds")
         .expect("the document is still stored");
-    assert_eq!(stored.document.pages, Some(3), "the new count replaced the old one");
+    assert_eq!(
+        stored.document.pages,
+        Some(3),
+        "the new count replaced the old one"
+    );
 }
 
 #[test]
@@ -289,7 +297,11 @@ fn an_unreadable_added_file_is_reported_and_keeps_pages_unknown() {
         .expect("lookup succeeds")
         .expect("a discovered PDF is stored even when it cannot be read");
     assert_eq!(stored.document.pages, None, "unknown pages stay None");
-    assert_ne!(stored.document.pages, Some(0), "unknown pages must never become 0");
+    assert_ne!(
+        stored.document.pages,
+        Some(0),
+        "unknown pages must never become 0"
+    );
 }
 
 // --- S3: Removed reports and changes nothing -------------------------------------------------
@@ -353,8 +365,14 @@ fn a_removed_file_is_reported_and_the_library_is_left_untouched() {
         .expect("the removed file's row is deliberately kept");
     assert_eq!(after.document.path, path);
     assert_eq!(after.document.pages, Some(4));
-    let progress = store.progress_for_document(after.id).expect("read progress");
-    assert_eq!(progress.len(), 1, "the reading history survives the removal");
+    let progress = store
+        .progress_for_document(after.id)
+        .expect("read progress");
+    assert_eq!(
+        progress.len(),
+        1,
+        "the reading history survives the removal"
+    );
     assert_eq!(progress[0].page, 2);
     assert_eq!(progress[0].total, Some(4));
 }
@@ -431,7 +449,9 @@ fn an_unwatchable_path_is_reported_and_never_scanned() {
     );
     assert!(
         store
-            .find_document_by_identity(&identity.identity(&path).expect("fake identity never fails"))
+            .find_document_by_identity(
+                &identity.identity(&path).expect("fake identity never fails")
+            )
             .expect("lookup succeeds")
             .is_none(),
         "rescanning cannot fix an unwatchable path, so it is not scanned",
@@ -499,7 +519,9 @@ fn every_outcome_reaches_the_sink_exactly_once() {
     for path in [&removed, &unwatchable] {
         assert!(
             store
-                .find_document_by_identity(&identity.identity(path).expect("fake identity never fails"))
+                .find_document_by_identity(
+                    &identity.identity(path).expect("fake identity never fails")
+                )
                 .expect("lookup succeeds")
                 .is_none(),
             "{} must not have been stored",
@@ -529,8 +551,15 @@ fn setting_the_stop_flag_ends_the_watch_and_returns() {
         .watch(&[target(&root)], &stop, &mut sink)
         .expect("the loop returns once the stop flag is set");
 
-    assert!(stop.load(Ordering::SeqCst), "the stop flag reached the watcher");
-    assert_eq!(outcomes.len(), 1, "the one scripted event was handled before the loop ended");
+    assert!(
+        stop.load(Ordering::SeqCst),
+        "the stop flag reached the watcher"
+    );
+    assert_eq!(
+        outcomes.len(),
+        1,
+        "the one scripted event was handled before the loop ended"
+    );
 }
 
 // --- S7: the watch must not hold pdfium's process-wide lock ----------------------------------
@@ -586,9 +615,9 @@ fn another_thread_can_bind_pdfium_while_the_bridge_is_watching() {
         let _ = bound_tx.send(answer);
     });
 
-    let answer = bound_rx.recv_timeout(Duration::from_secs(5)).expect(
-        "a second thread must be able to bind pdfium while the bridge is watching",
-    );
+    let answer = bound_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("a second thread must be able to bind pdfium while the bridge is watching");
     answer.expect("binding pdfium outside the watch succeeds");
 
     stop.store(true, Ordering::SeqCst);

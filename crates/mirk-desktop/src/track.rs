@@ -15,7 +15,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mirk_core::{Availability, MirkError, OpenDocumentDetector, ProgressProvider, StoredProgress};
-use mirk_platform::recent::{RecentDocuments, recently_used_path};
+use mirk_platform::recent::{recently_used_path, RecentDocuments};
 use mirk_store::{LibraryEntry, Store};
 
 /// How often the tick asks the detector what is open and the providers what those documents say.
@@ -392,7 +392,10 @@ fn is_same_observation(recorded: Option<&StoredProgress>, candidate: &StoredProg
 
 /// What the store already knows about when this document was read.
 fn known_reading_time(entry: &LibraryEntry) -> Option<i64> {
-    entry.progress.as_ref().and_then(|progress| progress.read_at)
+    entry
+        .progress
+        .as_ref()
+        .and_then(|progress| progress.read_at)
 }
 
 /// Whether `candidate` is a reading time we can believe.
@@ -474,7 +477,11 @@ fn with_swept_reading_time(
     now: Option<i64>,
 ) -> StoredProgress {
     let observed = history.and_then(|documents| documents.read_at(&entry.document.document.path));
-    candidate.with_read_at(newest_reading_time(known_reading_time(entry), observed, now))
+    candidate.with_read_at(newest_reading_time(
+        known_reading_time(entry),
+        observed,
+        now,
+    ))
 }
 
 /// The clock, in Unix seconds, or `None` when it cannot answer. A sweep that cannot say what time it is
@@ -720,7 +727,8 @@ mod tests {
         let reading = || {
             let provider = FakeProvider::new("evince-gvfs", &["evince"])
                 .answering("/lib/Cosmos.pdf", Answer::At(9));
-            let detector = FakeDetector::reporting(vec![open_document("/lib/Cosmos.pdf", "evince")]);
+            let detector =
+                FakeDetector::reporting(vec![open_document("/lib/Cosmos.pdf", "evince")]);
             track_open_documents(&store, &detector, &[Box::new(provider)])
         };
 
@@ -738,7 +746,10 @@ mod tests {
         let second = reading();
         assert!(second.recorded.is_empty(), "nothing changed: {second:?}");
         assert_eq!(
-            store.progress_for_document(doc_id).expect("read back").len(),
+            store
+                .progress_for_document(doc_id)
+                .expect("read back")
+                .len(),
             2,
             "a tick must not append a duplicate row for a page that has not moved"
         );
@@ -759,7 +770,10 @@ mod tests {
 
         assert!(report.recorded.is_empty(), "no record, no row: {report:?}");
         assert!(
-            store.progress_for_document(doc_id).expect("read back").is_empty(),
+            store
+                .progress_for_document(doc_id)
+                .expect("read back")
+                .is_empty(),
             "Ok(None) must never become a page-zero row"
         );
     }
@@ -777,12 +791,17 @@ mod tests {
         let provider = FakeProvider::new("evince-gvfs", &["evince"])
             .answering("/elsewhere/Unknown.pdf", Answer::At(12));
         let asked = provider.recorder();
-        let detector = FakeDetector::reporting(vec![open_document("/elsewhere/Unknown.pdf", "evince")]);
+        let detector =
+            FakeDetector::reporting(vec![open_document("/elsewhere/Unknown.pdf", "evince")]);
 
         let report = track_open_documents(&store, &detector, &[Box::new(provider)]);
 
         assert!(report.recorded.is_empty(), "{report:?}");
-        assert_eq!(store.library().expect("list").len(), 1, "the library grows nowhere");
+        assert_eq!(
+            store.library().expect("list").len(),
+            1,
+            "the library grows nowhere"
+        );
         assert!(
             asked.lock().expect("the recording lock").is_empty(),
             "a document the store does not know is not even asked about"
@@ -798,17 +817,14 @@ mod tests {
 
         let evince = FakeProvider::new("evince-gvfs", &["evince"])
             .answering("/lib/Cosmos.pdf", Answer::At(9));
-        let zathura = FakeProvider::new("zathura", &["zathura"])
-            .answering("/lib/Cosmos.pdf", Answer::At(3));
+        let zathura =
+            FakeProvider::new("zathura", &["zathura"]).answering("/lib/Cosmos.pdf", Answer::At(3));
         let evince_log = evince.recorder();
         let zathura_log = zathura.recorder();
         let detector = FakeDetector::reporting(vec![open_document("/lib/Cosmos.pdf", "evince")]);
 
-        let report = track_open_documents(
-            &store,
-            &detector,
-            &[Box::new(zathura), Box::new(evince)],
-        );
+        let report =
+            track_open_documents(&store, &detector, &[Box::new(zathura), Box::new(evince)]);
 
         assert_eq!(report.recorded.len(), 1, "{report:?}");
         // Zathura was registered first, but the open document belongs to Evince.
@@ -868,11 +884,16 @@ mod tests {
         assert_eq!(report.missing_capabilities.len(), 1, "{report:?}");
         assert_eq!(report.missing_capabilities[0].source, "evince-gvfs");
         assert!(
-            report.missing_capabilities[0].reason.contains("not supported"),
+            report.missing_capabilities[0]
+                .reason
+                .contains("not supported"),
             "the reason names the missing capability: {report:?}"
         );
         assert!(
-            store.progress_for_document(broken).expect("read").is_empty(),
+            store
+                .progress_for_document(broken)
+                .expect("read")
+                .is_empty(),
             "a missing capability is not an empty position"
         );
         assert_eq!(
@@ -912,8 +933,15 @@ mod tests {
             report.missing_capabilities.is_empty(),
             "a failure is not a missing capability: {report:?}"
         );
-        assert!(store.progress_for_document(broken).expect("read").is_empty());
-        assert_eq!(report.recorded.len(), 1, "the next document still records: {report:?}");
+        assert!(store
+            .progress_for_document(broken)
+            .expect("read")
+            .is_empty());
+        assert_eq!(
+            report.recorded.len(),
+            1,
+            "the next document still records: {report:?}"
+        );
         assert_eq!(report.recorded[0].doc_id, good);
     }
 
@@ -925,7 +953,8 @@ mod tests {
             .expect("insert");
         let provider = FakeProvider::new("evince-gvfs", &["evince"]);
 
-        let report = track_open_documents(&store, &FakeDetector::unsupported(), &[Box::new(provider)]);
+        let report =
+            track_open_documents(&store, &FakeDetector::unsupported(), &[Box::new(provider)]);
 
         assert_eq!(report.missing_capabilities.len(), 1, "{report:?}");
         assert_eq!(report.missing_capabilities[0].source, "fake-detector");
@@ -969,7 +998,10 @@ mod tests {
         assert!(report.missing_capabilities.is_empty(), "{report:?}");
         assert!(report.failures.is_empty(), "{report:?}");
         assert!(
-            store.progress_for_document(doc_id).expect("read back").is_empty(),
+            store
+                .progress_for_document(doc_id)
+                .expect("read back")
+                .is_empty(),
             "a provider that cannot run is not asked"
         );
     }
@@ -1020,9 +1052,15 @@ mod tests {
         let readded = store
             .upsert_document(&document("/lib/Cosmos.pdf", 1, 1))
             .expect("re-add");
-        assert_ne!(readded, gone, "the rescan's row is a new one, not the removed row");
+        assert_ne!(
+            readded, gone,
+            "the rescan's row is a new one, not the removed row"
+        );
         assert!(
-            store.progress_for_document(readded).expect("read").is_empty(),
+            store
+                .progress_for_document(readded)
+                .expect("read")
+                .is_empty(),
             "the re-added document has no progress yet"
         );
 
@@ -1035,7 +1073,10 @@ mod tests {
             .expect("the changed set is swept");
 
         assert_eq!(report.recorded.len(), 1, "{report:?}");
-        assert_eq!(report.recorded[0].doc_id, readded, "the reading landed on the new row");
+        assert_eq!(
+            report.recorded[0].doc_id, readded,
+            "the reading landed on the new row"
+        );
         assert_eq!(report.recorded[0].progress.page, 11);
         let stored = store.progress_for_document(readded).expect("read back");
         assert_eq!(
@@ -1074,24 +1115,45 @@ mod tests {
     /// when the count is the same, a removal changes the count, and an equal shape is not a change.
     #[test]
     fn a_changed_document_set_is_what_the_shape_notices() {
-        let one = LibraryShape { documents: 1, highest_id: Some(1) };
+        let one = LibraryShape {
+            documents: 1,
+            highest_id: Some(1),
+        };
         assert!(
             library_changed(None, one),
             "the loop has never seen this set, so its first sweep is a change"
         );
         assert!(!library_changed(Some(one), one), "the same set is not news");
         assert!(
-            library_changed(Some(one), LibraryShape { documents: 2, highest_id: Some(2) }),
+            library_changed(
+                Some(one),
+                LibraryShape {
+                    documents: 2,
+                    highest_id: Some(2)
+                }
+            ),
             "a re-add changes the count"
         );
         assert!(
             library_changed(
-                Some(LibraryShape { documents: 2, highest_id: Some(2) }),
-                LibraryShape { documents: 2, highest_id: Some(3) }
+                Some(LibraryShape {
+                    documents: 2,
+                    highest_id: Some(2)
+                }),
+                LibraryShape {
+                    documents: 2,
+                    highest_id: Some(3)
+                }
             ),
             "a re-add with the same count is still a change: the new row has a higher id"
         );
-        assert_eq!(LibraryShape::of(&[]), LibraryShape { documents: 0, highest_id: None });
+        assert_eq!(
+            LibraryShape::of(&[]),
+            LibraryShape {
+                documents: 0,
+                highest_id: None
+            }
+        );
     }
 
     // --- R30: when the document was read ---------------------------------------------------------
@@ -1146,7 +1208,10 @@ mod tests {
             Some(now)
         );
         // A clock that cannot answer cannot claim a reading happened: the time already known is kept.
-        assert_eq!(live_reading_time(Some(now - 90_000), None), Some(now - 90_000));
+        assert_eq!(
+            live_reading_time(Some(now - 90_000), None),
+            Some(now - 90_000)
+        );
         assert_eq!(live_reading_time(None, None), None);
     }
 
@@ -1224,7 +1289,10 @@ mod tests {
         // moving, so "the position is the same" is not the same answer as "nothing happened".
         let recorded = position(11).with_read_at(Some(100));
 
-        assert!(is_same_observation(Some(&recorded), &position(11).with_read_at(Some(100))));
+        assert!(is_same_observation(
+            Some(&recorded),
+            &position(11).with_read_at(Some(100))
+        ));
         assert!(
             !is_same_observation(Some(&recorded), &position(11).with_read_at(Some(200))),
             "a newer time is news"
@@ -1233,7 +1301,10 @@ mod tests {
             !is_same_observation(Some(&recorded), &position(11)),
             "forgetting a time is not nothing"
         );
-        assert!(!is_same_observation(None, &recorded), "no row at all never agrees");
+        assert!(
+            !is_same_observation(None, &recorded),
+            "no row at all never agrees"
+        );
     }
 
     /// The wiring: the sweep records the history's reading time even when the position did not move, and
@@ -1243,7 +1314,9 @@ mod tests {
     fn the_sweep_records_the_historys_reading_time_exactly_once() {
         let store = in_memory_store();
         let path = "/lib/Cosmos.pdf";
-        let doc_id = store.upsert_document(&document(path, 1, 1)).expect("insert");
+        let doc_id = store
+            .upsert_document(&document(path, 1, 1))
+            .expect("insert");
         // The store already knows the position and knows nothing about when it was read: the state the
         // maintainer's whole library is in, and the reason the stale carousel is empty.
         store
@@ -1251,23 +1324,39 @@ mod tests {
             .expect("record the position the provider will report again");
 
         let history = history_file(&[(path, "2020-09-13T12:26:40Z")]);
-        let provider = FakeProvider::new("evince-gvfs", &["evince"]).answering(path, Answer::At(11));
+        let provider =
+            FakeProvider::new("evince-gvfs", &["evince"]).answering(path, Answer::At(11));
 
         let mut first = TrackReport::default();
         sweep_with_history(&store, &[Box::new(provider)], Some(&history), &mut first);
 
         let recorded = store.progress_for_document(doc_id).expect("read back");
-        assert_eq!(recorded.len(), 2, "a new reading time is a new row: {first:?}");
-        assert_eq!(recorded[1].read_at, Some(1_600_000_000), "the history's own instant");
+        assert_eq!(
+            recorded.len(),
+            2,
+            "a new reading time is a new row: {first:?}"
+        );
+        assert_eq!(
+            recorded[1].read_at,
+            Some(1_600_000_000),
+            "the history's own instant"
+        );
 
         // A second sweep with the same history writes nothing: a time alone, like a position alone, is
         // not news, and the log must not grow a row per launch for a fact that did not change.
-        let provider = FakeProvider::new("evince-gvfs", &["evince"]).answering(path, Answer::At(11));
+        let provider =
+            FakeProvider::new("evince-gvfs", &["evince"]).answering(path, Answer::At(11));
         let mut second = TrackReport::default();
         sweep_with_history(&store, &[Box::new(provider)], Some(&history), &mut second);
 
         assert!(second.recorded.is_empty(), "{second:?}");
-        assert_eq!(store.progress_for_document(doc_id).expect("read back").len(), 2);
+        assert_eq!(
+            store
+                .progress_for_document(doc_id)
+                .expect("read back")
+                .len(),
+            2
+        );
     }
 
     /// A document the history does not know keeps an unknown reading time rather than borrowing one.
@@ -1277,17 +1366,23 @@ mod tests {
         let doc_id = store
             .upsert_document(&document("/lib/Unknown.pdf", 1, 1))
             .expect("insert");
-        store.record_progress(doc_id, &position(11)).expect("record");
+        store
+            .record_progress(doc_id, &position(11))
+            .expect("record");
 
         let history = history_file(&[("/lib/Other.pdf", "2020-09-13T12:26:40Z")]);
-        let provider =
-            FakeProvider::new("evince-gvfs", &["evince"]).answering("/lib/Unknown.pdf", Answer::At(11));
+        let provider = FakeProvider::new("evince-gvfs", &["evince"])
+            .answering("/lib/Unknown.pdf", Answer::At(11));
 
         let mut report = TrackReport::default();
         sweep_with_history(&store, &[Box::new(provider)], Some(&history), &mut report);
 
         let recorded = store.progress_for_document(doc_id).expect("read back");
-        assert_eq!(recorded.len(), 1, "nothing changed, so nothing was written: {report:?}");
+        assert_eq!(
+            recorded.len(),
+            1,
+            "nothing changed, so nothing was written: {report:?}"
+        );
         assert_eq!(recorded[0].read_at, None, "unknown stays unknown");
     }
 
@@ -1309,8 +1404,12 @@ mod tests {
         let store = in_memory_store();
         let healed = "/lib/Healed.pdf";
         let replaced = "/lib/Replaced.pdf";
-        let healed_id = store.upsert_document(&document(healed, 1, 1)).expect("insert");
-        let replaced_id = store.upsert_document(&document(replaced, 1, 2)).expect("insert");
+        let healed_id = store
+            .upsert_document(&document(healed, 1, 1))
+            .expect("insert");
+        let replaced_id = store
+            .upsert_document(&document(replaced, 1, 2))
+            .expect("insert");
         // Two rows a broken clock left stamped in the future; nothing else knows a time for them.
         let year_2999 = 32_472_144_000;
         store
@@ -1329,7 +1428,11 @@ mod tests {
         let mut report = TrackReport::default();
         sweep_with_history(&store, &[Box::new(provider)], Some(&history), &mut report);
 
-        assert_eq!(report.recorded.len(), 2, "the positions are still recorded: {report:?}");
+        assert_eq!(
+            report.recorded.len(),
+            2,
+            "the positions are still recorded: {report:?}"
+        );
 
         let healed_rows = store.progress_for_document(healed_id).expect("read back");
         assert_eq!(healed_rows.last().expect("a position").page, 12);
@@ -1358,10 +1461,16 @@ mod tests {
         let store = in_memory_store();
         let unknown = "/lib/Unknown.pdf";
         let known = "/lib/Known.pdf";
-        let unknown_id = store.upsert_document(&document(unknown, 1, 1)).expect("insert");
-        let known_id = store.upsert_document(&document(known, 1, 2)).expect("insert");
+        let unknown_id = store
+            .upsert_document(&document(unknown, 1, 1))
+            .expect("insert");
+        let known_id = store
+            .upsert_document(&document(known, 1, 2))
+            .expect("insert");
         // One document knows nothing about when it was read, the other knew a real, older time.
-        store.record_progress(unknown_id, &position(11)).expect("record");
+        store
+            .record_progress(unknown_id, &position(11))
+            .expect("record");
         store
             .record_progress(known_id, &position(11).with_read_at(Some(1_600_000_000)))
             .expect("record");
@@ -1379,7 +1488,11 @@ mod tests {
         let mut report = TrackReport::default();
         sweep_with_history(&store, &[Box::new(provider)], Some(&history), &mut report);
 
-        assert_eq!(report.recorded.len(), 2, "the positions are still recorded: {report:?}");
+        assert_eq!(
+            report.recorded.len(),
+            2,
+            "the positions are still recorded: {report:?}"
+        );
 
         let unknown_rows = store.progress_for_document(unknown_id).expect("read back");
         assert_eq!(unknown_rows.last().expect("a position").page, 12);

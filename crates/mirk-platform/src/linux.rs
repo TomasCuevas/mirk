@@ -338,7 +338,10 @@ impl OpenDocumentDetector for ProcOpenDocuments {
                 }
                 // Check the type through the resolved path: the `.pdf` suffix alone would accept a
                 // symlink named `report.pdf` pointing at a directory.
-                if !fs::metadata(&target).map(|meta| meta.is_file()).unwrap_or(false) {
+                if !fs::metadata(&target)
+                    .map(|meta| meta.is_file())
+                    .unwrap_or(false)
+                {
                     continue;
                 }
 
@@ -1140,10 +1143,8 @@ mod tests {
 
     impl TempDir {
         fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "mirk-linux-{label}-{}",
-                std::process::id()
-            ));
+            let path =
+                std::env::temp_dir().join(format!("mirk-linux-{label}-{}", std::process::id()));
             std::fs::create_dir_all(&path).unwrap();
             Self { path }
         }
@@ -1291,10 +1292,8 @@ mod tests {
 
     #[test]
     fn detect_is_missing_for_an_empty_search_path() {
-        let provider = EvinceGvfsProvider::with_launcher(
-            Box::new(RecordingLauncher::default()),
-            Vec::new(),
-        );
+        let provider =
+            EvinceGvfsProvider::with_launcher(Box::new(RecordingLauncher::default()), Vec::new());
         assert_eq!(provider.detect(), Availability::Missing);
     }
 
@@ -1322,7 +1321,10 @@ mod tests {
     fn the_gio_parser_refuses_anything_it_cannot_understand() {
         assert_eq!(parse_gio_page(""), None);
         assert_eq!(parse_gio_page("attributes:\n"), None);
-        assert_eq!(parse_gio_page("attributes:\n  metadata::evince::page:\n"), None);
+        assert_eq!(
+            parse_gio_page("attributes:\n  metadata::evince::page:\n"),
+            None
+        );
         assert_eq!(
             parse_gio_page("attributes:\n  metadata::evince::page: later\n"),
             None
@@ -1388,8 +1390,7 @@ mod tests {
         fake_gio(&dir, 72);
         make_executable(&dir, "evince", "#!/bin/sh\n");
         let spawner = RecordingSpawner::default();
-        let launcher =
-            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+        let launcher = XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
         let provider =
             EvinceGvfsProvider::with_launcher(Box::new(launcher), vec![dir.path.clone()]);
 
@@ -1403,7 +1404,10 @@ mod tests {
         let calls = spawner.calls.lock().expect("spawner poisoned");
         assert_eq!(calls.len(), 1, "expected one viewer invocation: {calls:?}");
         let (program, args) = &calls[0];
-        assert_eq!(program.file_name().and_then(|name| name.to_str()), Some("evince"));
+        assert_eq!(
+            program.file_name().and_then(|name| name.to_str()),
+            Some("evince")
+        );
         assert_eq!(args[0], OsString::from(PAGE_INDEX_FLAG));
         assert_eq!(
             args[1],
@@ -1418,11 +1422,12 @@ mod tests {
         // The provider must not pre-convert: the one conversion belongs to the launcher's command
         // line, so handing a one-based page onward would resume one page past the target.
         let recorder = RecordingLauncher::default();
-        let provider =
-            EvinceGvfsProvider::with_launcher(Box::new(recorder.clone()), Vec::new());
+        let provider = EvinceGvfsProvider::with_launcher(Box::new(recorder.clone()), Vec::new());
         let doc = Document::new("/tmp/document.pdf");
 
-        provider.resume(&doc, 72).expect("the recording launcher accepts");
+        provider
+            .resume(&doc, 72)
+            .expect("the recording launcher accepts");
 
         let calls = recorder.calls.lock().expect("launcher poisoned");
         assert_eq!(calls.as_slice(), &[(doc.path.clone(), Some(72))]);
@@ -1433,8 +1438,7 @@ mod tests {
         let dir = TempDir::new("t9-xdg-open");
         let xdg_open = make_executable(&dir, "xdg-open", "#!/bin/sh\n");
         let spawner = RecordingSpawner::default();
-        let launcher =
-            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+        let launcher = XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
 
         let path = Path::new("/home/u/libros/Comparación.pdf");
         let outcome = launcher.launch(path, None).expect("xdg-open exists");
@@ -1456,8 +1460,7 @@ mod tests {
         let dir = TempDir::new("t9-page");
         let evince = make_executable(&dir, "evince", "#!/bin/sh\n");
         let spawner = RecordingSpawner::default();
-        let launcher =
-            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+        let launcher = XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
 
         let path = Path::new("/home/u/libros/Comparación.pdf");
         let outcome = launcher.launch(path, Some(71)).expect("evince exists");
@@ -1487,8 +1490,7 @@ mod tests {
         make_executable(&dir, "evince", "#!/bin/sh\n");
         make_executable(&dir, "papers", "#!/bin/sh\n");
         let spawner = RecordingSpawner::default();
-        let launcher =
-            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+        let launcher = XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
 
         launcher
             .launch(Path::new("/tmp/doc.pdf"), Some(0))
@@ -1504,8 +1506,7 @@ mod tests {
     fn a_missing_program_is_an_honest_error_not_a_silent_success() {
         let dir = TempDir::new("t9-missing");
         let spawner = RecordingSpawner::default();
-        let launcher =
-            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+        let launcher = XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
 
         assert!(launcher.launch(Path::new("/tmp/doc.pdf"), None).is_err());
         // A page request is no different when *nothing* can open the document: the fallback to the
@@ -1527,8 +1528,7 @@ mod tests {
         let dir = TempDir::new("t9-degraded");
         let xdg_open = make_executable(&dir, XDG_OPEN, "#!/bin/sh\n");
         let spawner = RecordingSpawner::default();
-        let launcher =
-            XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
+        let launcher = XdgLauncher::with_spawner(Box::new(spawner.clone()), vec![dir.path.clone()]);
 
         let path = Path::new("/home/u/libros/Comparación.pdf");
         let outcome = launcher
@@ -1582,7 +1582,11 @@ mod tests {
     #[test]
     fn progress_providers_registers_the_evince_adapter() {
         let providers = progress_providers();
-        assert_eq!(providers.len(), 1, "exactly the Evince adapter is registered");
+        assert_eq!(
+            providers.len(),
+            1,
+            "exactly the Evince adapter is registered"
+        );
         assert_eq!(providers[0].id(), EVINCE_ID);
         assert_eq!(providers[0].capability(), ProgressCapability::Live);
     }
@@ -1600,10 +1604,7 @@ mod tests {
 
         // The Linux backend must expose the real implementation, not a private copy.
         let backend = backends();
-        assert_eq!(
-            backend.file_identity.identity(&path).unwrap(),
-            identity
-        );
+        assert_eq!(backend.file_identity.identity(&path).unwrap(), identity);
     }
 
     #[test]
@@ -1824,7 +1825,10 @@ mod tests {
     fn the_viewer_falls_back_from_cmdline_to_comm() {
         // The `cmdline` path wins: the basename of `argv[0]`.
         assert_eq!(
-            viewer_name(Some(b"/usr/bin/evince\0--page-index\0five\0"), Some(b"evince\n")),
+            viewer_name(
+                Some(b"/usr/bin/evince\0--page-index\0five\0"),
+                Some(b"evince\n")
+            ),
             Some("evince".to_owned())
         );
         // A missing or empty `cmdline` falls back to `comm`, with the kernel's newline removed.
@@ -2020,8 +2024,15 @@ mod tests {
 
         // Every distinct path appears exactly once, and the eight writes did not become eight
         // events.
-        assert_eq!(reported.len(), names.len(), "expected one event per path: {reported:?}");
-        assert_eq!(reported_paths, names.iter().cloned().collect::<HashSet<_>>());
+        assert_eq!(
+            reported.len(),
+            names.len(),
+            "expected one event per path: {reported:?}"
+        );
+        assert_eq!(
+            reported_paths,
+            names.iter().cloned().collect::<HashSet<_>>()
+        );
         assert!(
             reported.len() < names.len() * 2,
             "the second write of each path was not coalesced"
@@ -2282,8 +2293,7 @@ mod tests {
         }
 
         // Restore before any assertion, so the temporary directory can always be cleaned up.
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
-            .expect("restore");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("restore");
 
         // The loop must still be watching everything else: a file created in `visible` arrives
         // even though a corner of the tree is unwatchable.
@@ -2397,7 +2407,10 @@ mod tests {
         let mut loop_state = WatchLoop::start(&targets).expect("start the watch loop");
 
         assert!(loop_state.watched.values().any(|dir| dir.as_path() == sub));
-        assert!(loop_state.watched.values().any(|dir| dir.as_path() == deeper));
+        assert!(loop_state
+            .watched
+            .values()
+            .any(|dir| dir.as_path() == deeper));
 
         // Pretend the loop had already reported bookkeeping for the subtree.
         loop_state.seen.insert(sub.clone());

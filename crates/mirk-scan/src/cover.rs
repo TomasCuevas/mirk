@@ -129,7 +129,8 @@ fn render_cover(pdfium: &Pdfium, document: &Path, page: u32) -> Result<Vec<u8>, 
     // refusal is the honest reason; it names the page rather than reporting a generic failure. The
     // index type is pdfium's own `u16`, so a value past its range is refused here by name instead of
     // panicking inside the binding.
-    let index = u16::try_from(page).map_err(|_| format!("page {page} is beyond the supported range"))?;
+    let index =
+        u16::try_from(page).map_err(|_| format!("page {page} is beyond the supported range"))?;
 
     // R32's borrow trap, recorded so it is not discovered a second time: `pages.get(i)` returns a
     // page that borrows a temporary of its own, so the page is bound to a name before it is used.
@@ -306,7 +307,10 @@ mod tests {
             Ok(CoverOutcome::Ready { .. }) => panic!("a corrupt document cannot have a cover"),
             Err(error) => panic!("an unparseable document is no-cover, not an error: {error}"),
         }
-        assert!(!cover_path.exists(), "a failed render leaves no cover behind");
+        assert!(
+            !cover_path.exists(),
+            "a failed render leaves no cover behind"
+        );
     }
 
     #[test]
@@ -409,6 +413,9 @@ mod tests {
             Ok(CoverOutcome::Ready { .. }) => panic!("a missing page cannot have a cover"),
             Err(error) => panic!("a missing page is no-cover, not an error: {error}"),
         }
-        assert!(!cover_path.exists(), "a failed render leaves no cover behind");
+        assert!(
+            !cover_path.exists(),
+            "a failed render leaves no cover behind"
+        );
     }
 }
