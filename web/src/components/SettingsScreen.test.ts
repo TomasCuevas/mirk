@@ -11,10 +11,11 @@ import {
 const english = translate("en");
 const spanish = translate("es");
 
-function indexProps(locale: "en" | "es" = "en") {
+function indexProps(locale: "en" | "es" = "en", updateAvailable = false) {
   return {
     t: translate(locale),
     onOpenSection: () => {},
+    updateAvailable,
   };
 }
 
@@ -87,5 +88,42 @@ describe("the index's icons", () => {
     for (const icon of body.match(/<svg[^>]*>/g) ?? []) {
       expect(icon).toContain('aria-hidden="true"');
     }
+  });
+});
+
+/**
+ * S7 of `odd/tasks/ci-and-release.md`. The reader chose a discreet notice over a modal: when a newer
+ * version is waiting, the index marks the row that leads to it and says nothing anywhere else.
+ *
+ * The mark is announced rather than decorative — a dot that exists only visually carries no message to a
+ * screen reader — and it is pinned to ONE row, because a mark on the wrong section sends the reader to a
+ * screen that has nothing to install.
+ */
+describe("the update mark", () => {
+  it("marks the Aplicación row only while a newer version is waiting", () => {
+    const marked = render(SettingsScreen, { props: indexProps("en", true) }).body;
+
+    expect(marked).toContain(`aria-label="${english("settings.update.dot")}"`);
+    // Svelte appends its own scoping class, so the attribute is matched by what it contains.
+    expect((marked.match(/class="[^"]*\bwaiting\b/g) ?? []).length).toBe(1);
+
+    const clean = render(SettingsScreen, { props: indexProps("en", false) }).body;
+    expect(clean).not.toMatch(/class="[^"]*\bwaiting\b/);
+  });
+
+  it("marks the row that holds the update, and no other", () => {
+    const { body } = render(SettingsScreen, { props: indexProps("en", true) });
+
+    const appRow = body.slice(body.indexOf(settingsSectionTitle("app", english)));
+    expect(appRow.search(/class="[^"]*\bwaiting\b/)).toBeGreaterThanOrEqual(0);
+    expect(appRow.search(/class="[^"]*\bwaiting\b/)).toBeLessThan(
+      appRow.indexOf(settingsSectionSummary("app", english)),
+    );
+  });
+
+  it("announces the mark in Spanish", () => {
+    const { body } = render(SettingsScreen, { props: indexProps("es", true) });
+
+    expect(body).toContain(`aria-label="${spanish("settings.update.dot")}"`);
   });
 });

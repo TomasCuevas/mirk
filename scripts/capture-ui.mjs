@@ -201,6 +201,11 @@ const SEED = `
     ],
     "watched_folders": [{ id: 1, path: "/home/tomas-cuevas/Books", documents: ${entries.length} }],
     "list_suggestions": ${JSON.stringify(SUGGESTIONS)},
+    // S7: the app asks the update manifest when it opens, so the harness has to answer. Null is the
+    // honest fixture — there is no newer version in a capture — and it is mocked rather than left out
+    // precisely so the unanswered-command gate keeps its teeth for the next command somebody wires.
+    // (No backticks in this block: the whole seed is one template literal.)
+    "plugin:updater|check": null,
     // The app asks the desktop's history once per run, before the first queue read (S10). Without an
     // answer the capture logs "unmocked command" and exits non-zero, which is the point of the gate.
     "observe_recent_documents": ${SUGGESTIONS.length},
@@ -511,6 +516,15 @@ async function main() {
   const windowScreen = await captureScreen(cdp, "settings-window", WINDOW.height);
   manifest.screens["settings-window"] = windowScreen.map((f) => f.slice(OUT.length + 1));
   console.log(`  settings-window: ${windowScreen.length} capture(s)`);
+
+  // S7 of `odd/tasks/ci-and-release.md`: Aplicación now carries the update panel, and the capture is the
+  // only place its two lines and one control are seen as a reader sees them. Reached by address for the
+  // same reason as the window sub-screen above, not by a click path the capture invents.
+  await cdp.evaluate(`window.location.hash = "#/settings/app"`);
+  await sleep(600);
+  const appScreen = await captureScreen(cdp, "settings-app", WINDOW.height);
+  manifest.screens["settings-app"] = appScreen.map((f) => f.slice(OUT.length + 1));
+  console.log(`  settings-app: ${appScreen.length} capture(s)`);
 
   // S1 of `odd/tasks/suggestions-screen.md`: the queue is a view of its own with no navbar entry, so it
   // is captured by its address — the same hash a reload or a Back lands on.

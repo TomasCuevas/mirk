@@ -10,10 +10,19 @@
   let {
     t,
     onOpenSection,
+    updateAvailable,
   }: {
     t: Translate;
     /** Opens one sub-screen. App wires it to the hash, so the choice is addressable (R43/S2). */
     onOpenSection: (section: SettingsSection) => void;
+    /**
+     * S7 of `odd/tasks/ci-and-release.md`: whether a newer version is waiting in Aplicación.
+     *
+     * It is a Boolean rather than the check's state because the index has exactly one thing to say about
+     * the update — that there is one — and the sentence behind it belongs to the screen that can act on
+     * it. The mark sits on the Aplicación row, which is where the reader has to go.
+     */
+    updateAvailable: boolean;
   } = $props();
 </script>
 
@@ -71,7 +80,15 @@
             {/if}
           </svg>
           <span class="text">
-            <span class="name">{settingsSectionTitle(section, t)}</span>
+            <span class="name">
+              {settingsSectionTitle(section, t)}
+              {#if section === "app" && updateAvailable}
+                <!-- S7: the discreet notice the reader chose — a mark, not a modal. It is announced
+                     rather than decorative, because a dot that only exists visually says nothing to a
+                     screen reader, and "there is a newer version" is the whole message. -->
+                <span class="waiting" role="img" aria-label={t("settings.update.dot")}></span>
+              {/if}
+            </span>
             <span class="summary">{settingsSectionSummary(section, t)}</span>
           </span>
         </button>
@@ -153,9 +170,23 @@
   }
 
   .name {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     font-size: var(--text-sm);
     font-weight: var(--weight-semibold);
     color: var(--fg);
+  }
+
+  /* The mark: the same accent the shell uses for a chosen thing, small enough that a reader who does not
+     care about updates can ignore it and large enough that one who does will not miss it. */
+  .waiting {
+    width: 0.4rem;
+    height: 0.4rem;
+    flex: none;
+    border-radius: 50%;
+    background: rgb(196, 122, 168);
+    box-shadow: 0 0 0 3px rgba(196, 122, 168, 0.18);
   }
 
   .summary {

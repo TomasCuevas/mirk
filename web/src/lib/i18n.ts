@@ -196,9 +196,25 @@ recorded is not claimed here.",
   "settings.reading.purpose":
     "Each viewer Mirk can take a position from, and whether this machine has it.",
   "settings.app.title": "Application",
-  "settings.app.summary": "The language of every word in the app.",
+  // S7 of `odd/tasks/ci-and-release.md` put the update check on this sub-screen, so the section is no
+  // longer only the language: the summary and the purpose name both, or the index would promise less
+  // than the screen holds.
+  "settings.app.summary": "The language, and the version Mirk is running.",
   "settings.app.purpose":
-    "The interface and the tray are written in the language you choose.",
+    "The words Mirk uses, and the update check that keeps it current.",
+  "settings.update.heading": "Updates",
+  "settings.update.hint":
+    "Mirk asks GitHub for a newer version when it opens. Nothing is downloaded until the update is accepted.",
+  "settings.update.idle": "Not checked in this window yet.",
+  "settings.update.checking": "Asking GitHub for the newest version…",
+  "settings.update.current": "Mirk is up to date.",
+  "settings.update.available": "Version {version} is available.",
+  "settings.update.installing": "Downloading the update… {percent}%",
+  "settings.update.installingUnknown": "Downloading the update…",
+  "settings.update.failed": "Could not check for a newer version: {reason}",
+  "settings.update.check": "Check for updates",
+  "settings.update.install": "Update and restart",
+  "settings.update.dot": "A newer version of Mirk is available",
   "settings.window.title": "Window",
   "settings.window.summary": "How many documents a row holds, and the size of the window.",
   "settings.window.purpose":
@@ -437,9 +453,22 @@ fuente registró nunca no se listan acá.",
   "settings.reading.purpose":
     "Cada visor del que Mirk puede tomar una posición, y si esta máquina lo tiene.",
   "settings.app.title": "Aplicación",
-  "settings.app.summary": "El idioma de todas las palabras de la app.",
+  "settings.app.summary": "El idioma y la versión de Mirk.",
   "settings.app.purpose":
-    "La interfaz y la bandeja se escriben en el idioma que elija.",
+    "Las palabras que usa Mirk y la comprobación que lo mantiene al día.",
+  "settings.update.heading": "Actualizaciones",
+  "settings.update.hint":
+    "Mirk le pregunta a GitHub si hay una versión nueva cuando se abre. No se descarga nada hasta que la actualización se acepta.",
+  "settings.update.idle": "Todavía no se comprobó en esta ventana.",
+  "settings.update.checking": "Consultando la versión más nueva en GitHub…",
+  "settings.update.current": "Mirk está al día.",
+  "settings.update.available": "Hay una versión nueva: {version}.",
+  "settings.update.installing": "Descargando la actualización… {percent}%",
+  "settings.update.installingUnknown": "Descargando la actualización…",
+  "settings.update.failed": "No se pudo comprobar si hay una versión nueva: {reason}",
+  "settings.update.check": "Buscar actualizaciones",
+  "settings.update.install": "Actualizar y reiniciar",
+  "settings.update.dot": "Hay una versión nueva de Mirk disponible",
   "settings.window.title": "Ventana",
   "settings.window.summary": "Cuántos documentos entran en una fila y el tamaño de la ventana.",
   "settings.window.purpose":

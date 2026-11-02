@@ -1,19 +1,38 @@
 <script lang="ts">
   import type { Locale, Translate } from "../lib/i18n";
   import { settingsSectionPurpose, settingsSectionTitle } from "../lib/screens";
+  import { updateAction, updateLine, type UpdateState } from "../lib/update";
 
   let {
     locale,
     t,
     onLocale,
     onBack,
+    update,
+    onCheck,
+    onInstall,
   }: {
     locale: Locale;
     t: Translate;
     onLocale: (locale: Locale) => void;
     /** Returns to the Ajustes index (R43/S2), through the same hash navigation as everything else. */
     onBack: () => void;
+    /**
+     * S7 of `odd/tasks/ci-and-release.md`: the update check's state.
+     *
+     * It is a PROP and not this screen's own state because the shell owns the check: it runs when the
+     * window opens, before any screen exists, and the mark on the Ajustes index reads the same value.
+     * A screen that checked on its own would either check a second time on every visit or know nothing
+     * until the reader walked in.
+     */
+    update: UpdateState;
+    onCheck: () => void;
+    onInstall: () => void;
   } = $props();
+
+  // What the one control does depends on what the check said, so the label is derived from the state
+  // rather than from a second flag this screen would have to keep in step.
+  const action = $derived(updateAction(update, t));
 
   // R15: two options are not a dropdown. A select hides one of them behind a click and draws the
   // engine's own chrome; a segmented control shows both and states the current one by position.
@@ -66,6 +85,29 @@
       {/each}
     </div>
     <p class="detail">{t("settings.language.hint")}</p>
+  </div>
+
+  <!--
+    S7. The update check, discreet by the reader's own choice.
+
+    The shell asks GitHub when the window opens and this panel is the only place that says what came
+    back: a line of state, the release's own notes when it has any, and one control that names what it
+    will do. Nothing is downloaded until that control is pressed — an update channel that installs on its
+    own turns a background request into a change of the program a reader is using.
+  -->
+  <div class="panel">
+    <h2>{t("settings.update.heading")}</h2>
+    <p class="detail state">{updateLine(update, t)}</p>
+    {#if update.kind === "available" && update.offer.notes !== null}
+      <!-- The release body as GitHub returned it: the author's words, not a summary of them. -->
+      <p class="notes">{update.offer.notes}</p>
+    {/if}
+    {#if action !== null}
+      <button type="button" class="action" onclick={action.kind === "install" ? onInstall : onCheck}>
+        {action.label}
+      </button>
+    {/if}
+    <p class="detail">{t("settings.update.hint")}</p>
   </div>
 </section>
 
@@ -164,6 +206,43 @@
     margin: 0.5rem 0 0;
     font-size: var(--text-xs);
     color: var(--fg-muted);
+  }
+
+  /* The state line is the answer, so it is the one line in the panel that is not muted. */
+  .state {
+    color: var(--fg);
+  }
+
+  /* Release notes arrive with the author's own line breaks, and they are shown as written. */
+  .notes {
+    margin: 0.4rem 0 0;
+    font-size: var(--text-xs);
+    color: var(--fg-subtle);
+    white-space: pre-wrap;
+  }
+
+  /* The one control, in the same tint the current half of the segmented pill uses: this screen has one
+     accent for "the thing that is chosen" and one for "the thing to do", and they are the same family. */
+  .action {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    margin-top: 0.6rem;
+    padding: 0.45rem 0.8rem;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r-sm);
+    background: linear-gradient(180deg, rgba(196, 122, 168, 0.26), rgba(196, 122, 168, 0.12));
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+    transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  }
+
+  .action:hover {
+    background: linear-gradient(180deg, rgba(196, 122, 168, 0.36), rgba(196, 122, 168, 0.18));
+    border-color: var(--line-strong);
   }
 
 

@@ -159,3 +159,44 @@ describe("the languages this build knows", () => {
   });
 });
 
+/**
+ * S7 of `odd/tasks/ci-and-release.md`: the update check's words, in both languages and with the same
+ * placeholders. A Spanish sentence that forgot `{version}` would offer an update without naming which
+ * one; one that forgot `{reason}` would say the check failed without saying why.
+ */
+describe("the update check's words", () => {
+  const keys = [
+    "settings.update.heading",
+    "settings.update.hint",
+    "settings.update.idle",
+    "settings.update.checking",
+    "settings.update.current",
+    "settings.update.available",
+    "settings.update.installing",
+    "settings.update.installingUnknown",
+    "settings.update.failed",
+    "settings.update.check",
+    "settings.update.install",
+    "settings.update.dot",
+  ] as const;
+
+  function placeholders(value: string): string[] {
+    return [...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? "").sort();
+  }
+
+  it("exists in both catalogues, and is not the key standing in for a word", () => {
+    for (const key of keys) {
+      expect(catalogues.en[key], key).toBeTruthy();
+      expect(catalogues.es[key], key).toBeTruthy();
+      expect(catalogues.en[key], key).not.toBe(key);
+      expect(catalogues.es[key], key).not.toBe(key);
+      expect(catalogues.es[key], key).not.toBe(catalogues.en[key]);
+    }
+  });
+
+  it("carries the same placeholders in both languages", () => {
+    for (const key of keys) {
+      expect(placeholders(catalogues.es[key]), key).toEqual(placeholders(catalogues.en[key]));
+    }
+  });
+});

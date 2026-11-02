@@ -29,6 +29,11 @@
   } from "./lib/screens";
   import { OPEN_SCREEN_EVENT, invoke, listen, runningInTauri, type Unlisten } from "./lib/tauri";
   import { loadLanguage, loadWindowLayout, saveLanguage, saveWindowLayout } from "./lib/settings";
+  // S7 of `odd/tasks/ci-and-release.md`. The rule lives in `update.ts` (states, words, the percentage) and
+  // the plugin lives in `updater.ts`; the shell is where the two are joined, because the check belongs to
+  // the application's launch and not to any screen.
+  import { checked, failed, installing, isUpdateWaiting, type UpdateState } from "./lib/update";
+  import { desktopUpdater, type UpdatePort } from "./lib/updater";
   // L56. The suggestion queue's pure decisions live in their own module: what the section says in
   // each of its three states, what a decision does to the list, and what to do when one fails.
   import {
@@ -107,6 +112,23 @@
   // `null` until the store answers, for the same reason as the providers.
   let folders = $state<WatchedFolder[] | null>(null);
   let foldersError = $state<string | null>(null);
+
+  /**
+   * S7: what the update check has to say, and nothing more until the reader asks.
+   *
+   * `idle` is the honest state before the launch check answers — not "up to date", which is a claim about
+   * GitHub that has not been made yet.
+   */
+  let update = $state<UpdateState>({ kind: "idle" });
+  /** The discreet mark on Ajustes: a newer version exists and nobody has claimed it. */
+  const updateWaiting = $derived(isUpdateWaiting(update));
+  /**
+   * The plugin, built once when the shell starts, and only inside the desktop application.
+   *
+   * `null` outside the shell is what makes every handler below a no-op in a plain browser: there is no
+   * manifest to ask and no bundle to install, and the Ajustes row stays at "not checked in this window".
+   */
+  let updater: UpdatePort | null = null;
 
   // L56. `null` until the store answers, for the same reason as the providers and the folders: "still
   // checking" and "nothing is waiting for a decision" are different facts, and the section says which.
@@ -290,6 +312,45 @@
       folders = await invoke<WatchedFolder[]>("watched_folders");
     } catch (error) {
       foldersError = String(error);
+    }
+  }
+
+  /**
+   * S7: asks the release manifest whether a newer version exists.
+   *
+   * Called on launch and by the Ajustes control, and it is the only automatic network call the interface
+   * makes. A failure is a state, never a `console.error`: the machine may simply be offline, and the
+   * sentence in Ajustes is where the reader can read it and act — a check that failed is also why the
+   * capture harness (which fails on any console error) must keep answering this command in its fixtures.
+   */
+  async function checkForUpdate(): Promise<void> {
+    if (updater === null) return;
+    update = { kind: "checking" };
+    try {
+      update = checked(await updater.check());
+    } catch (error) {
+      update = failed(error);
+    }
+  }
+
+  /**
+   * S7: installs the version the check offered and relaunches into it.
+   *
+   * The download's percentage is a state of its own, so the panel can say how far it got instead of
+   * leaving the reader looking at "0.2.0 is available" as if the press had done nothing. A failure keeps
+   * the reason, and the offer is gone with it — the next check starts from nothing.
+   */
+  async function installUpdate(): Promise<void> {
+    const offered = update.kind === "available" ? update.offer : null;
+    if (updater === null || offered === null) return;
+    update = installing(offered, null);
+    try {
+      await updater.install((percent) => {
+        update = installing(offered, percent);
+      });
+      await updater.relaunch();
+    } catch (error) {
+      update = failed(error);
     }
   }
 
@@ -652,6 +713,11 @@
       void loadLibrary();
       void loadProviders();
       void loadFolders();
+      // S7: the update check runs once, when the window opens, and it is started here rather than by a
+      // screen because the mark it can raise belongs to the Ajustes index. Nothing is downloaded until
+      // the reader asks for it in Aplicación.
+      updater = desktopUpdater();
+      void checkForUpdate();
       // S10/T2: the history is read once, before the first queue read, and never again this run.
       void loadSuggestionQueue();
       // R28: the same interval keeps the listing current, and it starts with the application rather than
@@ -830,9 +896,17 @@
         onBack={() => selectScreen("settings")}
       />
     {:else if view.kind === "settings"}
-      <SettingsAppScreen {locale} {t} onLocale={chooseLocale} onBack={() => selectScreen("settings")} />
+      <SettingsAppScreen
+        {locale}
+        {t}
+        onLocale={chooseLocale}
+        onBack={() => selectScreen("settings")}
+        {update}
+        onCheck={checkForUpdate}
+        onInstall={installUpdate}
+      />
     {:else if view.kind === "screen" && view.screen === "settings"}
-      <SettingsScreen {t} onOpenSection={openSettingsSection} />
+      <SettingsScreen {t} onOpenSection={openSettingsSection} updateAvailable={updateWaiting} />
     {:else if view.kind === "category"}
       <CategoryScreen
         category={view.category}
