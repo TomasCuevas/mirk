@@ -49,6 +49,15 @@
     ],
     "resources": {
       "../../vendor/pdfium/lib/*": "pdfium/"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIyMEFBRjZERjgxQ0M1MEYKUldRUHhSejRiYThLc243cUU5WnRNbGdjODFlcmM0VUlXeGRZYTVJOStzaTJ0UkIybkdyWTJrbE8K",
+      "endpoints": [
+        "https://github.com/TomasCuevas/mirk/releases/latest/download/latest.json"
+      ]
     }
   }
 }

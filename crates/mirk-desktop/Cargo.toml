@@ -22,10 +22,24 @@ tauri = { version = "2", features = ["tray-icon"] }
 # of `tauri`); the commands need it directly to derive `Serialize` for the values they return over
 # IPC. No new crate enters the dependency graph.
 serde = { workspace = true }
-tauri-plugin-dialog = "2.8.3"
-
-[dev-dependencies]
-# `serde_json` is already a workspace dependency and already in `Cargo.lock` through `tauri`, so this
-# adds no crate to the graph. It is needed to assert a SERIALISED OUTPUT contract: that the transient
-# single-author projection keeps emitting an explicit `null` instead of omitting the key.
+# `serde_json` is a workspace dependency and already in `Cargo.lock` through `tauri`, so this adds no crate
+# to the graph. It is a NORMAL dependency and must stay one: the tests need it to assert a SERIALISED OUTPUT
+# contract (the transient single-author projection keeps emitting an explicit `null`), but that is not why it
+# is here. `tauri::generate_context!` expands to code that deserialises the configuration's `plugins` block
+# with `serde_json`, so the moment this app declares one — the updater's, in S7 — the macro needs the crate in
+# the binary's own root. It was dev-only until then, which is exactly why the breakage showed up in
+# `tauri build` and in nothing else: `cargo test` and `cargo check --all-targets` both see dev-dependencies.
 serde_json = { workspace = true }
+tauri-plugin-dialog = "2.8.3"
+# S7 of `odd/tasks/ci-and-release.md`. The updater is the only path by which a copy that is already
+# installed can become a different version: it reads the release's `latest.json`, downloads the bundle
+# for this platform and verifies its signature against the PUBLIC key in `tauri.conf.json` — the private
+# half exists only as a CI secret, so a release that was not signed by it is refused rather than run.
+# `tauri-plugin-process` is the other half: on Linux and macOS the update is installed into place and the
+# running process has to relaunch into it, and "restart this application" is a separate grant from
+# "install this file", which is why it is a separate plugin and not a side effect of the updater.
+# Cost, stated rather than discovered: both crates are `tauri`'s own, but the updater enables a TLS stack
+# (`reqwest` + `rustls`) and archive support, so `cargo check` in CI's `compile` matrix compiles more
+# crates than before. That is the price of not shipping an update channel of our own.
+tauri-plugin-updater = "2.14.1"
+tauri-plugin-process = "2.4.0"

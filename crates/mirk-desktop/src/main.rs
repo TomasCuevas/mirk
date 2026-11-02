@@ -1235,6 +1235,15 @@ fn main() {
         // The dialog plugin is initialized so the application can open the system folder browser
         // from Rust through `DialogExt` (R11). It is a plugin of this process, not of the interface.
         .plugin(tauri_plugin_dialog::init())
+        // S7: the update channel. The plugin is registered unconditionally and reads its endpoints and
+        // the public key from `plugins.updater` in `tauri.conf.json`; with no configuration yet it answers
+        // every check with an error, which the interface reports as "could not check" instead of
+        // pretending the version is current. Silence here would be the exact defect the check exists to
+        // avoid — an installed copy that quietly never updates.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // S7: and this is what turns an installed update into a running one. Kept beside the updater
+        // because they are one story: install writes the new bundle, relaunch enters it.
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // S5: an installed application carries pdfium inside its own package, where neither
             // `vendor/pdfium` nor `$MIRK_PDFIUM_LIB` exists. The resource directory is the one place

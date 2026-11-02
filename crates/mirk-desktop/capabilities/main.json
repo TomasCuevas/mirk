@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "The window's own capability. The interface's custom commands need no grant — Tauri allows an application's own commands without one — but the core APIs it calls do. The only one it calls is the event API, which receives the screens the desktop process asks it to open (R12): the tray's settings entry emits `open-screen` and the webview listens for it.",
+  "description": "The window's own capability. The interface's custom commands need no grant — Tauri allows an application's own commands without one — but the core and plugin APIs it calls do. Three of them: the event API, which receives the screens the desktop process asks it to open (R12) — the tray's settings entry emits `open-screen` and the webview listens for it; the updater's whole workflow, so Ajustes can ask whether a newer version exists, download it and install it (S7); and `restart`, so an installed update can be entered without the reader closing and reopening the window by hand. `process:allow-exit` is deliberately NOT granted: relaunching into a verified update and quitting the application are different powers, and only the first has a caller.",
   "windows": ["main"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "updater:default",
+    "process:allow-restart"
+  ]
 }

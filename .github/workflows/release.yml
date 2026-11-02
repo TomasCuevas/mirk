@@ -1,0 +1,306 @@
+name: Release
+
+# S3 and S4 of `odd/tasks/ci-and-release.md`, plus the delivery gate in S9.
+#
+# Pushing a tag matching `v*` builds the Linux packages, creates a **draft** release, and attaches
+# everything that release promises: `.deb`, `.rpm`, `.AppImage`, the GPL-3.0 source tarball,
+# `THIRD-PARTY-NOTICES.md`, and `SHA256SUMS` over all of them.
+#
+# Three things this workflow deliberately does NOT do:
+#   * It never publishes. The release is a draft and marking it published is a human decision (S3);
+#     a tag is cheap to push and a published release is not cheap to un-publish.
+#   * It ships Linux only (S10). No Windows artifacts, no macOS artifacts, no notarization, no package
+#     repositories. The backends those would carry return `NotSupported` today.
+#   * It does not re-run the test suite. A tag is pushed onto a commit that `ci.yml` already gated, and
+#     repeating 808 tests here would double the release's runtime to learn nothing new.
+#
+# ------------------------------------------------------------------------------------------------
+# PRERELEASE: NOT MARKED, AND THE REASON IS THE UPDATER (S3, L8)
+#
+# The release is a draft AND `prerelease: false`. The draft is unchanged — publishing is still a human
+# promotion. What changed is the pre-release MARK, which the reader reversed when T5 put the two facts
+# side by side: GitHub serves `/releases/latest/download/...` from the newest released, NON-prerelease
+# version, so a marked release is invisible to the one endpoint `tauri.conf.json` points at. A pre-alpha
+# that installs copies able to update cannot afford that, and nothing is lost by dropping the mark:
+# `0.1.0` already says pre-1.0 through SemVer, and the release body says pre-alpha in words.
+#
+# ------------------------------------------------------------------------------------------------
+# UPDATER SIGNING (S7 / T5)
+#
+# The public key is in `tauri.conf.json` (`plugins.updater.pubkey`), and the private half exists only as
+# the repository secret `TAURI_SIGNING_PRIVATE_KEY` — never here, never in a commit. What that buys:
+# every release gets a `.sig` per bundle plus a `latest.json` manifest, and a copy that is already
+# installed verifies the signature against the key it shipped with before running anything new.
+#
+# Three consequences this workflow has to keep true:
+#   * `uploadUpdaterJson: true` on the signed step. Without it the artifacts are signed and the manifest
+#     is missing, which is a release that can be verified and still cannot update anybody.
+#   * `bundle.createUpdaterArtifacts: true` is in `tauri.conf.json`, so the CLI signs whenever it bundles.
+#     A build with no private key cannot do that, so the unsigned step below turns the flag OFF for its
+#     own run through `--config`: it exists for forks and for a repository whose secret was deleted, and
+#     what it produces is a draft with no updater promise at all (no `.sig`, no `latest.json`).
+#   * The signing env vars are only handed to `tauri-action` when the secret is non-empty. An *empty*
+#     `TAURI_SIGNING_PRIVATE_KEY` is not the same as an unset one: the Tauri CLI treats the variable as
+#     present and fails to decode it. Hence the two mutually exclusive build steps, which is also what
+#     makes the unsigned path testable by whoever forks this repository.
+#
+# The key that signs this project is backed up by its maintainer. That is not a formality: the public
+# key is baked into every copy already installed, so a lost private key cannot be replaced by a new
+# one — those copies would refuse every later release.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# A tag is released once. A newer push cannot supersede it (tags are not force-pushed into this
+# workflow), and cancelling half-way would leave a draft with partial assets.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+# `contents: write` is what creating the draft, uploading assets and reading the tag requires.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  linux-packages:
+    name: Linux packages -> draft release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      # `fetch-depth: 0` so the tag is present locally and `git archive` can produce the source
+      # tarball from the tagged tree rather than from whatever the checkout happens to contain.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.x
+
+      - name: Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux
+
+      - name: Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            patchelf \
+            build-essential
+
+      # Same key as `ci.yml`: the cache is keyed on the hash of the script that decides which upstream
+      # pdfium archive to download, so a change in its origin invalidates the cache by construction.
+      - name: Cache vendor/pdfium
+        id: pdfium
+        uses: actions/cache@v6
+        with:
+          path: vendor/pdfium
+          key: pdfium-${{ runner.os }}-${{ hashFiles('scripts/fetch-pdfium.sh') }}
+
+      - name: Fetch pdfium
+        if: steps.pdfium.outputs.cache-hit != 'true'
+        run: scripts/fetch-pdfium.sh
+
+      # S4, and the tag half of it. `--check` refuses to build when `Cargo.toml`, `tauri.conf.json` and
+      # `package.json` disagree; `--tag` refuses to build when the tag disagrees with them. Between the
+      # two, a release cannot ship a binary whose `--version` (and whose package metadata) names a
+      # version other than the tag it was published under.
+      - name: Version single source and tag agreement (S4)
+        run: |
+          scripts/version-sync.sh --check
+          scripts/version-sync.sh --tag "${GITHUB_REF_NAME}"
+
+      # Reports the signing state instead of implying it. See the header comment.
+      - name: Updater signing status
+        id: signing
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            echo "key=absent" >> "${GITHUB_OUTPUT}"
+            echo "::warning title=Unsigned artifacts::TAURI_SIGNING_PRIVATE_KEY is not configured in this repository. This build produces UNSIGNED artifacts and no updater manifest (latest.json), so installed copies cannot auto-update from this release."
+            {
+              echo "### Unsigned release"
+              echo
+              echo "\`TAURI_SIGNING_PRIVATE_KEY\` is not configured here, so the artifacts in this draft are unsigned and no \`latest.json\` updater manifest exists. mirk's own repository sets that secret; a fork that wants signed releases has to generate its own key pair, replace \`plugins.updater.pubkey\` in \`tauri.conf.json\`, and store the private key as the secret (see CONTRIBUTING.md)."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "key=present" >> "${GITHUB_OUTPUT}"
+            echo "TAURI_SIGNING_PRIVATE_KEY is configured: bundles will be signed and latest.json will be uploaded."
+          fi
+
+      # The Tauri CLI runs `beforeBuildCommand` from `tauri.conf.json` (`bun run build`), so the
+      # frontend dependencies must be installed first.
+      - name: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
+
+      # The unsigned path's escape hatch, and it is a FILE for a reason: `args` is appended to the CLI's
+      # command line, so an inline JSON blob would have to survive quoting this workflow does not control.
+      # A path cannot be misquoted.
+      - name: Disable updater artifacts for the unsigned build
+        if: steps.signing.outputs.key == 'absent'
+        run: echo '{"bundle":{"createUpdaterArtifacts":false}}' > "${RUNNER_TEMP}/unsigned-build.json"
+
+      # Pinned to the commit of `v1.0.0`, not to a tag: this is the one action in the repository that is
+      # handed the signing key and writes release assets. A tag can be re-pointed and a major tag moves
+      # without a commit here; a commit SHA cannot. Moving this pin is a deliberate commit whose diff is
+      # the new SHA.
+      - name: Build Linux bundles and create the draft release (signed)
+        if: steps.signing.outputs.key == 'present'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # Both secrets are required: mirk's key was generated WITH a password (L8, decision of the reader),
+          # and the CLI cannot decrypt the private key without it. An unset password secret arrives here as
+          # the empty string and the build fails with a decryption error, which is better than a silent
+          # success that ships an unsigned bundle — the same reason the signed and unsigned paths are
+          # separate steps.
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: mirk ${{ github.ref_name }}
+          releaseDraft: true
+          # S3 / L8: see the header. `latest.json` is only reachable at `/releases/latest/...` when the
+          # release it belongs to is not marked pre-release.
+          prerelease: false
+          # The Tauri app lives at `crates/mirk-desktop`, while the Bun workspace, `bun.lock` and the
+          # `tauri` script are at the repository root — so the CLI runs from the root and finds the app
+          # through the Cargo workspace, exactly as `README.md` documents (`bun run tauri dev`).
+          # Spelling the script out avoids the action's package-manager detection falling back to a
+          # globally installed CLI.
+          tauriScript: bun run tauri
+          args: --bundles deb,rpm,appimage
+          # S7: the manifest that lets the copies already installed claim this release.
+          uploadUpdaterJson: true
+
+      # Identical to the step above except for `env:` and for the update artifacts it must NOT produce —
+      # and the difference is the point. Both steps must stay in sync; if one is edited, edit the other.
+      - name: Build Linux bundles and create the draft release (unsigned — see the header)
+        if: steps.signing.outputs.key == 'absent'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: mirk ${{ github.ref_name }}
+          releaseDraft: true
+          # S3 / L8: the same mark as the signed step above, for the same reason.
+          prerelease: false
+          # The Tauri app lives at `crates/mirk-desktop`, while the Bun workspace, `bun.lock` and the
+          # `tauri` script are at the repository root — so the CLI runs from the root and finds the app
+          # through the Cargo workspace, exactly as `README.md` documents (`bun run tauri dev`).
+          # Spelling the script out avoids the action's package-manager detection falling back to a
+          # globally installed CLI.
+          tauriScript: bun run tauri
+          # `createUpdaterArtifacts` is ON in `tauri.conf.json` and the CLI will not sign without a key, so
+          # this run turns it off through the file written above. What it produces is a draft with no `.sig`
+          # and no `latest.json`: honest about what it cannot promise, instead of failing a fork outright.
+          args: --bundles deb,rpm,appimage --config ${{ runner.temp }}/unsigned-build.json
+          uploadUpdaterJson: false
+
+      # Everything from here down adds what `tauri-action` does not produce. The assets the action made
+      # are downloaded first, so `SHA256SUMS` can cover them too.
+      - name: Collect the assets the action produced
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/assets"
+          gh release download "${GITHUB_REF_NAME}" --dir "${RUNNER_TEMP}/assets" --pattern '*' --clobber
+          ls -l "${RUNNER_TEMP}/assets"
+
+      # GPL-3.0 wants the Corresponding Source next to the binary, and `git archive` of the checked-out
+      # commit is the preferred form for modification: this workflow only runs on a tag push, so `HEAD`
+      # *is* the tagged tree, and it resolves without depending on the tag ref having been fetched.
+      # (GitHub also generates `Source code (tar.gz)` for every tag, but those archives are GitHub's
+      # rendering of the tag, not an asset this workflow named, hashed and promised.)
+      - name: Source tarball for the tag (GPL-3.0)
+        run: |
+          version="$(scripts/version-sync.sh --print)"
+          git archive \
+            --format=tar.gz \
+            --prefix="mirk-${version}/" \
+            --output="${RUNNER_TEMP}/assets/mirk-${version}-source.tar.gz" \
+            HEAD
+
+      # S8 / T4 own the file, and this step does not skip when it is absent: a release that quietly
+      # ships without its third-party notices is the failure mode the notices exist to prevent.
+      #
+      # ONE name, decided here (L5): `THIRD-PARTY-NOTICES.md`. The spec said `THIRD-PARTY-NOTICES` and the
+      # file, the README and CONTRIBUTING.md say `.md`; accepting both spellings would publish whichever
+      # happened to exist and print a warning after every single release, which is not a decision, it is a
+      # reminder that nobody made one. The Markdown extension stays because the file is read on GitHub far
+      # more often than it is downloaded.
+      - name: THIRD-PARTY-NOTICES.md (fails when the file is missing)
+        run: |
+          if [ ! -f THIRD-PARTY-NOTICES.md ]; then
+            echo "::error title=THIRD-PARTY-NOTICES.md is missing::The release must not ship without the third-party notices: GPL-3.0 requires them and S8 of odd/tasks/ci-and-release.md owns the file."
+            ls -l
+            exit 1
+          fi
+          cp THIRD-PARTY-NOTICES.md "${RUNNER_TEMP}/assets/"
+
+      # `SHA256SUMS` covers every other asset in the draft. It cannot cover itself, which is the one
+      # gap a checksum file always has; the tarball and the notices are the parts that matter, and the
+      # packages are covered by their own bytes.
+      - name: SHA256SUMS over every asset, then upload what the action does not produce
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "${RUNNER_TEMP}/assets"
+
+          # A green build that produced only one of the three targets is a release that promises
+          # something it does not ship. `compgen -G` is a bash builtin, so an empty glob is a false
+          # rather than an unexpanded pattern.
+          for extension in deb rpm AppImage; do
+            compgen -G "*.${extension}" > /dev/null || {
+              echo "::error title=Missing bundle::The draft has no .${extension} asset. Check the --bundles arguments and the packaging log above."
+              ls -l
+              exit 1
+            }
+          done
+
+          # Truncated before `find` runs, so a re-run never hashes the previous list, and excluded by
+          # name, so it never hashes itself.
+          : > SHA256SUMS
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
+            | LC_ALL=C sort \
+            | while IFS= read -r asset; do sha256sum "${asset}"; done >> SHA256SUMS
+          cat SHA256SUMS
+
+          # Only the three assets this workflow adds. Re-uploading the packages would rewrite the bytes
+          # that were just hashed.
+          gh release upload "${GITHUB_REF_NAME}" \
+            mirk-*-source.tar.gz \
+            THIRD-PARTY-NOTICES.md \
+            SHA256SUMS \
+            --clobber
+
+      - name: What the draft contains, and what it does not promise
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGNING_KEY: ${{ steps.signing.outputs.key }}
+        run: |
+          echo "Draft release for ${GITHUB_REF_NAME}:"
+          gh release view "${GITHUB_REF_NAME}" --json isDraft,isPrerelease,assets \
+            --jq '"draft=\(.isDraft) prerelease=\(.isPrerelease)", (.assets[].name)'
+          if [ "${SIGNING_KEY}" = "absent" ]; then
+            echo
+            echo "NOT SIGNED: no TAURI_SIGNING_PRIVATE_KEY, so there are no .sig assets and no latest.json."
+          fi
