@@ -111,16 +111,24 @@ Chrome headless at the size that layout names with a device scale factor of 2, s
 and a stored layout, and writes one PNG per screen plus one per scroll of the screen's own container:
 
 ```bash
-node scripts/capture-ui.mjs                     # 2 per row (430×844), the default
+node scripts/capture-ui.mjs                     # full screen (1440×900), the app's own default
+node scripts/capture-ui.mjs --layout columns-2  # 2 per row (430×844)
+node scripts/capture-ui.mjs --layout columns-3  # 3 per row (634×844)
 node scripts/capture-ui.mjs --layout columns-4  # 4 per row (838×844)
-node scripts/capture-ui.mjs --layout auto       # full screen (1440×900)
 node scripts/capture-ui.mjs --out /tmp/ux       # somewhere else
 ```
 
+The default is the layout the application opens with when nothing is stored (full screen); naming a
+preset captures the grid that preset pins, and the seed also answers `get_window_preset` with the
+layout a window leaving full screen returns to, so the capture and a launch agree about both facts.
+
 The seed is injected as a fake `window.__TAURI_INTERNALS__` before the app boots. The application's
 IPC bridge (`web/src/lib/tauri.ts`) is not modified: the app still renders honestly in a plain
-browser, and the fixtures live in the capture script. A JavaScript exception during capture exits
-non-zero, because a screenshot of a crashed page is not evidence about design.
+browser, and the fixtures live in the capture script. A JavaScript exception **or a console error**
+during capture exits non-zero, because a screenshot of a crashed page — or of one whose data never
+loaded — is not evidence about design. That second half is not decoration: a command the app calls
+at startup and the seed does not answer renders the error state, and the exit code is what makes that
+impossible to mistake for the real screen.
 
 Chrome is close enough to judge layout, hierarchy and spacing; it is **not** WebKitGTK, so a
 capture does not prove paint fidelity on Linux. The output directory is gitignored: captures are
@@ -131,15 +139,22 @@ evidence for a review, not artifacts the repository ships.
 | Phase | Scope | State |
 | --- | --- | --- |
 | 0 | Validation spikes (progress sources, metadata cost, rendering) | **Done** |
-| 1 | Rust core: store, scanner, watcher, provider registry | **In progress** |
+| 1 | Rust core: store, scanner, watcher, provider registry | **In progress** — everything but recent-document ingestion from `recently-used.xbel` (T12) |
 | 2 | First-party reader (pdf.js) with live progress | Planned |
-| 3 | System tray, quick menu | Planned |
-| 4 | Library UI, filters, manual override, review queue | **In progress** |
+| 3 | System tray, quick menu | **Done** — tray, quick menu and the window's own chrome |
+| 4 | Library UI, filters, manual override, review queue | **In progress** — library, filters, sort, review queue and the document editor are in; overriding progress by hand is not |
 | 5 | Packaging, Windows/macOS backends, viewer adapters | Planned |
 
 ## License
 
-GPL-3.0. See [LICENSE](LICENSE).
+GPL-3.0. See [LICENSE](LICENSE). The licences of everything shipped inside a package — pdfium, the two
+bundled typefaces, the system libraries a package requires but does not ship, and the Rust dependency
+graph by licence family — are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 Note that GPL-3.0 makes the macOS App Store permanently unavailable for this project. macOS
 distribution is a notarised `.dmg`.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first: it says how to build and test, what a good change looks
+like in this repository, and which gates a pull request has to pass.

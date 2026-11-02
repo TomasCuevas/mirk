@@ -1,0 +1,220 @@
+name: CI
+
+# S1 and S2 of `odd/tasks/ci-and-release.md`: the gate this project did not have. Every push to
+# `main` and every pull request runs the four jobs below, so the 808 tests (368 Rust + 440 web) stop
+# depending on whether a person remembered to run them.
+#
+# Conventions, so that changing this file stays reviewable:
+#
+#   * `ubuntu-24.04`, never `ubuntu-latest` (S2). 24.04 ships `libwebkit2gtk-4.1`, which is what
+#     Tauri v2 links against. The next Ubuntu moved WebKitGTK forward, so `ubuntu-latest` would turn
+#     every runner-image release into a red build nobody changed. When this project moves to a newer
+#     Ubuntu, that move is a commit with this comment in front of it.
+#   * Actions are pinned by major tag (`@v7`), which is the maintained ref upstream patches. The one
+#     exception is in `release.yml`, where the action that holds the signing key is pinned to a commit
+#     SHA; the reason is written there.
+#   * `permissions: contents: read` — CI only reads. Publishing lives in `release.yml` and nowhere else.
+#   * `cargo check`/`clippy`/`test` need no frontend build: Tauri enables its `dev` cfg unless the
+#     `custom-protocol` feature is on, and only `tauri build` turns that feature on. So the jobs below
+#     do not have to run `bun run build` before touching Cargo, and `web` and `rust` stay independent.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# S1: a newer push to the same ref cancels the older, still-running one. `github.ref` keeps the group
+# per branch / per pull request, so main and a PR never cancel each other.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Test failures are read by people; the chain of `unwrap`s is the evidence.
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: rust (fmt, clippy, test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+
+      # S4: the release is allowed to ship a binary only when the version in the tree agrees with
+      # itself. The tag check that also compares the tag lives in `release.yml`; this step makes the
+      # same disagreement visible on the PR that would cause it, rather than on the tag that cannot.
+      - name: Version single-source (S4)
+        run: scripts/version-sync.sh --check
+
+      # Tauri v2 links GTK3 and WebKitGTK 4.1, `mirk` bundles a tray icon (libayatana-appindicator),
+      # and `patchelf` is what AppImage/`deb` packaging rewrites ELF headers with. `build-essential`
+      # is here because `rusqlite`'s `bundled` feature compiles SQLite from source.
+      - name: Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            patchelf \
+            build-essential
+
+      - name: Rust toolchain (stable, with the two tools CI calls)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux
+
+      # S2: `vendor/pdfium` is ~8 MB of platform-specific binary and is not committed. The key is the
+      # hash of the script that decides which upstream archive to download, so the cache can never
+      # outlive a change in where the library comes from.
+      - name: Cache vendor/pdfium
+        id: pdfium
+        uses: actions/cache@v6
+        with:
+          path: vendor/pdfium
+          key: pdfium-${{ runner.os }}-${{ hashFiles('scripts/fetch-pdfium.sh') }}
+
+      - name: Fetch pdfium
+        if: steps.pdfium.outputs.cache-hit != 'true'
+        run: scripts/fetch-pdfium.sh
+
+      # The page-counting tests load the native library at runtime and fail — rather than skip — when
+      # it is missing (`mirk-scan` names the remedy). This step makes that failure say what happened
+      # once, instead of as forty unrelated test failures.
+      - name: Assert the native pdfium library is present
+        run: ls -l vendor/pdfium/lib
+
+      # ---------------------------------------------------------------------------------------------
+      # FORMATTING IS ENFORCED (T7).
+      #
+      # `rustfmt` had never been installed on the development machine, so the tree had never been
+      # formatted: `cargo fmt --all --check` reported diffs in 19 files (~3,600 lines of diff output,
+      # 89 hunks in `mirk-store/tests/store.rs` alone). The reformatting landed as its own mechanical
+      # commit (`cargo fmt --all`: 20 files, and the whole suite stayed green), which is what made this
+      # step blocking. It is a gate now, not a report.
+      # ---------------------------------------------------------------------------------------------
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+  web:
+    name: web (typecheck, test, build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned to the Bun 1.x line: `bun.lock` is a Bun 1 lockfile and `--frozen-lockfile` is only
+      # meaningful against a runtime that reads it. The minor is not pinned, so security fixes on the
+      # 1.x line arrive without a commit here; a Bun 2 would be a deliberate migration.
+      - name: Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.x
+
+      # `--frozen-lockfile` makes a dependency change that forgot to update `bun.lock` fail here
+      # instead of silently resolving to something no one reviewed.
+      - name: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
+
+      # `typecheck` is `tsc --noEmit` plus `svelte-check`: the first sees `.svelte` imports as opaque,
+      # so the second is the pass that actually checks component wiring.
+      - name: bun run typecheck
+        run: bun run typecheck
+
+      - name: bun run test
+        run: bun run test
+
+      # `bun run build` reruns `typecheck` by design (see the `//` note in package.json): a build that
+      # typechecks is the only build this project has ever wanted.
+      - name: bun run build
+        run: bun run build
+
+  compile:
+    # S1.3: `cargo check` only, on the two platforms whose backends are still stubs. Their runners cost
+    # roughly ten times the minutes per job, and the tests there would assert almost nothing — but a
+    # `#[cfg(target_os = ...)]` that stops compiling is exactly the breakage that reaches `main`
+    # unnoticed, because nobody here builds on Windows or macOS. This job buys that and nothing else.
+    #
+    # No pdfium is fetched: `pdfium-render` loads the library at runtime, so `cargo check` never needs
+    # it. No system dependencies are installed either — Tauri uses WebView2 on Windows and the system
+    # WebKit on macOS, and neither is a build-time requirement for a type check.
+    name: compile (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: cargo check --workspace
+        run: cargo check --workspace
+
+  capture:
+    # S1.4: the cheapest guard this project has against a seeded command drifting out of sync with the
+    # app. `scripts/capture-ui.mjs` starts the dev server itself, boots the app in headless Chrome, and
+    # exits non-zero on any page exception or `console.error` — which is exactly the class of bug (a
+    # Tauri command the UI calls that no longer exists) that a screenshot review only catches if a
+    # person happens to look at the image.
+    #
+    # It is blocking, and it can be: GitHub's `ubuntu-24.04` image ships `google-chrome` at
+    # `/usr/bin/google-chrome`, which is the binary the harness looks for, and the harness already runs
+    # Chrome with `--no-sandbox` and `--headless=new`, so no display and no privilege is needed.
+    name: capture (UI smoke test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.x
+
+      - name: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
+
+      # If a future runner image stops shipping Chrome, this fails with one line that names the
+      # assumption, instead of an opaque "ENOENT spawn google-chrome" from inside the harness.
+      - name: Assert Chrome is available
+        run: google-chrome --version
+
+      - name: Capture the interface
+        run: node scripts/capture-ui.mjs --out "${RUNNER_TEMP}/captures"
+
+      # A failed capture is only useful if the screenshots are there: an exception on one screen still
+      # produces the earlier ones, and they are what the reviewer needs.
+      - name: Upload captures (evidence for a failure)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: captures-${{ github.run_id }}
+          path: ${{ runner.temp }}/captures
+          if-no-files-found: warn
