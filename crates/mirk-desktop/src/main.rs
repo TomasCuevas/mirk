@@ -45,6 +45,14 @@ mod shell;
 mod track;
 mod watch;
 
+/// The subdirectory of the bundle's resources that carries the pdfium native library (S5).
+///
+/// It mirrors the key of `bundle.resources` in `tauri.conf.json`, which copies
+/// `vendor/pdfium/lib/*` into `pdfium/` inside the package; the two spellings are one fact, so they
+/// are changed together. `mirk-scan` appends the platform's library file name to this directory, so
+/// only the directory is named here.
+const PDFIUM_RESOURCE_DIRECTORY: &str = "pdfium";
+
 /// The label of the window declared in `tauri.conf.json`. Referenced rather than repeated so the
 /// tray and the commands always act on the same window.
 const MAIN_WINDOW: &str = "main";
@@ -1207,6 +1215,24 @@ fn main() {
         // from Rust through `DialogExt` (R11). It is a plugin of this process, not of the interface.
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // S5: an installed application carries pdfium inside its own package, where neither
+            // `vendor/pdfium` nor `$MIRK_PDFIUM_LIB` exists. The resource directory is the one place
+            // that knows where a bundle put its files, so it is resolved here, once, and handed to
+            // `mirk-scan` before any scan, watch event or cover render can ask where pdfium is. In
+            // development the resolver reports the same directory, which holds no bundled library,
+            // so resolution falls through to `vendor/pdfium/lib` and the developer sets nothing.
+            // A resource directory that cannot be resolved is reported rather than fatal: the
+            // development chain still works without it, and a genuinely missing library still fails
+            // with the one actionable error that names every remedy.
+            let packaged_pdfium = match app.path().resource_dir() {
+                Ok(directory) => Some(directory.join(PDFIUM_RESOURCE_DIRECTORY)),
+                Err(error) => {
+                    eprintln!("the bundle's resource directory could not be resolved: {error}");
+                    None
+                }
+            };
+            mirk_scan::set_packaged_pdfium_directory(packaged_pdfium);
+
             let window = app
                 .get_webview_window(MAIN_WINDOW)
                 .expect("the main window is declared in tauri.conf.json");

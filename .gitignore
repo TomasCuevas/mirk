@@ -58,3 +58,13 @@ spike/parser/target/
 
 # Engram project binding and local sync chunks
 .engram/
+
+# --- Signing keys ---------------------------------------------------------
+# The updater private key lives OUTSIDE the repository (~/.tauri/mirk.key) and is never committed.
+# These patterns are the belt to that suspenders: a key copied into the tree by accident must not be
+# stageable. `tauri signer generate -w` writes `<name>.key` and `<name>.key.pub`; the `.pub` is not a
+# secret and is deliberately still caught, because it has no business being in the tree either.
+*.key
+*.key.pub
+*.pem
+*.p12

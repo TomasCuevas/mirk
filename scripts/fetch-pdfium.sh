@@ -5,7 +5,13 @@
 # (spike/parser/FINDINGS.md) showed that `pdfium` counts pages of real documents in <= 0.1 s with a
 # flat 6-22 MB footprint, while `lopdf` never finished on 2 of 7 documents and cost up to 26 s and
 # 290 MB on the rest. `pdfium` is a native library, so it has to be fetched and, in a packaged
-# release, bundled beside the executable.
+# release, bundled inside the package: `crates/mirk-desktop/tauri.conf.json` declares this
+# directory as a `bundle.resources` entry, so the library lands in `<resources>/pdfium/` and an
+# installed application loads it from Tauri's resource directory (S5 of
+# `odd/tasks/ci-and-release.md`). `tauri build` refuses to bundle without it —
+# `crates/mirk-desktop/scripts/require-pdfium-resource.mjs` runs first and names this script when
+# the library is missing, because a package that installs and then counts zero pages in silence
+# would be worse than a build that refuses.
 #
 # The library is deliberately NOT committed: it is ~8 MB of platform-specific binary. This script is
 # the reproducible way to obtain it, and CI will call it.
@@ -48,5 +54,7 @@ cp "${temporary}/LICENSE" "${destination}/LICENSE"
 echo "done:"
 ls -la "${destination}/lib"
 echo
-echo "mirk-scan looks for the library at \$MIRK_PDFIUM_LIB first, then in ${destination}/lib,"
-echo "then in the system library path. A packaged release bundles it beside the executable."
+echo "mirk-scan looks for the library at \$MIRK_PDFIUM_LIB first, then in the installed"
+echo "application's resource directory (<resources>/pdfium), then in ${destination}/lib, then"
+echo "in the system library path. A packaged release carries this directory as a bundle"
+echo "resource, so it travels inside every .deb, .rpm and .AppImage."

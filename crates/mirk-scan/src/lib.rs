@@ -18,6 +18,17 @@
 //! PDFs; a missing library fails the tests with an actionable message instead of passing without
 //! checking anything.
 //!
+//! # An installed application carries the library inside its own package
+//!
+//! `vendor/pdfium` and `$MIRK_PDFIUM_LIB` are development facts: an installed application has
+//! neither, so resolving a page count from those alone would leave a released build unable to count
+//! a single page. The desktop crate therefore declares the library as a bundle resource and hands
+//! this crate the resource directory it landed in ([`set_packaged_pdfium_directory`]); the packaged
+//! location is one more candidate in [`resolve_pdfium_library_with_packaged`], ranked between the
+//! explicit override and the development checkout. Development is unchanged: when no packaged copy
+//! exists, resolution falls through to `vendor/pdfium/lib` exactly as before, so a developer sets
+//! nothing.
+//!
 //! Every entry point that parses loads it first, so a library that cannot be found or loaded fails
 //! the whole call with one actionable [`MirkError::ComponentUnavailable`] (see
 //! [`resolve_pdfium_library`]) rather than producing one identical failure per document or, worse, a
@@ -79,8 +90,11 @@ pub use watch::{WatchBridge, WatchOutcome};
 
 /// The remedies named by every pdfium failure, so the error is actionable on its own and a caller
 /// never has to guess what to install.
-const PDFIUM_REMEDIES: &str =
-    "fetch it with scripts/fetch-pdfium.sh, or set MIRK_PDFIUM_LIB to the library file or its directory";
+///
+/// The third remedy is the one an end user of a packaged build can act on: `scripts/fetch-pdfium.sh`
+/// and `$MIRK_PDFIUM_LIB` only mean something to someone running from a checkout.
+const PDFIUM_REMEDIES: &str = "fetch it with scripts/fetch-pdfium.sh, set MIRK_PDFIUM_LIB to the \
+     library file or its directory, or reinstall the application if this is a packaged build";
 
 /// Where the pdfium native library should be loaded from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,20 +108,56 @@ pub enum PdfiumLibrary {
     System,
 }
 
-/// Resolves which pdfium library to load from the explicit value and the vendor directory.
+/// Resolves which pdfium library to load when there is no packaged copy of it — the development
+/// chain, unchanged.
+///
+/// This is [`resolve_pdfium_library_with_packaged`] with the packaged candidate absent, which is
+/// exactly what a checkout has: no bundle, no resource directory, nothing installed to carry the
+/// library. It is kept as its own entry point because development resolution is the case a person
+/// running `cargo test` needs, and because the development contract — `$MIRK_PDFIUM_LIB`, then
+/// `vendor/pdfium/lib`, then the system path — is worth being able to name without mentioning
+/// packaging at all.
 ///
 /// `explicit` is the value of `$MIRK_PDFIUM_LIB`; the caller reads the environment and passes it in,
 /// so this function reads no process state and can be tested without mutating it (an earlier review
 /// in this project flagged in-process environment mutation as a race). `vendor` is the directory
 /// `scripts/fetch-pdfium.sh` populates.
-///
-/// Resolution order: an explicit path that exists wins — as a library file when it names a file, as
-/// a directory when it names a directory; otherwise the vendor directory when it exists; otherwise
-/// the system library path. An explicit path that does **not** exist is an error rather than a
-/// silent fallback: the caller asked for that library specifically, and quietly ignoring a stale
-/// setting would hide the misconfiguration.
 pub fn resolve_pdfium_library(
     explicit: Option<&Path>,
+    vendor: &Path,
+) -> Result<PdfiumLibrary, MirkError> {
+    resolve_pdfium_library_with_packaged(explicit, None, vendor)
+}
+
+/// Resolves which pdfium library to load from every candidate the caller knows about.
+///
+/// Pure, like [`resolve_pdfium_library`]: the candidates arrive as arguments, so nothing here reads
+/// the environment, the process's resource directory or any other process state, and a test can
+/// drive every branch without mutating a shared cell.
+///
+/// Resolution order, and why it is this order:
+///
+/// 1. **`explicit`** — an existing file or directory wins outright. It is the caller's deliberate
+///    override, so it outranks everything a default would pick. A path that does **not** exist is
+///    an error rather than a fallback, even when a lower candidate would have worked: the caller
+///    asked for that library specifically, and quietly ignoring a stale setting would hide the
+///    misconfiguration behind a library they did not think they were using.
+/// 2. **`packaged`** — the directory an installed application carries the library in. It outranks
+///    the development checkout because a released build must load the copy that shipped with it,
+///    not one that happens to sit in whatever directory it was started from; and it is
+///    `Option<&Path>` because the location only exists in an installed app, so a caller outside one
+///    passes `None`.
+/// 3. **`vendor`** — `vendor/pdfium/lib`, what `scripts/fetch-pdfium.sh` populates. This is the
+///    development path: it is chosen whenever the first two candidates are absent, which is what
+///    keeps a developer from having to set anything.
+/// 4. **the system library path** — the last resort, for a machine that installed pdfium itself.
+///
+/// A candidate that does not exist is skipped, never silently substituted: the returned
+/// [`PdfiumLibrary`] names the place the library will be loaded from, so a load failure can be
+/// traced back to the exact directory [`bind_pdfium`] was given.
+pub fn resolve_pdfium_library_with_packaged(
+    explicit: Option<&Path>,
+    packaged: Option<&Path>,
     vendor: &Path,
 ) -> Result<PdfiumLibrary, MirkError> {
     if let Some(path) = explicit {
@@ -121,6 +171,12 @@ pub fn resolve_pdfium_library(
             "the configured MIRK_PDFIUM_LIB path does not exist: {}",
             path.display()
         )));
+    }
+
+    if let Some(directory) = packaged {
+        if directory.is_dir() {
+            return Ok(PdfiumLibrary::Directory(directory.to_path_buf()));
+        }
     }
 
     if vendor.is_dir() {
@@ -149,6 +205,39 @@ fn pdfium_unavailable(cause: impl std::fmt::Display) -> MirkError {
 /// with the crate directory as its working directory, so a cwd-relative path would not find it.
 fn vendor_pdfium_directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/pdfium/lib")
+}
+
+/// The directory an installed application keeps the bundled pdfium in, as reported by the desktop
+/// crate at startup.
+///
+/// This is process state on purpose, and it lives here rather than in
+/// [`resolve_pdfium_library_with_packaged`] so that the resolver stays pure. The only way to learn
+/// where a package put its resources is to ask the packaging layer, which happens once in
+/// `mirk-desktop`'s setup through Tauri's `PathResolver::resource_dir()`; every scan, watch event and
+/// cover render then resolves against the same answer instead of reaching for a window handle it
+/// does not have.
+///
+/// `None` when nothing was recorded — a test, a library user that is not the desktop app, or a
+/// development run where the resource directory holds no bundled library. `None` means "no packaged
+/// candidate", not "pdfium is missing": resolution falls through to the vendor directory and then
+/// the system path exactly as it did before packaging existed.
+static PACKAGED_PDFIUM_DIRECTORY: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// Records where the installed application keeps its bundled pdfium, for every later binding.
+///
+/// Called once from the desktop crate's setup, with the directory the bundle's resources were copied
+/// to (see `bundle.resources` in `tauri.conf.json`). Passing `None` — or never calling this — leaves
+/// resolution on the development chain, so a test or a non-desktop consumer is unaffected.
+///
+/// A second call is ignored rather than fatal: the value describes one installed layout for the life
+/// of the process, and a caller that sets it twice has nothing to correct.
+pub fn set_packaged_pdfium_directory(directory: Option<PathBuf>) {
+    let _ = PACKAGED_PDFIUM_DIRECTORY.set(directory);
+}
+
+/// The packaged directory recorded by [`set_packaged_pdfium_directory`], if any.
+fn packaged_pdfium_directory() -> Option<PathBuf> {
+    PACKAGED_PDFIUM_DIRECTORY.get().cloned().flatten()
 }
 
 /// Loads and initializes the pdfium library described by `library`.
@@ -189,8 +278,17 @@ pub fn bind_pdfium_library() -> Result<Pdfium, MirkError> {
 
 /// [`bind_pdfium_library`]'s testable core: the explicit library path is a parameter rather than
 /// process state, so resolution can be exercised without mutating the environment.
+///
+/// The packaged candidate is read from [`PACKAGED_PDFIUM_DIRECTORY`] here rather than being passed
+/// through every caller, so a packaged application resolves from its own resources without any
+/// scan, watch or cover call site having to know that packaging exists.
 fn bind_pdfium_specifying(explicit: Option<&Path>) -> Result<Pdfium, MirkError> {
-    let library = resolve_pdfium_library(explicit, &vendor_pdfium_directory())?;
+    let packaged = packaged_pdfium_directory();
+    let library = resolve_pdfium_library_with_packaged(
+        explicit,
+        packaged.as_deref(),
+        &vendor_pdfium_directory(),
+    )?;
     bind_pdfium(&library)
 }
 
@@ -592,5 +690,176 @@ fn extension_of(path: &Path) -> Extension {
         Some(_) => Extension::Other,
         None if path.extension().is_some() => Extension::Undecodable,
         None => Extension::Other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! S5: the packaged candidate is a fact of resolution, so it is tested on the pure resolver —
+    //! no process state, no native library, no Tauri application. These fixtures are directories
+    //! that *look like* a library directory; nothing here loads pdfium, and nothing here needs the
+    //! ~8 MB file to be present. The development chain is covered by `tests/scanner.rs`, which stays
+    //! untouched: a test that had to change to accommodate packaging would be the warning sign.
+
+    use super::{resolve_pdfium_library, resolve_pdfium_library_with_packaged};
+    use crate::PdfiumLibrary;
+    use mirk_core::MirkError;
+    use std::path::PathBuf;
+
+    /// A temporary directory holding one library-shaped directory per test.
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("create a temporary directory");
+            let root = dir.path().to_path_buf();
+            Self { _dir: dir, root }
+        }
+
+        /// A directory that exists, named `name`.
+        fn directory(&self, name: &str) -> PathBuf {
+            let path = self.root.join(name);
+            std::fs::create_dir_all(&path).expect("create the fixture directory");
+            path
+        }
+
+        /// A directory that deliberately does not exist.
+        fn absent(&self, name: &str) -> PathBuf {
+            self.root.join(name)
+        }
+    }
+
+    #[test]
+    fn chooses_the_packaged_directory_when_it_is_the_only_candidate_that_exists() {
+        let fixture = Fixture::new();
+        let packaged = fixture.directory("resources/pdfium");
+        let vendor = fixture.absent("vendor/pdfium/lib");
+
+        let resolved =
+            resolve_pdfium_library_with_packaged(None, Some(packaged.as_path()), &vendor)
+                .expect("a packaged directory resolves without a development checkout");
+        assert_eq!(
+            resolved,
+            PdfiumLibrary::Directory(packaged),
+            "an installed application must load the copy that shipped with it"
+        );
+    }
+
+    #[test]
+    fn the_packaged_directory_outranks_the_development_checkout() {
+        let fixture = Fixture::new();
+        let packaged = fixture.directory("resources/pdfium");
+        let vendor = fixture.directory("vendor/pdfium/lib");
+
+        let resolved =
+            resolve_pdfium_library_with_packaged(None, Some(packaged.as_path()), &vendor)
+                .expect("both candidates exist, so resolution succeeds");
+        assert_eq!(
+            resolved,
+            PdfiumLibrary::Directory(packaged),
+            "a released build must not prefer a vendor directory that happens to sit next to it"
+        );
+    }
+
+    #[test]
+    fn an_explicit_library_still_wins_over_the_packaged_directory() {
+        let fixture = Fixture::new();
+        let packaged = fixture.directory("resources/pdfium");
+        let vendor = fixture.directory("vendor/pdfium/lib");
+        let library = fixture.root.join("chosen/libpdfium.so");
+        std::fs::create_dir_all(library.parent().expect("the library has a parent"))
+            .expect("create the library directory");
+        std::fs::write(&library, b"a stand-in; resolution never loads it")
+            .expect("write the stand-in library");
+
+        let resolved =
+            resolve_pdfium_library_with_packaged(Some(&library), Some(packaged.as_path()), &vendor)
+                .expect("an existing explicit file resolves");
+        assert_eq!(
+            resolved,
+            PdfiumLibrary::File(library),
+            "$MIRK_PDFIUM_LIB is the caller's deliberate override and outranks the bundle"
+        );
+    }
+
+    #[test]
+    fn a_missing_explicit_library_is_an_error_that_names_the_remedy() {
+        let fixture = Fixture::new();
+        // A packaged copy *does* exist: the error must still be raised, because falling through
+        // here would silently ignore a setting the caller believes is in force.
+        let packaged = fixture.directory("resources/pdfium");
+        let vendor = fixture.directory("vendor/pdfium/lib");
+        let stale = fixture.absent("stale/libpdfium.so");
+
+        let error =
+            resolve_pdfium_library_with_packaged(Some(&stale), Some(packaged.as_path()), &vendor)
+                .expect_err("a stale explicit path is an error, not a fallback");
+        let MirkError::ComponentUnavailable { component, message } = error else {
+            panic!("expected MirkError::ComponentUnavailable, got {error:?}");
+        };
+        assert_eq!(component, "pdfium");
+        assert!(
+            message.contains("does not exist"),
+            "the error names the cause: {message}"
+        );
+        assert!(
+            message.contains("fetch-pdfium.sh"),
+            "names the fetch script: {message}"
+        );
+        assert!(
+            message.contains("MIRK_PDFIUM_LIB"),
+            "names the environment variable: {message}"
+        );
+        assert!(
+            message.contains("reinstall"),
+            "names the remedy an end user of a packaged build can act on: {message}"
+        );
+    }
+
+    #[test]
+    fn the_development_chain_is_unchanged_when_there_is_no_packaged_copy() {
+        let fixture = Fixture::new();
+        let absent_packaged = fixture.absent("resources/pdfium");
+        let vendor = fixture.directory("vendor/pdfium/lib");
+
+        // Both entry points agree, so packaging cannot have changed the developer's path.
+        let packaged_aware =
+            resolve_pdfium_library_with_packaged(None, Some(absent_packaged.as_path()), &vendor)
+                .expect("the vendor directory resolves");
+        assert_eq!(packaged_aware, PdfiumLibrary::Directory(vendor.clone()));
+        assert_eq!(
+            resolve_pdfium_library(None, &vendor).expect("the vendor directory resolves"),
+            PdfiumLibrary::Directory(vendor),
+        );
+    }
+
+    #[test]
+    fn the_system_library_is_still_the_last_resort() {
+        let fixture = Fixture::new();
+        let absent_packaged = fixture.absent("resources/pdfium");
+        let absent_vendor = fixture.absent("vendor/pdfium/lib");
+
+        let resolved = resolve_pdfium_library_with_packaged(
+            None,
+            Some(absent_packaged.as_path()),
+            &absent_vendor,
+        )
+        .expect("the system library is always the last resort");
+        assert_eq!(resolved, PdfiumLibrary::System);
+    }
+
+    /// `None` is what a caller outside an installed application passes, and it must behave exactly
+    /// like the development resolver rather than pretending a packaged directory exists.
+    #[test]
+    fn no_packaged_candidate_is_not_an_error() {
+        let fixture = Fixture::new();
+        let vendor = fixture.directory("vendor/pdfium/lib");
+
+        let resolved = resolve_pdfium_library_with_packaged(None, None, &vendor)
+            .expect("a missing packaged candidate falls through");
+        assert_eq!(resolved, PdfiumLibrary::Directory(vendor));
     }
 }
