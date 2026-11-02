@@ -390,3 +390,23 @@ que el glob coincida sin pagar 8 MB por runner. Medido localmente en las dos dir
 fuera del camino y forzando el build script con un `touch`: sin nada en el directorio aparece el error; con el
 marcador, `cargo check -p mirk-desktop` sale **0**. Y un detalle que casi se pasa: el nombre **no** puede empezar
 con punto — el crate `glob` no matchea dotfiles con `*`, así que un `.keep` no habría servido.
+
+**L11 — el primer release real: la firma funciona, y `gh` no sabía en qué repositorio estaba.**
+
+Corrida del tag `v0.1.0` (run **41509855060**). Lo que salió bien, y es lo que S7 pedía: el paso firmado construyó
+los tres paquetes, subió el draft con `latest.json` (2.399 bytes) y **tres firmas** —`.deb.sig` 428 bytes, `.rpm.sig`
+y `.AppImage.sig` 432— así que los dos secretos quedaron bien y el manifiesto que consulta el updater existe. El
+`sha256` de los siete archivos se calculó y se imprimió completo.
+
+Lo que falló fue el último paso, y por una razón que solo aparece corriendo: `SHA256SUMS` termina con
+`gh release upload`, el paso hace `cd "${RUNNER_TEMP}/assets"` para trabajar fuera del checkout, y `gh` resuelve el
+repositorio **desde el remoto de git**. Resultado: `failed to run git: fatal: not a git repository (or any of the
+parent directories): .git`, después de haber hasheado todo. Arreglo de una línea: `--repo "${GITHUB_REPOSITORY}"`.
+
+Quedaron sin subir tres cosas que el paso habría agregado —tarball de fuentes, `THIRD-PARTY-NOTICES.md` y
+`SHA256SUMS`—, así que el release no estaba completo: se corrige, se vuelve a empujar el tag sobre el commit
+arreglado y se corre de nuevo. El draft existente se reutiliza con `--clobber`.
+
+Lo que esto confirma del diseño, y vale anotarlo porque era una hipótesis: **`prerelease: false` era necesario**.
+El draft quedó con `draft=true prerelease=false`, así que al publicarlo será alcanzable en
+`/releases/latest/download/latest.json`, que es el único endpoint que `tauri.conf.json` consulta.

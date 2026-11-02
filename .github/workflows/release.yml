@@ -286,10 +286,16 @@ jobs:
 
           # Only the three assets this workflow adds. Re-uploading the packages would rewrite the bytes
           # that were just hashed.
+          #
+          # `--repo` is not decoration: this step runs from `${RUNNER_TEMP}/assets`, outside the checkout,
+          # and `gh` resolves the repository from the git remote. Without it the run fails with
+          # "fatal: not a git repository" *after* hashing everything (L11) — the first real run of this
+          # workflow did exactly that.
           gh release upload "${GITHUB_REF_NAME}" \
             mirk-*-source.tar.gz \
             THIRD-PARTY-NOTICES.md \
             SHA256SUMS \
+            --repo "${GITHUB_REPOSITORY}" \
             --clobber
 
       - name: What the draft contains, and what it does not promise
