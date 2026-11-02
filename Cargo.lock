@@ -2157,14 +2157,14 @@ dependencies = [
 
 [[package]]
 name = "mirk-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "mirk-desktop"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "mirk-core",
  "mirk-platform",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "mirk-platform"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "inotify",
  "mirk-core",
@@ -2191,7 +2191,7 @@ dependencies = [
 
 [[package]]
 name = "mirk-scan"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "lopdf",
  "mirk-core",
@@ -2203,7 +2203,7 @@ dependencies = [
 
 [[package]]
 name = "mirk-store"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "mirk-core",
  "rusqlite",
