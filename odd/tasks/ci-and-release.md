@@ -84,6 +84,22 @@ firma de Windows, notarización de macOS y artefactos para plataformas cuyos bac
 | T6 | S9 | Verificación: CI verde y un draft de release real | inline |
 | T7 | S1 | `cargo fmt` bloqueante: el árbol formateado y el `continue-on-error` quitado | inline |
 
+## Commits
+
+El árbol que cargaba T1–T8 se repartió el 2026-11-02 en siete commits más el de versión, partiendo de una
+etiqueta `wip-before-t6-slices` que congela todo antes de tocar nada. Qué guarda cada uno:
+
+| Commit | Contenido | Tareas |
+| --- | --- | --- |
+| `b4454e0` | `style: rustfmt formats the workspace` | T7 |
+| `a4872f2` | `feat(scan): the pdfium library travels inside the package` | T1 |
+| `ad15f15` | `ci: gate every push, and keep the version in one place` | T2, T4 |
+| `6f76e47` | `feat(platform): the desktop's own history feeds the suggestion queue` | otra feature |
+| `aab8ecb` | `feat(suggestions): the queue gets a screen of its own` | otra feature |
+| `3e8e99c` | `feat(release): signed releases the app can update itself from` | T3, T5 |
+| `c5b3c0e` | `feat(ui): Ajustes tells the reader when a newer version exists` | T5 |
+| `209b871` | `chore(release): the first release is 0.1.0` | preparación de T6 |
+
 `Risk: item 1` para T1 (si la resolución del recurso está mal, la app publicada cuenta cero páginas en
 silencio) y `Risk: item 5` para T3/T5 (entrega: workflows, firma y secretos).
 
@@ -312,3 +328,44 @@ bash. `read -rsp` no existe ahí (la variable quedaba vacía y el CLI respondía
 mensaje que culpa a la contraseña cuando el problema era la sintaxis), `export`/`unset`/`$(…)` tampoco. La forma
 que funcionó: `read -s -P 'prompt: ' VAR` y `printf '%s'` para escribir sin salto de línea final — un `\n` en el
 archivo de la contraseña habría invalidado el secreto.
+
+**L9 — T6, primera mitad: el árbol repartido en commits, y dos números míos que estaban mal.**
+
+EL MÉTODO. Antes de tocar nada: `git add -A`, un commit temporal con todo —incluidos los archivos nuevos— y la
+etiqueta **`wip-before-t6-slices`**; después `git reset --soft HEAD~1 && git reset`, que devuelve el árbol a su
+estado sin commitear con la etiqueta intacta como red. Es la misma técnica que el registro ya tenía para
+rebanadas anteriores. La comprobación de que nada se perdió no es mirar el diff contra la etiqueta (los archivos
+nuevos aparecen como "borrados", porque en el árbol no están versionados): es contar que siguen en disco y que al
+final `git status` queda vacío con el árbol igual al de la etiqueta.
+
+DOS CORRECCIONES DE MIS PROPIOS NÚMEROS, porque el registro sirve justamente para esto:
+
+1. **Dije "9 commits" y son 8** (siete de trabajo más el de versión). Partir los dos grandes en dos cada uno da
+   siete, no nueve: conté de más en la vista previa que le mostré al lector. Se lo dije antes de empezar.
+2. **El formato no medía 2.701 líneas, medía 1.071.** El número de L6 era el diff del árbol *entero* en ese
+   momento, no el componente de formato: la diferencia era código nuevo sin formatear viajando con él. Medido
+   ahora aplicando rustfmt a los archivos tal como están en `HEAD`: **19 archivos, 1.071 inserciones, 472
+   borrados**. Corolario que no esperaba: de los 51 archivos modificados, **20 eran sólo formato** y desaparecieron
+   del diff una vez commiteado el estilo.
+
+UNA TRAMPA DE GIT QUE ME HIZO CREER QUE HABÍA PERDIDO TRABAJO. `git checkout <etiqueta> -- <archivos>` escribe el
+contenido en el árbol **y en el índice**; `git diff` no muestra lo preparado, así que durante un momento pareció
+que los cambios funcionales de Rust se habían esfumado. No se había perdido nada: estaba preparado. La forma sin
+efectos laterales es `git restore --source=<etiqueta> --worktree`, que sólo toca el árbol.
+
+LA VERIFICACIÓN DE CADA COMMIT, que es lo que hace que valga la pena. Compilar el árbol no prueba nada sobre un
+commit: cargo y vitest leen el árbol de trabajo, no lo preparado. Lo que sí prueba es
+`git stash push -u --keep-index`: deja en el árbol exactamente el contenido preparado y esconde el resto (con `-u`
+también los archivos nuevos, que si no sobreviven y rompen las pruebas por razones falsas — pasó con
+`update.test.ts` y sus claves todavía sin commitear). Resultado por commit: `a4872f2` y `6f76e47` y `3e8e99c`
+compilan (`cargo check` 0); `aab8ecb` da **440 pruebas en 25 archivos** y typecheck 0/0; `c5b3c0e` da **473 en 27**
+y typecheck 0/0. Cada uno verificado con el contenido exacto que quedó commiteado, no con el árbol final.
+
+TRES ARCHIVOS TUVIERON QUE PARTIRSE A MANO porque dos features tocaban las mismas líneas: `App.svelte`,
+`i18n.ts`/`i18n.test.ts` y `scripts/capture-ui.mjs` (más `main.rs` y `tauri.conf.json`, que tienen tres dueños
+distintos: pdfium, historial y updater). El criterio fue siempre el mismo: el commit anterior se queda con la
+versión sin la otra feature, y la otra entra en su propio commit.
+
+TAMAÑO DE LA RAMA, dicho sin adorno: **53.583 líneas autoradas en 146 commits** desde `main`. El lector eligió
+merge directo a `main` y etiqueta, así que la entrega no pasa por un PR; queda anotado porque es el número que un
+revisor vería de una vez.
