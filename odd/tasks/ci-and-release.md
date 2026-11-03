@@ -494,3 +494,14 @@ no existe— quedó probada donde se tenía que probar.
 Queda un eslabón de S7 sin observar en producción, y no se puede observar desde acá: en la copia instalada, Ajustes
 → Aplicación debería decir que está al día, porque el release publicado es la misma `0.1.0`. Eso probaría que una
 copia instalada consulta el manifiesto real, lo entiende y no se ofrece a sí misma.
+
+**L15 — T8 se descarta por decisión del lector.**
+
+Dijo que T8 "ya está, no importa para nada". Tenía razón en el fondo: no existe en este archivo ni en el historial
+de la rama, así que nunca fue parte del trabajo registrado de esta feature — la única razón por la que seguía
+apareciendo era mi propia insistencia en no inventar su contenido. No se le escribe fila en la tabla ni entrada
+propia, y la pregunta deja de estar abierta.
+
+El registro de `ci-and-release.md` queda cerrado: T1–T7 con su commit, T8 descartada, y los residuos que siguen
+vivos son sólo los que nombra L14 (observar el chequeo de actualización en una copia instalada) y los que la propia
+decisión de alcance ya dejaba fuera (S10).
