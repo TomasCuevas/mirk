@@ -20,6 +20,17 @@ name: Release manifest
 on:
   release:
     types: [published]
+  # Measured, not assumed: publishing `v0.1.0` did **not** deliver a `release` event to this workflow
+  # (`GET /actions/runs?event=release` answered `total_count: 0`), so the manifest had to be rewritten by
+  # hand once. `workflow_dispatch` is the path that is known to work here, and it is also what an edited
+  # release body needs — the notes inside `latest.json` are read from that body, so changing them without
+  # re-running this leaves the application showing the old ones (L12).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag whose manifest should be rewritten
+        required: true
+        type: string
 
 # One release, one manifest: a second publish of the same tag is not a thing GitHub allows, and the
 # work is idempotent anyway (`--clobber`).
@@ -45,14 +56,14 @@ jobs:
       - name: Regenerate the manifest from the published assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           scripts/updater-manifest.sh "${TAG}" "${GITHUB_REPOSITORY}" > "${RUNNER_TEMP}/latest.json"
 
       - name: Upload it, replacing the one the bundler wrote
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           gh release upload "${TAG}" "${RUNNER_TEMP}/latest.json" \
             --repo "${GITHUB_REPOSITORY}" \
@@ -65,7 +76,7 @@ jobs:
       - name: Recompute SHA256SUMS, which covers the manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           assets="${RUNNER_TEMP}/assets"
           mkdir -p "${assets}"
@@ -80,7 +91,7 @@ jobs:
       # Evidence, in the run summary, of exactly what an installed copy will be told to download.
       - name: What the manifest points at
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           python3 - "${RUNNER_TEMP}/latest.json" <<'PYTHON' >> "${GITHUB_STEP_SUMMARY}"
           import json, sys
