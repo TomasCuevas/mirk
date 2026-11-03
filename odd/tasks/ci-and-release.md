@@ -1,6 +1,6 @@
 # Feature: CI, empaquetado y releases
 
-Status: **in progress** — planificado y autorizado el 2026-11-02; Fase 0 y 1 en curso
+Status: **done** — cerrada el 2026-11-03: `v0.1.0` publicado y verificado; T8 descartada por el lector (L15)
 Created: 2026-11-02
 Branch: `feat/phase-1-core`
 Decisiones del lector: sólo Linux publica artefactos; actualización automática desde la v0.1; repo
