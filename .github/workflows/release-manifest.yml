@@ -1,0 +1,99 @@
+name: Release manifest
+
+# S7 of `odd/tasks/ci-and-release.md`, second half.
+#
+# The release workflow builds the bundles, signs them and uploads a `latest.json` — but that manifest
+# names each asset by its **API** URL, which is not the file: unauthenticated it is a 404 while the
+# release is a draft, and afterwards it is a JSON description of the asset rather than the bytes. An
+# installed copy downloads what this manifest points at and verifies it against the signature inside,
+# so a manifest pointing at a description is an update that can never install. That was measured on
+# the first real release, not suspected (L12).
+#
+# This workflow therefore rewrites the manifest once the release is PUBLISHED, when the public
+# download URLs exist, with `scripts/updater-manifest.sh`. Publishing stays a human decision; this
+# only makes the promise true the moment it is made.
+#
+# Triggered on `release: published` rather than on the tag, because that is the event that separates
+# "the artifacts exist" from "the artifacts are downloadable". A tag push fires the build; a human
+# promoting the draft fires this.
+
+on:
+  release:
+    types: [published]
+
+# One release, one manifest: a second publish of the same tag is not a thing GitHub allows, and the
+# work is idempotent anyway (`--clobber`).
+concurrency:
+  group: release-manifest-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  manifest:
+    name: Rewrite latest.json with public download URLs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # The script refuses to write a manifest that names an artifact it cannot verify: a bundle
+      # without its `.sig`, an empty signature, or a release carrying no bundle at all all fail here,
+      # which is the point. A manifest that quietly omits an artifact would leave that artifact's
+      # users unable to update and nobody the wiser.
+      - name: Regenerate the manifest from the published assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          scripts/updater-manifest.sh "${TAG}" "${GITHUB_REPOSITORY}" > "${RUNNER_TEMP}/latest.json"
+
+      - name: Upload it, replacing the one the bundler wrote
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "${TAG}" "${RUNNER_TEMP}/latest.json" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
+
+      # `SHA256SUMS` is one of the release's own assets and it covers `latest.json`, which the step above
+      # just replaced. Leaving it alone would ship a checksum file that lies about one of the files it
+      # lists — and the first draft did exactly that before this step existed (L12). Downloaded, not
+      # patched: a hash of nine assets computed from bytes on disk is the only version worth publishing.
+      - name: Recompute SHA256SUMS, which covers the manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          assets="${RUNNER_TEMP}/assets"
+          mkdir -p "${assets}"
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir "${assets}" --pattern '*' --clobber
+          cd "${assets}"
+          : > SHA256SUMS
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
+            | LC_ALL=C sort \
+            | while IFS= read -r asset; do sha256sum "${asset}"; done >> SHA256SUMS
+          gh release upload "${TAG}" SHA256SUMS --repo "${GITHUB_REPOSITORY}" --clobber
+
+      # Evidence, in the run summary, of exactly what an installed copy will be told to download.
+      - name: What the manifest points at
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python3 - "${RUNNER_TEMP}/latest.json" <<'PYTHON' >> "${GITHUB_STEP_SUMMARY}"
+          import json, sys
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          print("### Updater manifest\n")
+          print(f"version `{manifest['version']}`\n")
+          print("| target | artifact | signature |")
+          print("| --- | --- | --- |")
+          for key in sorted(manifest["platforms"]):
+              entry = manifest["platforms"][key]
+              name = entry["url"].rsplit("/", 1)[-1]
+              print(f"| `{key}` | `{name}` | {len(entry['signature'])} chars |")
+          PYTHON
+          printf '```json\n' >> "${GITHUB_STEP_SUMMARY}"
+          head -c 2000 "${RUNNER_TEMP}/latest.json" >> "${GITHUB_STEP_SUMMARY}"
+          printf '\n```\n' >> "${GITHUB_STEP_SUMMARY}"

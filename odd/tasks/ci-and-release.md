@@ -410,3 +410,39 @@ arreglado y se corre de nuevo. El draft existente se reutiliza con `--clobber`.
 Lo que esto confirma del diseño, y vale anotarlo porque era una hipótesis: **`prerelease: false` era necesario**.
 El draft quedó con `draft=true prerelease=false`, así que al publicarlo será alcanzable en
 `/releases/latest/download/latest.json`, que es el único endpoint que `tauri.conf.json` consulta.
+
+**L12 — el release v0.1.0 está completo, y su manifiesto no servía. Medido, no supuesto.**
+
+La corrida **41677408870**, sobre el tag re-apuntado al commit que arregla el `--repo`: verde en todos los pasos. El
+draft quedó con **10 assets**: `.deb` (10.873.962), `.rpm` (10.877.233), `.AppImage` (88.893.944), sus tres `.sig`
+(428/432/432), `latest.json` (2.399), el tarball de fuentes (1.069.368), `THIRD-PARTY-NOTICES.md` (5.567) y
+`SHA256SUMS`, con `draft=true` y `prerelease=false`. La firma funciona: los dos secretos están bien y el manifiesto
+que el updater consulta existe.
+
+EL DEFECTO, que apareció al **leer** el manifiesto en vez de mirar la lista de assets: `latest.json` nombraba cada
+paquete con la URL **de la API** — `https://api.github.com/repos/TomasCuevas/mirk/releases/assets/<id>` — que no es
+el archivo. Medido antes de opinar: sin credenciales esa URL devuelve **404** mientras el release es un draft, y
+publicada devuelve una descripción JSON del asset, no sus bytes. El updater descarga lo que el manifiesto apunta y
+verifica la firma contra el binario, así que un manifiesto que apunta a una descripción es una actualización que
+nunca puede instalarse. El cuerpo del release estaba además vacío, así que las notas que la app mostraría también.
+
+LA CAUSA no es un error del bundler: `tauri-action` escribe el manifiesto mientras el release es un draft, y en ese
+momento la URL pública de descarga todavía no existe. La forma pública tiene estructura estable
+—`https://github.com/<repo>/releases/download/<tag>/<asset>`— así que se construye sin consultar la API.
+
+EL ARREGLO, en dos piezas. `scripts/updater-manifest.sh`: genera el manifiesto desde los assets publicados,
+construye la URL, lee la firma del `.sig` correspondiente y **falla** si un paquete no tiene firma, si está vacía o
+si el release no trae ningún paquete. `.github/workflows/release-manifest.yml`: lo corre en `release: published`
+—el evento que separa "los artefactos existen" de "los artefactos se pueden descargar"—, sube el manifiesto con
+`--clobber` y **recalcula `SHA256SUMS`**, porque ese archivo cubre `latest.json` y quedaba mintiendo sobre uno de
+sus propios renglones. Publicar sigue siendo decisión humana.
+
+VERIFICADO contra el draft real, antes de publicar nada: el script sale 0, produce versión `0.1.0`, **cuatro claves
+de plataforma** (`linux-x86_64`, `linux-x86_64-appimage`, `linux-x86_64-deb`, `linux-x86_64-rpm`) con URLs públicas,
+y la firma del `.deb` coincide **byte a byte** con el asset `Mirk_0.1.0_amd64.deb.sig`. Es la prueba que este
+release necesitaba y que solo el draft real podía dar. Además se reemplazó el manifiesto del draft y se recalculó
+su `SHA256SUMS`: 9 renglones, y el de `latest.json` coincide con el hash real del archivo.
+
+RESIDUAL, y es del lector: el cuerpo del release está vacío, así que el manifiesto lleva `notes: ""` y la app no
+muestra notas. Se escribe con `gh release edit v0.1.0 --notes-file <archivo>` y el workflow del manifiesto vuelve a
+correr solo si se publica después; si se edita un release ya publicado hay que dispararlo a mano.
