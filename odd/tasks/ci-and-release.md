@@ -475,3 +475,22 @@ antes de seguir; la invariante rama == `main` se mantiene desde entonces, con `m
 
 Con esto T6 cierra por su lado técnico: tag real, release publicado, manifiesto que una copia instalada puede leer
 y verificar, y el camino repetible para la próxima versión.
+
+**L14 — el paquete instalado funciona: el último residual de T1 lo cerró el lector.**
+
+Descargó el `.deb` de la `v0.1.0` desde el release publicado, lo instaló y lo abrió: funciona, sin problemas hasta
+ahora.
+
+Esto cierra el residual que L6 dejó abierto y que ninguna máquina de este entorno podía cerrar —no hay `sudo` ni
+display para instalar y abrir un paquete—: la prueba de que un paquete **instalado** cuenta páginas era estructural
+(la ruta del recurso coincide con la que `tauri-utils` resuelve para un build instalado), no de ejecución. Ahora es
+de ejecución, en la máquina del lector, que es el único lugar donde se podía ejercitar.
+
+Por qué importa: S5 dejó de ser una promesa. Un paquete que sale sin su librería no falla al instalarse — falla en
+silencio en el primer documento, contando cero páginas. La cadena completa —declarar el recurso en
+`bundle.resources`, resolverlo desde el directorio del bundle, y no caer en `vendor/pdfium`, que en una instalación
+no existe— quedó probada donde se tenía que probar.
+
+Queda un eslabón de S7 sin observar en producción, y no se puede observar desde acá: en la copia instalada, Ajustes
+→ Aplicación debería decir que está al día, porque el release publicado es la misma `0.1.0`. Eso probaría que una
+copia instalada consulta el manifiesto real, lo entiende y no se ofrece a sí misma.
