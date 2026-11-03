@@ -446,3 +446,32 @@ su `SHA256SUMS`: 9 renglones, y el de `latest.json` coincide con el hash real de
 RESIDUAL, y es del lector: el cuerpo del release está vacío, así que el manifiesto lleva `notes: ""` y la app no
 muestra notas. Se escribe con `gh release edit v0.1.0 --notes-file <archivo>` y el workflow del manifiesto vuelve a
 correr solo si se publica después; si se edita un release ya publicado hay que dispararlo a mano.
+
+**L13 — publicado: la app ya puede actualizarse desde la v0.1.0.**
+
+Se escribieron las notas del release (1.684 caracteres, en inglés como el resto de los artefactos públicos), se
+editó el cuerpo con `gh release edit --notes-file` y se publicó el draft (`--draft=false`): el release quedó con
+`draft=false` y `prerelease=false` en https://github.com/TomasCuevas/mirk/releases/tag/v0.1.0.
+
+VERIFICADO SIN CREDENCIALES, que es como lo va a pedir una copia instalada:
+
+- `/releases/latest/download/latest.json` → **HTTP 200**, 4.176 bytes, versión `0.1.0`, las notas completas y
+  cuatro claves de plataforma.
+- El `.deb` de ese manifiesto se descarga (200 tras una redirección) y su `.sig` publicado coincide **byte a byte**
+  con la firma que el manifiesto declara.
+- `SHA256SUMS` cubre el `latest.json` vigente: el asset del release es idéntico al que sirve el endpoint, y su
+  hash (`17b4ab1e…`) coincide con la línea correspondiente de `SHA256SUMS`.
+
+EL EVENTO QUE NO LLEGA, y por eso hay un segundo disparador. Publicar el release **no** disparó el workflow del
+manifiesto: `GET /actions/runs?event=release` contestó `total_count: 0`, con el trigger correcto en la rama por
+defecto. El manifiesto se regeneró a mano una vez (y con las notas, que se escribieron después), y se agregó
+`workflow_dispatch` con el tag como entrada: correrlo a mano (run **41683171330**) salió **verde**, o sea que el
+script también funciona en un runner, y es la vía documentada para el caso que el evento no cubre de todos modos
+—editar las notas de un release ya publicado deja el `latest.json` viejo hasta que alguien lo rehaga—.
+
+UN DESVÍO DE PROCESO, dicho: el commit del arreglo del manifiesto se hizo estando en `main` en vez de la rama, así
+que `main` quedó un commit adelante de `feat/phase-1-core`. Se corrigió con un fast-forward de la rama a `main`
+antes de seguir; la invariante rama == `main` se mantiene desde entonces, con `main` en `021adff`.
+
+Con esto T6 cierra por su lado técnico: tag real, release publicado, manifiesto que una copia instalada puede leer
+y verificar, y el camino repetible para la próxima versión.
