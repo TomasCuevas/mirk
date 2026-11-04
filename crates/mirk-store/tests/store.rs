@@ -21,6 +21,30 @@ fn temp_db() -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
+/// Removes the V12 reading tables from a database rewound to an older version.
+///
+/// They did not exist at that version, so a fixture that rebuilds an older shape from this build's
+/// current schema must take them away again: leaving them would make the collision preflight refuse
+/// the open before the step under test runs.
+fn drop_reading_tables(raw: &rusqlite::Connection) {
+    raw.execute_batch("DROP TABLE page_visits; DROP TABLE reading_sessions;")
+        .expect("remove the tables a later version creates");
+}
+
+/// How many rows `table` holds, read through SQLite directly.
+///
+/// No public read enumerates a whole table, and a refused write has to leave storage exactly as it
+/// was: this is how a test proves that nothing was stored, rather than only that a call returned an
+/// error.
+fn row_count(path: &Path, table: &str) -> i64 {
+    let connection = rusqlite::Connection::open(path).expect("open raw");
+    connection
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .expect("count the rows")
+}
+
 fn document(path: &str, identity: FileId) -> Document {
     let mut doc = Document::new(path);
     doc.identity = Some(identity);
@@ -51,7 +75,9 @@ fn schema_contains_exactly_the_documented_tables() {
             "documents",
             "folders",
             "open_events",
+            "page_visits",
             "progress",
+            "reading_sessions",
             "settings",
             "suggestions",
             "viewers",
@@ -874,6 +900,7 @@ fn a_step_that_fails_on_the_way_to_v4_leaves_the_database_at_v3_untouched() {
     };
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
+        drop_reading_tables(&raw);
         raw.pragma_update(None, "user_version", 3i64)
             .expect("rewind the version stamp to the pre-V4 database shape");
     }
@@ -1072,6 +1099,7 @@ fn a_step_that_fails_on_the_way_to_v5_leaves_the_database_at_v4_untouched() {
     }
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
+        drop_reading_tables(&raw);
         raw.pragma_update(None, "user_version", 4i64)
             .expect("rewind the version stamp to the pre-V5 database shape");
     }
@@ -1276,6 +1304,7 @@ fn a_step_that_fails_on_the_way_to_v6_leaves_the_database_at_v5_untouched() {
     }
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
+        drop_reading_tables(&raw);
         raw.pragma_update(None, "user_version", 5i64)
             .expect("rewind the version stamp to the pre-V6 database shape");
     }
@@ -1471,6 +1500,7 @@ fn a_step_that_fails_on_the_way_to_v7_leaves_the_database_at_v6_untouched() {
     }
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
+        drop_reading_tables(&raw);
         raw.pragma_update(None, "user_version", 6i64)
             .expect("rewind the version stamp to the pre-V7 database shape");
         raw.execute_batch(
@@ -1673,6 +1703,8 @@ fn a_v8_database_keeps_every_readers_author_when_the_migration_gives_it_a_list()
         raw.execute_batch(
             "DROP TABLE document_authors;
              DROP TABLE authors;
+             DROP TABLE page_visits;
+             DROP TABLE reading_sessions;
              ALTER TABLE documents ADD COLUMN user_author TEXT;",
         )
         .expect("rebuild the column V7 wrote, which V9 retires, and remove the tables V9 creates");
@@ -1842,6 +1874,8 @@ fn a_step_that_fails_on_the_way_to_v9_leaves_the_database_at_v8_untouched() {
         raw.execute_batch(
             "DROP TABLE document_authors;
              DROP TABLE authors;
+             DROP TABLE page_visits;
+             DROP TABLE reading_sessions;
              ALTER TABLE documents ADD COLUMN user_author TEXT;
              UPDATE documents SET user_author = 'The reader''s author';
              CREATE INDEX idx_at_risk_user_author ON documents (user_author);",
@@ -2154,7 +2188,7 @@ fn the_schema_has_the_documented_columns_of_every_table() {
     // Read through SQLite's public catalog, so this asserts the *spec's* column list rather than
     // whatever the implementation happens to define.
     let connection = rusqlite::Connection::open(&path).expect("open raw");
-    let expected: [(&str, &[&str]); 9] = [
+    let expected: [(&str, &[&str]); 11] = [
         (
             "documents",
             &[
@@ -2221,6 +2255,22 @@ fn the_schema_has_the_documented_columns_of_every_table() {
             &["id", "path", "seen_count", "first_seen_at", "decided_at"],
         ),
         ("settings", &["key", "value"]),
+        // F1 part 1: the facts only this application's own reader can honestly produce.
+        (
+            "reading_sessions",
+            &["id", "doc_id", "started_at", "ended_at", "active_ms"],
+        ),
+        (
+            "page_visits",
+            &[
+                "id",
+                "doc_id",
+                "session_id",
+                "page",
+                "observed_at",
+                "visible_ms",
+            ],
+        ),
     ];
 
     for (table, columns) in expected {
@@ -4044,6 +4094,7 @@ fn a_step_that_fails_on_the_way_to_v8_leaves_the_database_at_v7_untouched() {
     }
     {
         let raw = rusqlite::Connection::open(&path).expect("open raw");
+        drop_reading_tables(&raw);
         raw.pragma_update(None, "user_version", 7i64)
             .expect("rewind the version stamp to the pre-V8 database shape");
     }
@@ -4199,6 +4250,7 @@ fn a_v9_database_gets_its_cover_source_from_the_image_it_had() {
     {
         // The pre-V10 shape: the column does not exist, and neither does the choice it records.
         let raw = rusqlite::Connection::open(&path).expect("open raw");
+        drop_reading_tables(&raw);
         raw.execute_batch("ALTER TABLE documents DROP COLUMN cover_source;")
             .expect("rebuild the V9 documents table");
         raw.pragma_update(None, "user_version", 9i64)
@@ -4224,4 +4276,1056 @@ fn a_v9_database_gets_its_cover_source_from_the_image_it_had() {
             .cover_choice(),
         CoverChoice::Page(3)
     );
+}
+
+// --- F1 part 1: the schema for the facts only mirk's own reader can honestly produce -------------
+//
+// This build has no capture: nothing in the workspace records a session or a visit yet. What these
+// tests pin is the storage contract those facts will be written under — the tables, the values they
+// accept, what leaves with a document, and the guard that refuses a database whose shape is not the
+// one this build writes. The facts are therefore written through SQLite directly: the constraints
+// have to hold for a writer that bypassed `Store`, so testing them through a recording method would
+// test the wrong boundary.
+
+/// Opens the database file directly, with foreign keys enforced as the store's own connection does.
+fn raw_connection(path: &Path) -> rusqlite::Connection {
+    let connection = rusqlite::Connection::open(path).expect("open raw");
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .expect("enable foreign keys");
+    connection
+}
+
+/// Every user table of a database file, read without opening it through `Store`.
+///
+/// `Store::table_names` would migrate the file on the way in, which is exactly what a test of a
+/// *refused* open must not do.
+fn raw_table_names(path: &Path) -> Vec<String> {
+    let connection = rusqlite::Connection::open(path).expect("open raw");
+    let mut statement = connection
+        .prepare(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .expect("prepare");
+    statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect()
+}
+
+/// The version stamp a database file carries, read without migrating it.
+fn raw_version(path: &Path) -> i64 {
+    let connection = rusqlite::Connection::open(path).expect("open raw");
+    connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("read the version stamp")
+}
+
+#[test]
+fn the_schema_refuses_a_reading_fact_a_typed_read_could_not_represent() {
+    // The constraints are what makes a stored row a fact even when the writer bypassed this crate.
+    // Three groups: the numeric bounds (`u32` pages, non-negative times and durations), the SQLite
+    // storage class an INTEGER column otherwise happily accepts (text, a real), and the
+    // same-document rule between a visit and the session that gives it provenance.
+    let (_dir, path) = temp_db();
+    let (read, other);
+    {
+        let store = Store::open(&path).expect("open");
+        read = store
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 20, ino: 1 },
+            ))
+            .expect("insert");
+        other = store
+            .upsert_document(&document(
+                "/library/other.pdf",
+                FileId::Posix { dev: 20, ino: 2 },
+            ))
+            .expect("insert");
+    }
+
+    let raw = raw_connection(&path);
+    raw.execute(
+        "INSERT INTO reading_sessions (id, doc_id, started_at, ended_at, active_ms) \
+         VALUES (1, ?1, 1700000000, 1700000400, 300000)",
+        rusqlite::params![read],
+    )
+    .expect("record a session");
+    raw.execute(
+        "INSERT INTO reading_sessions (id, doc_id, started_at, ended_at, active_ms) \
+         VALUES (2, ?1, 1700000000, 1700000100, 90000)",
+        rusqlite::params![other],
+    )
+    .expect("record another document's session");
+
+    let impossible_sessions = [
+        (
+            "INSERT INTO reading_sessions (doc_id, started_at, ended_at, active_ms) \
+             VALUES (?1, -100, 100, 10)",
+            "a start before the epoch",
+        ),
+        (
+            "INSERT INTO reading_sessions (doc_id, started_at, ended_at, active_ms) \
+             VALUES (?1, -100, -50, 10)",
+            "an end before the epoch",
+        ),
+        (
+            "INSERT INTO reading_sessions (doc_id, started_at, ended_at, active_ms) \
+             VALUES (?1, 100, 200, -1)",
+            "a negative active duration",
+        ),
+        (
+            "INSERT INTO reading_sessions (doc_id, started_at, ended_at, active_ms) \
+             VALUES (?1, 'abc', 200, 10)",
+            "a text start time",
+        ),
+        (
+            "INSERT INTO reading_sessions (doc_id, started_at, ended_at, active_ms) \
+             VALUES (?1, 100, 200, 1.5)",
+            "a fractional active duration",
+        ),
+    ];
+    for (statement, what) in impossible_sessions {
+        assert!(
+            raw.execute(statement, rusqlite::params![read]).is_err(),
+            "the schema must refuse {what}: `{statement}`"
+        );
+    }
+
+    let impossible_visits = [
+        (
+            "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+             VALUES (?1, ?2, -1, 100, 10)",
+            "a negative page",
+        ),
+        (
+            "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+             VALUES (?1, ?2, 4294967296, 100, 10)",
+            "a page beyond the u32 bound",
+        ),
+        (
+            "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+             VALUES (?1, ?2, 0, -1, 10)",
+            "an observation before the epoch",
+        ),
+        (
+            "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+             VALUES (?1, ?2, 0, 100, -1)",
+            "a negative visible duration",
+        ),
+        (
+            "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+             VALUES (?1, ?2, 'abc', 100, 10)",
+            "a text page",
+        ),
+        (
+            "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+             VALUES (?1, ?2, 0, 'abc', 10)",
+            "a text observation time",
+        ),
+        (
+            "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+             VALUES (?1, ?2, 0, 100, 1.5)",
+            "a fractional visible duration",
+        ),
+    ];
+    for (statement, what) in impossible_visits {
+        assert!(
+            raw.execute(statement, rusqlite::params![read, 1i64])
+                .is_err(),
+            "the schema must refuse {what}: `{statement}`"
+        );
+    }
+
+    // A visit whose session belongs to a different document claims provenance it does not have.
+    assert!(
+        raw.execute(
+            "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+             VALUES (?1, ?2, 0, 100, 10)",
+            rusqlite::params![read, 2i64],
+        )
+        .is_err(),
+        "the schema must refuse a session of another document"
+    );
+    // And references to rows that do not exist.
+    for (params, what) in [
+        (rusqlite::params![read, 9_999i64], "an unknown session"),
+        (rusqlite::params![9_999i64, 1i64], "an unknown document"),
+    ] {
+        assert!(
+            raw.execute(
+                "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+                 VALUES (?1, ?2, 0, 100, 10)",
+                params,
+            )
+            .is_err(),
+            "the schema must refuse {what}"
+        );
+    }
+
+    // Nothing malformed was stored, so a typed read can never meet one of these rows.
+    assert_eq!(row_count(&path, "reading_sessions"), 2);
+    assert_eq!(row_count(&path, "page_visits"), 0);
+
+    // The constraints are not a blanket refusal: the same row with the session of its own document
+    // is exactly what the schema exists to hold, and it comes back with every value intact.
+    raw.execute(
+        "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+         VALUES (?1, ?2, 0, 100, 10)",
+        rusqlite::params![read, 1i64],
+    )
+    .expect("the schema must accept a well-formed visit");
+    let stored: (i64, i64, i64, i64) = raw
+        .query_row(
+            "SELECT session_id, page, observed_at, visible_ms FROM page_visits",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("read the visit back");
+    assert_eq!(stored, (1, 0, 100, 10));
+}
+
+#[test]
+fn a_session_whose_wall_clock_went_backwards_is_stored_as_given() {
+    // `started_at` and `ended_at` are wall-clock readings, and the UTC clock can be corrected
+    // backwards between them: an NTP correction, a manual change, a suspend and resume. What the
+    // reader can honestly report is the two readings plus the separately measured `active_ms`, and
+    // elapsed reading time is not `ended_at - started_at`, so the schema must not require the span to
+    // be monotonic. The timestamps are still non-negative and the durations are still non-negative.
+    let (_dir, path) = temp_db();
+    let read;
+    {
+        let store = Store::open(&path).expect("open");
+        read = store
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 33, ino: 1 },
+            ))
+            .expect("insert");
+    }
+
+    let raw = raw_connection(&path);
+    raw.execute(
+        "INSERT INTO reading_sessions (doc_id, started_at, ended_at, active_ms) \
+         VALUES (?1, 200, 100, 0)",
+        rusqlite::params![read],
+    )
+    .expect("a span whose wall clock moved backwards is a fact, not a violation");
+    let stored: (i64, i64, i64) = raw
+        .query_row(
+            "SELECT started_at, ended_at, active_ms FROM reading_sessions",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read the session back");
+    assert_eq!(stored, (200, 100, 0));
+
+    // A negative timestamp is still not a time, so the real bounds keep holding.
+    assert!(
+        raw.execute(
+            "INSERT INTO reading_sessions (doc_id, started_at, ended_at, active_ms) \
+             VALUES (?1, -1, 100, 0)",
+            rusqlite::params![read],
+        )
+        .is_err(),
+        "a negative start remains impossible"
+    );
+}
+
+#[test]
+fn deleting_a_document_or_a_session_takes_the_reading_facts_it_owns_with_it() {
+    // Reading time that nothing can attribute is not a fact worth keeping: a document that leaves
+    // the library takes its sessions and visits, and a session that goes takes the visits it gave
+    // provenance to. Both rules are the schema's, so they hold for a writer that bypassed `Store`.
+    let (_dir, path) = temp_db();
+    let (first, second);
+    {
+        let store = Store::open(&path).expect("open");
+        first = store
+            .upsert_document(&document(
+                "/library/first.pdf",
+                FileId::Posix { dev: 22, ino: 1 },
+            ))
+            .expect("insert");
+        second = store
+            .upsert_document(&document(
+                "/library/second.pdf",
+                FileId::Posix { dev: 22, ino: 2 },
+            ))
+            .expect("insert");
+    }
+
+    let raw = raw_connection(&path);
+    for (session_id, doc_id) in [(1i64, first), (2i64, second)] {
+        raw.execute(
+            "INSERT INTO reading_sessions (id, doc_id, started_at, ended_at, active_ms) \
+             VALUES (?1, ?2, 1700000000, 1700000300, 240000)",
+            rusqlite::params![session_id, doc_id],
+        )
+        .expect("record a session");
+        raw.execute(
+            "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+             VALUES (?1, ?2, 1, 1700000100, 1000)",
+            rusqlite::params![doc_id, session_id],
+        )
+        .expect("record a visit");
+    }
+    assert_eq!(row_count(&path, "reading_sessions"), 2);
+    assert_eq!(row_count(&path, "page_visits"), 2);
+
+    // A document leaving the library takes its session and its visit, and nothing else.
+    raw.execute(
+        "DELETE FROM documents WHERE id = ?1",
+        rusqlite::params![first],
+    )
+    .expect("remove the first document");
+    let remaining_sessions: Vec<i64> = {
+        let mut statement = raw
+            .prepare("SELECT id FROM reading_sessions ORDER BY id")
+            .expect("prepare");
+        statement
+            .query_map([], |row| row.get::<_, i64>(0))
+            .expect("query")
+            .map(|row| row.expect("row"))
+            .collect()
+    };
+    assert_eq!(remaining_sessions, vec![2]);
+    let remaining_visits: Vec<i64> = {
+        let mut statement = raw
+            .prepare("SELECT session_id FROM page_visits ORDER BY session_id")
+            .expect("prepare");
+        statement
+            .query_map([], |row| row.get::<_, i64>(0))
+            .expect("query")
+            .map(|row| row.expect("row"))
+            .collect()
+    };
+    assert_eq!(remaining_visits, vec![2]);
+
+    // A session leaving takes its visits; the document it belonged to stays.
+    raw.execute(
+        "DELETE FROM reading_sessions WHERE id = ?1",
+        rusqlite::params![2i64],
+    )
+    .expect("remove the second session");
+    assert_eq!(row_count(&path, "page_visits"), 0);
+    assert_eq!(row_count(&path, "documents"), 1);
+    assert_eq!(
+        raw.query_row("SELECT id FROM documents", [], |row| row.get::<_, i64>(0))
+            .expect("the second document is untouched"),
+        second
+    );
+}
+
+#[test]
+fn deleting_one_session_takes_only_its_visits_and_keeps_its_siblings_visits() {
+    // Two sessions of the same document, each with its own visit. Deleting one session must take the
+    // visits it gave provenance to and nothing else: the sibling session's visit, for the very same
+    // document, is a different fact and must survive. The composite key `(session_id, doc_id)` is what
+    // makes the cascade that precise — a cascade keyed only by `doc_id` would delete both visits.
+    let (_dir, path) = temp_db();
+    let read;
+    {
+        let store = Store::open(&path).expect("open");
+        read = store
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 34, ino: 1 },
+            ))
+            .expect("insert");
+    }
+
+    let raw = raw_connection(&path);
+    for (session_id, page) in [(1i64, 2i64), (2i64, 7i64)] {
+        raw.execute(
+            "INSERT INTO reading_sessions (id, doc_id, started_at, ended_at, active_ms) \
+             VALUES (?1, ?2, 1700000000, 1700000300, 240000)",
+            rusqlite::params![session_id, read],
+        )
+        .expect("record a session of the same document");
+        raw.execute(
+            "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+             VALUES (?1, ?2, ?3, 1700000100, 1000)",
+            rusqlite::params![read, session_id, page],
+        )
+        .expect("record a visit in that session");
+    }
+    assert_eq!(row_count(&path, "reading_sessions"), 2);
+    assert_eq!(row_count(&path, "page_visits"), 2);
+
+    raw.execute(
+        "DELETE FROM reading_sessions WHERE id = ?1",
+        rusqlite::params![1i64],
+    )
+    .expect("remove one session of the document");
+
+    assert_eq!(row_count(&path, "reading_sessions"), 1);
+    assert_eq!(row_count(&path, "page_visits"), 1);
+    // The surviving facts are the sibling session and *its* visit, and they still name the same
+    // document.
+    let surviving: (i64, i64, i64, i64) = raw
+        .query_row(
+            "SELECT v.doc_id, v.session_id, v.page, v.visible_ms \
+             FROM page_visits v JOIN reading_sessions s ON s.id = v.session_id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("the sibling session's visit must survive");
+    assert_eq!(surviving, (read, 2, 7, 1000));
+}
+
+#[test]
+fn removing_a_watched_folder_takes_the_reading_facts_of_its_documents_with_it() {
+    // The same rule through the interface that actually removes documents: forgetting a watch
+    // deletes the documents it covered, and the reading facts go with them through the store's own
+    // foreign keys — while a document outside the watch keeps every fact.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let watched = store.record_folder("/library", true).expect("record");
+
+    let inside = store
+        .upsert_document(&document(
+            "/library/inside.pdf",
+            FileId::Posix { dev: 23, ino: 1 },
+        ))
+        .expect("insert");
+    let outside = store
+        .upsert_document(&document(
+            "/elsewhere/outside.pdf",
+            FileId::Posix { dev: 23, ino: 2 },
+        ))
+        .expect("insert");
+
+    {
+        let raw = raw_connection(&path);
+        for (session_id, doc_id) in [(1i64, inside), (2i64, outside)] {
+            raw.execute(
+                "INSERT INTO reading_sessions (id, doc_id, started_at, ended_at, active_ms) \
+                 VALUES (?1, ?2, 1700000000, 1700000300, 240000)",
+                rusqlite::params![session_id, doc_id],
+            )
+            .expect("record a session");
+            raw.execute(
+                "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+                 VALUES (?1, ?2, 1, 1700000100, 1000)",
+                rusqlite::params![doc_id, session_id],
+            )
+            .expect("record a visit");
+        }
+    }
+
+    store
+        .forget_folder(watched)
+        .expect("forget")
+        .expect("the watch was known");
+
+    assert!(store.document_by_id(inside).expect("read").is_none());
+    assert_eq!(row_count(&path, "reading_sessions"), 1);
+    assert_eq!(row_count(&path, "page_visits"), 1);
+    let raw = raw_connection(&path);
+    assert_eq!(
+        raw.query_row("SELECT doc_id FROM reading_sessions", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("the surviving session belongs to the document outside the watch"),
+        outside
+    );
+    assert_eq!(
+        raw.query_row("SELECT doc_id FROM page_visits", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("the surviving visit belongs to the document outside the watch"),
+        outside
+    );
+}
+
+// --- S8, again: an earlier, uncommitted schema 12 must not be adopted --------------------------
+
+/// The two reading-table shapes an earlier, uncommitted build of schema 12 could have left behind in
+/// a development database. Neither is reachable through this build's interface, so each is rebuilt
+/// here from the statements that build wrote.
+#[derive(Clone, Copy, Debug)]
+enum EarlierV12 {
+    /// The first shape: `page_visits` had neither the session it happened in nor the moment the page
+    /// was observed.
+    WithoutSessionAndObservationTime,
+    /// The second shape: the columns exist, but the storage-class checks, the numeric bounds and the
+    /// same-document key do not — and it still demands a monotonic wall-clock span, which this build
+    /// deliberately does not: elapsed reading time is not `ended_at - started_at`.
+    WithWeakerConstraints,
+}
+
+impl EarlierV12 {
+    fn statements(self) -> &'static str {
+        match self {
+            EarlierV12::WithoutSessionAndObservationTime => {
+                "CREATE TABLE reading_sessions (
+                     id         INTEGER PRIMARY KEY,
+                     doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                     started_at INTEGER NOT NULL,
+                     ended_at   INTEGER NOT NULL,
+                     active_ms  INTEGER NOT NULL,
+                     CHECK (ended_at >= started_at),
+                     CHECK (active_ms >= 0)
+                 );
+                 CREATE INDEX idx_reading_sessions_doc ON reading_sessions (doc_id, started_at);
+                 CREATE TABLE page_visits (
+                     id         INTEGER PRIMARY KEY,
+                     doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                     page       INTEGER NOT NULL,
+                     visible_ms INTEGER NOT NULL,
+                     CHECK (page >= 0),
+                     CHECK (visible_ms >= 0)
+                 );
+                 CREATE INDEX idx_page_visits_doc ON page_visits (doc_id, page);"
+            }
+            EarlierV12::WithWeakerConstraints => {
+                "CREATE TABLE reading_sessions (
+                     id         INTEGER PRIMARY KEY,
+                     doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                     started_at INTEGER NOT NULL,
+                     ended_at   INTEGER NOT NULL,
+                     active_ms  INTEGER NOT NULL,
+                     CHECK (ended_at >= started_at),
+                     CHECK (active_ms >= 0)
+                 );
+                 CREATE INDEX idx_reading_sessions_doc ON reading_sessions (doc_id, started_at);
+                 CREATE TABLE page_visits (
+                     id          INTEGER PRIMARY KEY,
+                     doc_id      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                     session_id  INTEGER NOT NULL REFERENCES reading_sessions(id) ON DELETE CASCADE,
+                     page        INTEGER NOT NULL,
+                     observed_at INTEGER NOT NULL,
+                     visible_ms  INTEGER NOT NULL,
+                     CHECK (page >= 0),
+                     CHECK (visible_ms >= 0)
+                 );
+                 CREATE INDEX idx_page_visits_doc ON page_visits (doc_id, observed_at);
+                 CREATE INDEX idx_page_visits_session ON page_visits (session_id, observed_at);"
+            }
+        }
+    }
+
+    fn rows(self) -> &'static str {
+        match self {
+            EarlierV12::WithoutSessionAndObservationTime => {
+                "INSERT INTO reading_sessions (id, doc_id, started_at, ended_at, active_ms)
+                 VALUES (1, 1, 1700000000, 1700000600, 480000);
+                 INSERT INTO page_visits (id, doc_id, page, visible_ms)
+                 VALUES (1, 1, 7, 42000);"
+            }
+            EarlierV12::WithWeakerConstraints => {
+                "INSERT INTO reading_sessions (id, doc_id, started_at, ended_at, active_ms)
+                 VALUES (1, 1, 1700000000, 1700000600, 480000);
+                 INSERT INTO page_visits (id, doc_id, session_id, page, observed_at, visible_ms)
+                 VALUES (1, 1, 1, 7, 1700000100, 42000);"
+            }
+        }
+    }
+}
+
+/// Builds an isolated database carrying an earlier, uncommitted schema 12: the stamp says 12, the
+/// reading tables have the older shape, and they hold representative session and page rows.
+fn an_earlier_v12_database(shape: EarlierV12) -> (tempfile::TempDir, PathBuf) {
+    let (dir, path) = temp_db();
+    {
+        let store = Store::open(&path).expect("build a current database");
+        store
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 24, ino: 1 },
+            ))
+            .expect("insert the document the old rows point at");
+    }
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        drop_reading_tables(&raw);
+        raw.execute_batch(shape.statements())
+            .expect("rebuild the earlier shape");
+        raw.execute_batch(shape.rows())
+            .expect("record the rows the earlier build stored");
+        raw.pragma_update(None, "user_version", 12i64)
+            .expect("stamp the version the earlier build stamped");
+    }
+    (dir, path)
+}
+
+/// Everything a refused open must leave exactly as it was: the version stamp, the stored definition
+/// of the reading tables and of the objects attached to them, and every row they hold.
+///
+/// Deliberately **logical** state, not the bytes of one file: committed rows can live in the
+/// write-ahead log, and a connection closing can checkpoint them into the main file without changing
+/// what the database contains. A byte comparison would either be flaky or claim something this crate
+/// does not control.
+#[derive(Debug, PartialEq, Eq)]
+struct DatabaseSnapshot {
+    version: i64,
+    schema: Vec<(String, String, String)>,
+    sessions: Vec<Vec<String>>,
+    visits: Vec<Vec<String>>,
+}
+
+fn snapshot_database(path: &Path) -> DatabaseSnapshot {
+    let connection = rusqlite::Connection::open(path).expect("open raw");
+    snapshot_connection(&connection)
+}
+
+/// The same logical state, read through a connection the caller already holds.
+///
+/// A refused open must leave the committed state untouched while another connection still holds the
+/// write-ahead log — that log belongs to the fixture connection, and only it can be asked what the
+/// database contains before and after.
+fn snapshot_connection(connection: &rusqlite::Connection) -> DatabaseSnapshot {
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("read the version stamp");
+    // Every object attached to the reading tables, so an unexpected index or trigger is part of what
+    // a refused open must leave exactly as it was.
+    let schema: Vec<(String, String, String)> = {
+        let mut statement = connection
+            .prepare(
+                "SELECT type, name, COALESCE(sql, '') FROM sqlite_master \
+                 WHERE name IN ('reading_sessions', 'page_visits', \
+                                'idx_reading_sessions_doc', 'idx_page_visits_doc', \
+                                'idx_page_visits_session') \
+                    OR tbl_name IN ('reading_sessions', 'page_visits') \
+                 ORDER BY type, name",
+            )
+            .expect("prepare");
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("query")
+            .map(|row| row.expect("row"))
+            .collect()
+    };
+    DatabaseSnapshot {
+        version,
+        schema,
+        sessions: dump_rows(connection, "SELECT * FROM reading_sessions ORDER BY id"),
+        visits: dump_rows(connection, "SELECT * FROM page_visits ORDER BY id"),
+    }
+}
+
+/// The path of one of a database's sidecar files, which belong to it and travel with it.
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// Every value of every row, with its SQLite storage class kept visible.
+fn dump_rows(connection: &rusqlite::Connection, sql: &str) -> Vec<Vec<String>> {
+    let mut statement = connection.prepare(sql).expect("prepare");
+    let columns = statement.column_count();
+    statement
+        .query_map([], |row| {
+            let mut values = Vec::with_capacity(columns);
+            for index in 0..columns {
+                let value: rusqlite::types::Value = row.get(index)?;
+                values.push(format!("{value:?}"));
+            }
+            Ok(values)
+        })
+        .expect("query")
+        .map(|row| row.expect("row"))
+        .collect()
+}
+
+#[test]
+fn an_earlier_v12_shape_without_the_session_and_time_facts_is_refused_and_left_untouched() {
+    // The version stamp cannot tell this database apart from the corrected schema 12: it says 12
+    // because an earlier pre-release build wrote it. Opening it must fail before any reading fact is
+    // read or written, and must not touch a single byte — inventing the missing session and time
+    // facts would be worse than refusing.
+    let (_dir, path) = an_earlier_v12_database(EarlierV12::WithoutSessionAndObservationTime);
+    let before = snapshot_database(&path);
+
+    let error = Store::open(&path).expect_err("an earlier schema 12 must be refused");
+    match &error {
+        MirkError::Storage(message) => {
+            assert!(
+                message.contains("page_visits"),
+                "the refusal must name the table it cannot use: {message}"
+            );
+            assert!(
+                message.contains("session_id"),
+                "the refusal must name the missing session fact: {message}"
+            );
+            assert!(
+                message.contains("observed_at"),
+                "the refusal must name the missing time fact: {message}"
+            );
+            assert!(
+                message.contains("will not repair, rewrite, move or delete it"),
+                "the refusal must say nothing was repaired: {message}"
+            );
+        }
+        other => panic!("an incompatible schema must be a storage error, got {other:?}"),
+    }
+
+    assert_eq!(
+        before,
+        snapshot_database(&path),
+        "a refused open must change nothing: not the version, not the tables, not a row"
+    );
+}
+
+#[test]
+fn an_earlier_v12_shape_with_weaker_constraints_is_refused_and_left_untouched() {
+    // The same columns, but without the storage-class checks, the timestamp bounds, the `u32` page
+    // bound or the same-document key. It reads and writes through this interface, so only the
+    // definition itself can tell it apart from the corrected schema — and it must be refused, not
+    // silently accepted as if the stronger contract were in force.
+    let (_dir, path) = an_earlier_v12_database(EarlierV12::WithWeakerConstraints);
+    let before = snapshot_database(&path);
+
+    let error = Store::open(&path).expect_err("an earlier schema 12 must be refused");
+    match &error {
+        MirkError::Storage(message) => {
+            assert!(
+                message.contains("page_visits"),
+                "the refusal must name the table it cannot use: {message}"
+            );
+            assert!(
+                message.contains("the definition of `page_visits` differs"),
+                "the refusal must say the definition differs, without diagnosing why: {message}"
+            );
+        }
+        other => panic!("an incompatible schema must be a storage error, got {other:?}"),
+    }
+
+    assert_eq!(
+        before,
+        snapshot_database(&path),
+        "a refused open must change nothing: not the version, not the tables, not a row"
+    );
+}
+
+#[test]
+fn an_earlier_v12_shape_in_wal_mode_is_refused_and_keeps_its_committed_state() {
+    // Committed rows can live in the `-wal` sidecar instead of the main file, so what a refusal must
+    // preserve is the logical committed state, not the bytes of one file. The fixture connection stays
+    // open while the refused open runs, so the rows are still in the log when the refusal happens.
+    let (_dir, path) = temp_db();
+    {
+        let store = Store::open(&path).expect("build a current database");
+        store
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 26, ino: 1 },
+            ))
+            .expect("insert");
+    }
+
+    let fixture = rusqlite::Connection::open(&path).expect("open raw");
+    let mode: String = fixture
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .expect("switch the database to WAL");
+    assert_eq!(mode, "wal");
+    drop_reading_tables(&fixture);
+    fixture
+        .execute_batch(EarlierV12::WithoutSessionAndObservationTime.statements())
+        .expect("rebuild the earlier shape");
+    fixture
+        .execute_batch(EarlierV12::WithoutSessionAndObservationTime.rows())
+        .expect("record the rows the earlier build stored");
+    fixture
+        .pragma_update(None, "user_version", 12i64)
+        .expect("stamp the version the earlier build stamped");
+
+    let wal = sidecar(&path, "-wal");
+    assert!(
+        wal.exists(),
+        "the fixture must leave its committed state in the write-ahead log"
+    );
+    let before = snapshot_connection(&fixture);
+
+    let error = Store::open(&path).expect_err("an earlier schema 12 must be refused");
+    match &error {
+        MirkError::Storage(message) => {
+            assert!(
+                message.contains("committed contents"),
+                "the refusal must speak about committed contents, not about physical files: {message}"
+            );
+            assert!(
+                !message.contains("move the file"),
+                "the refusal must not suggest moving only the main database file: {message}"
+            );
+        }
+        other => panic!("an incompatible schema must be a storage error, got {other:?}"),
+    }
+
+    assert_eq!(
+        before,
+        snapshot_connection(&fixture),
+        "the committed state must be unchanged while another connection still holds the log"
+    );
+    assert!(
+        wal.exists(),
+        "the refused open must not checkpoint away a log another connection still holds"
+    );
+
+    // Closing the fixture connection checkpoints the log; the committed state must survive it.
+    drop(fixture);
+    assert_eq!(
+        before,
+        snapshot_database(&path),
+        "the committed state must survive the checkpoint"
+    );
+}
+
+#[test]
+fn an_unexpected_trigger_on_a_reading_table_is_refused_and_left_untouched() {
+    // A trigger can delete or rewrite the facts as they are written, so it is not a harmless extra:
+    // it is part of what the reading tables do. This build did not create it and cannot vouch for it,
+    // so the database is refused rather than trusted.
+    let (_dir, path) = temp_db();
+    {
+        let store = Store::open(&path).expect("build a current database");
+        store
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 27, ino: 1 },
+            ))
+            .expect("insert");
+    }
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.execute_batch(
+            "CREATE TRIGGER unexpected_visit_cleanup AFTER INSERT ON page_visits \
+             BEGIN DELETE FROM page_visits; END;",
+        )
+        .expect("attach an unexpected trigger");
+    }
+    let before = snapshot_database(&path);
+
+    let error = Store::open(&path).expect_err("an unexpected trigger must be refused");
+    match &error {
+        MirkError::Storage(message) => assert!(
+            message.contains("unexpected trigger") && message.contains("unexpected_visit_cleanup"),
+            "the refusal must name the object it cannot vouch for: {message}"
+        ),
+        other => panic!("an unexpected trigger must be a storage error, got {other:?}"),
+    }
+    assert_eq!(before, snapshot_database(&path), "nothing may change");
+}
+
+#[test]
+fn an_unexpected_unique_index_on_a_reading_table_is_refused_and_left_untouched() {
+    // A unique index is a correctness constraint: it can reject a fact this build records, so it is
+    // not a harmless addition to the shape this build writes.
+    let (_dir, path) = temp_db();
+    drop(Store::open(&path).expect("build a current database"));
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.execute_batch(
+            "CREATE UNIQUE INDEX idx_one_session_per_start \
+             ON reading_sessions (doc_id, started_at);",
+        )
+        .expect("attach a unique index this build did not write");
+    }
+    let before = snapshot_database(&path);
+
+    let error = Store::open(&path).expect_err("an unexpected index must be refused");
+    match &error {
+        MirkError::Storage(message) => assert!(
+            message.contains("unexpected index") && message.contains("idx_one_session_per_start"),
+            "the refusal must name the object it cannot vouch for: {message}"
+        ),
+        other => panic!("an unexpected index must be a storage error, got {other:?}"),
+    }
+    assert_eq!(before, snapshot_database(&path), "nothing may change");
+}
+
+#[test]
+fn an_unexpected_index_named_like_an_autoindex_is_refused_and_left_untouched() {
+    // SQLite's own autoindexes are exempt because they belong to the table definition that was
+    // compared above. The exemption must match the reserved prefix exactly: `_` is a `LIKE`
+    // wildcard, so a pattern would also exempt an object named `sqliteXautoindexY...`, which this
+    // build did not create.
+    let (_dir, path) = temp_db();
+    drop(Store::open(&path).expect("build a current database"));
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        raw.execute_batch(
+            "CREATE INDEX sqliteXautoindex_lookalike ON reading_sessions (started_at);",
+        )
+        .expect("attach an index whose name only looks reserved");
+    }
+    let before = snapshot_database(&path);
+
+    let error = Store::open(&path).expect_err("a lookalike autoindex name must not be exempt");
+    match &error {
+        MirkError::Storage(message) => assert!(
+            message.contains("unexpected index") && message.contains("sqliteXautoindex_lookalike"),
+            "the refusal must name the object it cannot vouch for: {message}"
+        ),
+        other => panic!("an unexpected index must be a storage error, got {other:?}"),
+    }
+    assert_eq!(before, snapshot_database(&path), "nothing may change");
+}
+
+#[test]
+fn a_current_database_on_a_read_only_file_opens_and_reads() {
+    // The guard must not need the write lock: opening a current database is a read. A write-protected
+    // file is the sharpest proof of that. A process that can still write after the permission change —
+    // root, or a filesystem that ignores the mode — cannot prove this, and the test says so instead of
+    // pretending.
+    let (_dir, path) = temp_db();
+    let document_id = {
+        let store = Store::open(&path).expect("build a current database");
+        store
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 32, ino: 1 },
+            ))
+            .expect("insert")
+    };
+
+    let original = std::fs::metadata(&path).expect("metadata").permissions();
+    let mut read_only = original.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&path, read_only).expect("make the database read-only");
+
+    let writable = std::fs::OpenOptions::new().write(true).open(&path).is_ok();
+    if writable {
+        std::fs::set_permissions(&path, original).expect("restore the mode");
+        eprintln!("skipping: this process can still write a read-only file");
+        return;
+    }
+
+    let store = Store::open(&path).expect("a read-only current database must open");
+    assert_eq!(
+        store.schema_version().expect("schema version"),
+        Store::CURRENT_SCHEMA_VERSION
+    );
+    assert_eq!(
+        store
+            .document_by_id(document_id)
+            .expect("read")
+            .expect("row")
+            .document
+            .path,
+        PathBuf::from("/library/read.pdf")
+    );
+    drop(store);
+
+    std::fs::set_permissions(&path, original).expect("restore the mode");
+}
+
+#[test]
+fn a_v12_definition_that_differs_only_in_a_constraint_literal_is_refused() {
+    // The comparison is byte-exact on purpose: `typeof(doc_id) = 'integer'` and
+    // `typeof(doc_id) = 'INTEGER'` are different constraints — the second can never pass, so every
+    // write would be rejected — and a comparison that folded case or tokenized the SQL could accept
+    // a definition it cannot prove equivalent. This database differs from this build's shape in one
+    // literal and nothing else.
+    let (_dir, path) = temp_db();
+    drop(Store::open(&path).expect("build a current database"));
+
+    let raw = rusqlite::Connection::open(&path).expect("open raw");
+    let table_sql: String = raw
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'page_visits'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read the table this build wrote");
+    let index_sql: Vec<String> = {
+        let mut statement = raw
+            .prepare(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' \
+                 AND tbl_name = 'page_visits' AND sql IS NOT NULL ORDER BY name",
+            )
+            .expect("prepare");
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query")
+            .map(|row| row.expect("row"))
+            .collect()
+    };
+    let weakened = table_sql.replace("typeof(doc_id) = 'integer'", "typeof(doc_id) = 'INTEGER'");
+    assert_ne!(
+        weakened, table_sql,
+        "the fixture must change the constraint"
+    );
+
+    raw.execute_batch("DROP TABLE page_visits;")
+        .expect("remove the corrected table");
+    raw.execute_batch(&weakened)
+        .expect("rebuild it with one literal changed");
+    for statement in &index_sql {
+        raw.execute_batch(statement).expect("recreate the index");
+    }
+    drop(raw);
+
+    let before = snapshot_database(&path);
+    let error = Store::open(&path).expect_err("a different constraint literal must be refused");
+    match &error {
+        MirkError::Storage(message) => assert!(
+            message.contains("the definition of `page_visits` differs"),
+            "the refusal must say the definition differs: {message}"
+        ),
+        other => panic!("a different definition must be a storage error, got {other:?}"),
+    }
+    assert_eq!(before, snapshot_database(&path), "nothing may change");
+}
+
+#[test]
+fn a_v12_stamp_without_the_reading_objects_is_refused_and_left_untouched() {
+    // A version stamp is a claim, not proof: a database can say 12 and not hold what 12 means. The
+    // gate must report the missing objects by name rather than trusting the number, and it must not
+    // create them — the stamp still says 12, so creating them silently would be a repair nobody
+    // asked for and would leave the version claim indistinguishable from a real upgrade.
+    let (_dir, path) = temp_db();
+    drop(Store::open(&path).expect("build a current database"));
+    {
+        let raw = rusqlite::Connection::open(&path).expect("open raw");
+        drop_reading_tables(&raw);
+        raw.pragma_update(None, "user_version", 12i64)
+            .expect("leave the current stamp behind the shape");
+    }
+
+    let error = Store::open(&path).expect_err("a stamp without its tables must be refused");
+    match &error {
+        MirkError::Storage(message) => {
+            assert!(
+                message.contains("the table `reading_sessions` is missing"),
+                "the refusal must name the missing session table: {message}"
+            );
+            assert!(
+                message.contains("the table `page_visits` is missing"),
+                "the refusal must name the missing visit table: {message}"
+            );
+        }
+        other => panic!("an incomplete schema must be a storage error, got {other:?}"),
+    }
+    assert_eq!(raw_version(&path), 12, "the stamp must not be rewritten");
+    assert!(
+        !raw_table_names(&path)
+            .iter()
+            .any(|name| name == "reading_sessions" || name == "page_visits"),
+        "a refused open must not create the missing tables"
+    );
+
+    // The same for one missing index: the indexes are part of the shape the reads rely on.
+    let (_index_dir, index_path) = temp_db();
+    drop(Store::open(&index_path).expect("build a current database"));
+    {
+        let raw = rusqlite::Connection::open(&index_path).expect("open raw");
+        raw.execute_batch("DROP INDEX idx_page_visits_session;")
+            .expect("remove one index this build writes");
+    }
+    let error = Store::open(&index_path).expect_err("a missing index must be refused");
+    match &error {
+        MirkError::Storage(message) => assert!(
+            message.contains("the index `idx_page_visits_session` is missing"),
+            "the refusal must name the missing index: {message}"
+        ),
+        other => panic!("a missing index must be a storage error, got {other:?}"),
+    }
+    assert_eq!(raw_version(&index_path), 12);
 }

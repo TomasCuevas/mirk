@@ -17,6 +17,8 @@
 //! | `folders` | Directories the user nominated as the source of truth, plus whether the watcher is enabled. |
 //! | `settings` | A small key/value store for choices the interface and the desktop process share; the first is the interface language, which the tray follows (R1). |
 //! | `suggestions` | Documents discovered outside watched folders, awaiting the user's accept-or-discard decision. |
+//! | `reading_sessions` | One row per reading session in `mirk`'s own reader: document, start, end, and the visible-and-focused milliseconds actually spent reading. |
+//! | `page_visits` | One row per page that was actually on screen in the reader: the session it happened in, when it was observed, and how long it stayed there. |
 //!
 //! # The two decisions worth preserving
 //!
@@ -43,6 +45,33 @@
 //! without a path. The numeric ids are stored as decimal TEXT so the full `u64` range survives
 //! SQLite's signed 64-bit `INTEGER`.
 //!
+//! # Reading facts are first-party, and durations are given rather than computed
+//!
+//! `reading_sessions` and `page_visits` are the two facts only `mirk`'s own reader can honestly
+//! produce (F1 part 1). `open_events` already records that *some* viewer had a document open; it
+//! cannot say whether anybody read, and `mirk` cannot vouch for time it did not observe (D3), so no
+//! external-viewer session is stored here.
+//!
+//! **The schema measures nothing and this build records nothing yet.** `active_ms` and `visible_ms`
+//! are durations the reader will hand over already measured under the owner's rule (L4): only
+//! visible-and-focused time counts, paused after 20 minutes without interaction. The tables exist as
+//! the home for those facts; recording and capture are deliberately absent from this build, so no
+//! reading fact is written anywhere and none of the timing rules above is implemented.
+//!
+//! **A page visit keeps its own moment and its session.** `observed_at` is when the page was on
+//! screen and `session_id` is the session it happened in, so the read order is chronology rather
+//! than insertion order: a writer that flushes visits late cannot make an earlier page look later,
+//! and a visit cannot be attributed to a session of another document.
+//!
+//! **Time is stored, not adjudicated.** `started_at`, `ended_at` and `observed_at` are the reader's
+//! UTC wall-clock readings, stored verbatim. The UTC clock can move — an NTP correction, a manual
+//! change, a suspend and resume — and a write can arrive after the session it belongs to, so the
+//! schema does not require a visit to fall inside its session's span, does not require `ended_at` to
+//! be at or after `started_at`, and claims nothing beyond the recorded values: ordering by
+//! `observed_at` orders by the clock the reader reported, not by a monotonic timeline whose physical
+//! truth is known. What it does require is that every timestamp is non-negative and every measured
+//! duration is non-negative — elapsed reading time is not a wall-clock subtraction.
+//!
 //! # Migrations
 //!
 //! The schema version is recorded inside the database with SQLite's own `PRAGMA user_version`.
@@ -58,6 +87,22 @@
 //! timeout — raised only for that wait — is put back afterwards, so competing opens cannot both apply
 //! a step and a failure leaves the database at the version it was opened with. See `upgrade` for the
 //! rollback and contention consequences of that.
+//!
+//! **A database stamped with the current version is still checked before it is trusted.** Schema 12
+//! was revised in place before it shipped, so a development database can carry an earlier pre-release
+//! shape under the same `user_version` stamp. Opening a current database therefore compares the
+//! stored definition of the reading tables and their indexes with the statements this build writes,
+//! and refuses a database whose shape differs before any reading fact is read or written. The
+//! comparison is byte-exact on purpose (see `verify_reading_tables`): a semantically equivalent but
+//! differently formatted definition is refused rather than accepted on a guess. An older database
+//! that already holds an object the V12 step would create is likewise refused before any step runs,
+//! so a collision cannot leave it partially upgraded.
+//!
+//! **Refusal is not repair.** A database whose reading tables are not this build's shape is left
+//! exactly as it was — no table, no row and not the version stamp changes — because the session and
+//! time facts a missing column would hold cannot be recovered by guessing. The same refusal names the
+//! database, the version, and the objects or columns that differ, so the reader can tell which build
+//! wrote it instead of reading a storage error that blames the disk.
 //!
 //! # Where the database lives
 //!
@@ -86,6 +131,12 @@
 //! - metadata writes (`size`, `mtime`, `discovered_via`, `platform`, `status`) — the
 //!   [`mirk_core::Document`] value type does not carry them yet, so [`Store::upsert_document`]
 //!   leaves those columns unset for the scanner (T6) to fill;
+//! - reading facts: the `reading_sessions` and `page_visits` schema and its compatibility guard are
+//!   present, but nothing writes or reads a session or a visit yet. Capture arrives with the reader
+//!   that observes it, and with it the `source`, `viewer_id` and `ended_reason` columns the roadmap
+//!   sketched: 0.2.0 stores only first-party reader sessions, so a `source` column could hold one
+//!   constant, `viewer_id` would presume the still-open answer to D3, and an `ended_reason`
+//!   vocabulary has no owner decision behind it yet;
 //! - path normalisation: paths are stored as opaque UTF-8 and are **never** Unicode-normalised
 //!   (risk R7), so `path_normalized` deliberately holds the same bytes as `path`.
 
@@ -468,6 +519,141 @@ const SCHEMA_V11: &str = "
 ALTER TABLE suggestions ADD COLUMN history_at INTEGER;
 ";
 
+/// Version 12: the two facts the first-party reader is the only honest source of (F1 part 1).
+///
+/// `reading_sessions` is a fact about **reading**, not about a process: `open_events` already records
+/// that a viewer had a document open, and it cannot say whether anybody read. `page_visits` is the
+/// per-document depth the roadmap asks for — which pages were actually on screen, when, and for how
+/// long — keyed by document and naming the session it happened in, because two visits to one page are
+/// two facts and a visit without its session has no provenance.
+///
+/// **Durations are stored, never derived.** `active_ms` is the visible-and-focused time the reader
+/// will measure (L4: paused after 20 minutes without interaction), so it is deliberately smaller
+/// than the `started_at`/`ended_at` span when the session idles; nothing here compares the two.
+/// `CHECK` constraints keep the values a fact at the schema level as well as at the interface, the
+/// same discipline `progress` and `document_authors` already follow: an impossible duration is
+/// refused by the database even to a writer that bypassed [`Store`].
+///
+/// **The wall clock is recorded, not trusted to be monotonic.** `started_at` and `ended_at` are the
+/// reader's UTC readings, and the clock can be corrected backwards between them — an NTP correction,
+/// a manual change, a suspend and resume. Elapsed reading time is not `ended_at - started_at`, so no
+/// ordering constraint relates the two: what is required is that each is a non-negative timestamp and
+/// that the separately measured `active_ms` is non-negative. A schema that demanded
+/// `ended_at >= started_at` would reject an honest session and lose a fact that cannot be recorded
+/// again.
+///
+/// **The schema enforces exactly what a typed read expects.** Every integer column carries a
+/// `typeof(...) = 'integer'` check, because an INTEGER column otherwise stores text or a real and a
+/// typed read would then fail on a row the schema had already accepted. Timestamps and durations are
+/// non-negative, `page` is bounded to a `u32`, and a visit names its session through a composite key
+/// `(session_id, doc_id)`, so it cannot be attributed to a session of another document even by a
+/// writer that bypassed [`Store`].
+///
+/// **`ON DELETE CASCADE` is the deletion rule.** A document that leaves the library — the reader
+/// removed its watch, and [`Store::forget_folder`] deleted the row — must not leave reading time
+/// behind that nothing can attribute, exactly as its `progress` and `open_events` already go with
+/// it. A session that goes takes the visits it attributes with it, through the same composite key.
+///
+/// Added as a migration rather than by editing [`SCHEMA_V1`], because V1 is **frozen**: a database an
+/// earlier build already created reports its version, and editing the frozen text would leave that
+/// database without these tables forever while claiming otherwise. The step only creates homes for
+/// facts; it invents none, so every existing row is untouched.
+///
+/// **Plain `CREATE TABLE`, deliberately, not `IF NOT EXISTS`.** A table that is already there under
+/// one of these names is not this schema's table: this step has never run against it, so the shape is
+/// unknown and could be missing the columns and constraints every read depends on. Skipping it would
+/// create the rest, stamp 12, and leave a database that claims a schema it does not have — the exact
+/// lie [`Store::open`]'s refusal of a newer version exists to prevent. The whole upgrade is one
+/// transaction, so refusing here takes back the tables it already created and leaves the recorded
+/// version where it was, where the next open retries.
+///
+/// **The tables are compared on open.** This version was revised in place before it shipped, so a
+/// development database can carry an earlier pre-release shape under the same version stamp.
+/// [`verify_reading_tables`] therefore compares the stored definition of both tables with the
+/// statements below, which is why each table is its own constant: the text the migration executes
+/// and the text the check expects cannot drift apart.
+const SCHEMA_V12_READING_SESSIONS: &str = "CREATE TABLE reading_sessions (
+    id         INTEGER PRIMARY KEY,
+    doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    started_at INTEGER NOT NULL,
+    ended_at   INTEGER NOT NULL,
+    active_ms  INTEGER NOT NULL,
+    -- The parent key of `page_visits`' composite foreign key: a visit and its session must name
+    -- the same document, and SQLite can only enforce that against a unique parent key.
+    UNIQUE (id, doc_id),
+    -- The storage class is part of the fact: an INTEGER column otherwise accepts text and reals,
+    -- and a typed read would then fail on a row the schema had already accepted.
+    CHECK (typeof(doc_id) = 'integer'),
+    CHECK (typeof(started_at) = 'integer'),
+    CHECK (typeof(ended_at) = 'integer'),
+    CHECK (typeof(active_ms) = 'integer'),
+    CHECK (started_at >= 0),
+    CHECK (ended_at >= 0),
+    CHECK (active_ms >= 0)
+)";
+
+/// The index a document's sessions are read through, newest start last.
+const SCHEMA_V12_READING_SESSIONS_INDEX: &str =
+    "CREATE INDEX idx_reading_sessions_doc ON reading_sessions (doc_id, started_at)";
+
+/// The statement that creates `page_visits` (F1 part 1).
+const SCHEMA_V12_PAGE_VISITS: &str = "CREATE TABLE page_visits (
+    id          INTEGER PRIMARY KEY,
+    doc_id      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    session_id  INTEGER NOT NULL,
+    page        INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL,
+    visible_ms  INTEGER NOT NULL,
+    -- A visit's session must belong to the same document. One composite key instead of two loose
+    -- references, so a raw writer cannot attribute reading time to another document's session.
+    FOREIGN KEY (session_id, doc_id) REFERENCES reading_sessions(id, doc_id) ON DELETE CASCADE,
+    CHECK (typeof(doc_id) = 'integer'),
+    CHECK (typeof(session_id) = 'integer'),
+    CHECK (typeof(page) = 'integer'),
+    CHECK (typeof(observed_at) = 'integer'),
+    CHECK (typeof(visible_ms) = 'integer'),
+    -- `u32`: a page outside this range is one a typed read cannot represent.
+    CHECK (page BETWEEN 0 AND 4294967295),
+    CHECK (observed_at >= 0),
+    CHECK (visible_ms >= 0)
+)";
+
+/// The index a document's visits are read through, in observation order.
+const SCHEMA_V12_PAGE_VISITS_DOC_INDEX: &str =
+    "CREATE INDEX idx_page_visits_doc ON page_visits (doc_id, observed_at)";
+
+/// The index that makes deleting a session and its visits cheap.
+const SCHEMA_V12_PAGE_VISITS_SESSION_INDEX: &str =
+    "CREATE INDEX idx_page_visits_session ON page_visits (session_id, observed_at)";
+
+/// The indexes V12 creates, with the statement this build writes for each.
+///
+/// Kept as their own list because both the collision preflight and [`verify_reading_tables`] need
+/// them by name, and neither should be able to drift away from what the step executes.
+const READING_INDEXES: [(&str, &str); 3] = [
+    (
+        "idx_reading_sessions_doc",
+        SCHEMA_V12_READING_SESSIONS_INDEX,
+    ),
+    ("idx_page_visits_doc", SCHEMA_V12_PAGE_VISITS_DOC_INDEX),
+    (
+        "idx_page_visits_session",
+        SCHEMA_V12_PAGE_VISITS_SESSION_INDEX,
+    ),
+];
+
+/// Version 12's whole step, statement by statement, in the order it is applied.
+///
+/// The two `CREATE TABLE` statements are the ones [`verify_reading_tables`] compares a database
+/// against, so a change to either of them is a change to what this build accepts on open.
+const SCHEMA_V12: [&str; 5] = [
+    SCHEMA_V12_READING_SESSIONS,
+    SCHEMA_V12_READING_SESSIONS_INDEX,
+    SCHEMA_V12_PAGE_VISITS,
+    SCHEMA_V12_PAGE_VISITS_DOC_INDEX,
+    SCHEMA_V12_PAGE_VISITS_SESSION_INDEX,
+];
+
 /// A document `mirk` observed open outside the watched folders, awaiting the reader's decision (R4).
 ///
 /// A suggestion is **not** library data: it carries a path and no document foreign key, so a
@@ -774,7 +960,7 @@ pub fn covering_folder<'a>(folders: &'a [WatchedFolder], path: &Path) -> Option<
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 11;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 12;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -789,7 +975,7 @@ impl Store {
         }
 
         let mut connection = Connection::open(path).map_err(storage_error)?;
-        Self::prepare(&mut connection)?;
+        Self::prepare(&mut connection, Some(path))?;
         Ok(Self { connection })
     }
 
@@ -797,17 +983,22 @@ impl Store {
     /// throwaway store; the production path is [`Self::open`].
     pub fn open_in_memory() -> Result<Self, MirkError> {
         let mut connection = Connection::open_in_memory().map_err(storage_error)?;
-        Self::prepare(&mut connection)?;
+        Self::prepare(&mut connection, None)?;
         Ok(Self { connection })
     }
 
-    fn prepare(connection: &mut Connection) -> Result<(), MirkError> {
+    /// Prepares `connection` for use, with `origin` naming it in the refusals below.
+    ///
+    /// `origin` is the file the database lives in when there is one, so a refusal can say *which*
+    /// database it is about instead of pointing at an anonymous connection. An in-memory database has
+    /// no path and reads as "this database".
+    fn prepare(connection: &mut Connection, origin: Option<&Path>) -> Result<(), MirkError> {
         // Foreign keys are off by default in SQLite and are per-connection, so they are enabled
         // here rather than assumed.
         connection
             .pragma_update(None, "foreign_keys", true)
             .map_err(storage_error)?;
-        migrate(connection)
+        migrate(connection, origin)
     }
 
     /// The schema version currently recorded in the database.
@@ -2345,17 +2536,22 @@ fn refuse_newer_version(version: u32) -> Result<(), MirkError> {
 /// Brings `connection` to [`Store::CURRENT_SCHEMA_VERSION`], forward-only.
 ///
 /// **Opening a current database takes no write reservation.** The version is read once and, when it
-/// is already the version this build writes, the open returns without beginning a write transaction:
-/// another process may be writing the same file, and this open neither queues behind that writer nor
-/// stops it. It is still a read, so a lock that excludes readers — an exclusive lock, a writer in the
-/// middle of a commit — blocks it until this connection's own busy timeout runs out, exactly as it
-/// would block any other read. The same read is what refuses a database written by a newer build, so
-/// that refusal takes no write either.
+/// is already the version this build writes, the open is validated inside one consistent read
+/// snapshot (a deferred transaction takes no write reservation) and returns: another process may be
+/// writing the same file, and this open neither queues behind that writer nor stops it. It is still a
+/// read, so a lock that excludes readers — an exclusive lock, a writer in the middle of a commit —
+/// blocks it until this connection's own busy timeout runs out, exactly as it would block any other
+/// read. The same read is what refuses a database written by a newer build, so that refusal takes no
+/// write either.
+///
+/// **A current database is checked, not assumed.** Schema 12 was revised in place before it shipped,
+/// so its version stamp alone cannot say which shape wrote a database. [`verify_reading_tables`] runs
+/// inside the read snapshot above, before any reading fact can be read or written.
 ///
 /// **Upgrading is one serialized write** ([`upgrade`]): the connection's own busy timeout is raised
 /// while the write lock is taken and put back afterwards, the version is re-read under the lock, and
 /// every missing step is applied in the same transaction.
-fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
+fn migrate(connection: &mut Connection, origin: Option<&Path>) -> Result<(), MirkError> {
     let version = read_schema_version(connection)?;
     // Test builds only: the counter the migration tests watch to force their interleaving. It is
     // compiled out of every build that ships, so no caller can observe it.
@@ -2363,9 +2559,14 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
     observations::note_version_read(connection.path());
     refuse_newer_version(version)?;
     if version == Store::CURRENT_SCHEMA_VERSION {
+        let snapshot = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(storage_error)?;
+        verify_reading_tables(&snapshot, origin)?;
+        snapshot.commit().map_err(storage_error)?;
         return Ok(());
     }
-    upgrade(connection)
+    upgrade(connection, origin)
 }
 
 /// Applies every missing migration step, serialized against competing writers.
@@ -2392,13 +2593,13 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
 /// **What it does not change is how the store contends for the database.** The longer wait belongs to
 /// this function and to nothing else: the connection's own busy timeout is read before it is raised and
 /// restored on every path, so a store that was upgraded locks exactly like one that was already current.
-fn upgrade(connection: &mut Connection) -> Result<(), MirkError> {
+fn upgrade(connection: &mut Connection, origin: Option<&Path>) -> Result<(), MirkError> {
     // Whatever this connection was opened with is what it must still have afterwards, on every path.
     let previous = current_busy_timeout(connection)?;
     connection
         .busy_timeout(previous.max(MIGRATION_LOCK_WAIT))
         .map_err(storage_error)?;
-    let outcome = upgrade_locked(connection);
+    let outcome = upgrade_locked(connection, origin);
     // Back to the value this connection already had, so a store that was upgraded contends exactly
     // like one that was not when restoration succeeds. If both operations fail, report the upgrade
     // error; the restoration error is not returned and the original timeout may not have been restored.
@@ -2406,9 +2607,9 @@ fn upgrade(connection: &mut Connection) -> Result<(), MirkError> {
     outcome.and(restored)
 }
 
-/// The upgrade itself, in one immediate transaction: the version check under the write lock, every
-/// missing step, and the stamp.
-fn upgrade_locked(connection: &mut Connection) -> Result<(), MirkError> {
+/// The upgrade itself, in one immediate transaction: the collision check and the version check under
+/// the write lock, every missing step, the final definition check, and the stamp.
+fn upgrade_locked(connection: &mut Connection, origin: Option<&Path>) -> Result<(), MirkError> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage_error)?;
@@ -2418,10 +2619,17 @@ fn upgrade_locked(connection: &mut Connection) -> Result<(), MirkError> {
     let version = read_schema_version(&transaction)?;
     refuse_newer_version(version)?;
     if version == Store::CURRENT_SCHEMA_VERSION {
-        // A competing writer finished the upgrade while this open waited for the lock. Dropping the
-        // transaction rolls back a transaction that wrote nothing.
+        // A competing writer finished the upgrade while this open waited for the lock. Its output is
+        // still checked, exactly as a database opened directly at this version would be: a writer
+        // that stamped the version without writing this build's tables must not be trusted. Dropping
+        // the transaction rolls back a transaction that wrote nothing.
+        verify_reading_tables(&transaction, origin)?;
         return Ok(());
     }
+
+    // A table or index the last step would create must not already exist. The check runs before any
+    // step, inside the same transaction, so a collision cannot leave the database partially upgraded.
+    preflight_v12_collisions(&transaction, origin)?;
 
     // One step per version, applied in order to a database known to be at `version`. Every statement
     // runs on `transaction`, so a failure anywhere undoes the whole upgrade and the recorded version
@@ -2515,6 +2723,21 @@ fn upgrade_locked(connection: &mut Connection) -> Result<(), MirkError> {
         }
     }
 
+    if version < 12 {
+        // The step only creates the two tables and their indexes; it rewrites no existing row, so a
+        // library that upgrades keeps every document, position and suggestion exactly as it was. A
+        // failure here takes the whole upgrade back with the caller's transaction.
+        for statement in SCHEMA_V12 {
+            transaction
+                .execute_batch(statement)
+                .map_err(storage_error)?;
+        }
+    }
+
+    // The step's own output is checked before the version stamp claims it: a database this build
+    // would refuse to reopen must not be stamped as if it were current.
+    verify_reading_tables(&transaction, origin)?;
+
     // One stamp for the whole upgrade, written in the same transaction as the work it describes.
     transaction
         .pragma_update(
@@ -2525,6 +2748,332 @@ fn upgrade_locked(connection: &mut Connection) -> Result<(), MirkError> {
         .map_err(storage_error)?;
     transaction.commit().map_err(storage_error)?;
     Ok(())
+}
+
+/// Refuses a database older than the current version that already holds an object the V12 step
+/// would create, before this connection runs any migration step.
+///
+/// The V12 step uses plain `CREATE TABLE`, so a collision there would fail only after the earlier
+/// steps had already run, leaving the database partially upgraded at an intermediate version. Asking
+/// first keeps the database exactly where it was: the recorded version, every table and every row are
+/// untouched, and the next open can retry once the obstacle is gone. A genuine older database holds
+/// none of these names — they did not exist before V12 — so this never refuses an upgrade that has
+/// any chance of succeeding.
+///
+/// Names are looked up across every object type and **case-insensitively**, as SQLite itself resolves
+/// them: a table called `READING_SESSIONS` is the name `CREATE TABLE reading_sessions` collides with,
+/// and a view or trigger that happens to take one of the names would stop the step just as surely.
+/// The refusal names the object with the spelling the database stores.
+///
+/// **This check is atomic with the upgrade.** The version is re-read and this check, every migration
+/// step and the final definition check run inside one `BEGIN IMMEDIATE` transaction, so a competing
+/// writer cannot commit a colliding object between the check and the V12 step: writers are serialized
+/// for the whole upgrade. Readers are unaffected — they see the database as it was before the
+/// transaction — and a writer that arrives while the upgrade is in progress waits for SQLite's busy
+/// timeout and then fails with a storage error instead of interleaving. A current database never
+/// reaches this path: it is validated in a read snapshot that takes no write reservation.
+fn preflight_v12_collisions(
+    connection: &Connection,
+    origin: Option<&Path>,
+) -> Result<(), MirkError> {
+    let version = read_schema_version(connection)?;
+    if version >= Store::CURRENT_SCHEMA_VERSION {
+        return Ok(());
+    }
+
+    for name in v12_object_names() {
+        let existing: Option<(String, String)> = connection
+            .query_row(
+                "SELECT type, name FROM sqlite_master WHERE name = ?1 COLLATE NOCASE LIMIT 1",
+                params![name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        if let Some((kind, stored_name)) = existing {
+            // The refusal names the object as the database stores it, not as this build would write
+            // it: `READING_SESSIONS` and `reading_sessions` are the same name to SQLite, and a reader
+            // told about the wrong spelling would look for an object that is not there.
+            return Err(incompatible_older_schema(
+                origin,
+                version,
+                &kind,
+                &stored_name,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every schema object the V12 step creates, by name.
+///
+/// Derived from the same constants the step executes, so a name cannot be added to one list and
+/// forgotten in the other.
+fn v12_object_names() -> Vec<&'static str> {
+    READING_TABLES
+        .iter()
+        .map(|(name, _, _)| *name)
+        .chain(READING_INDEXES.iter().map(|(name, _)| *name))
+        .collect()
+}
+
+/// The refusal a pre-existing V12 object earns on an older database.
+fn incompatible_older_schema(
+    origin: Option<&Path>,
+    version: u32,
+    kind: &str,
+    name: &str,
+) -> MirkError {
+    let database = match origin {
+        Some(path) => format!("the database at `{}`", path.display()),
+        None => "this database".to_string(),
+    };
+    MirkError::Storage(format!(
+        "{database} reports schema version {version} but already holds {kind} `{name}`, which the \
+         upgrade to schema version {current} would create. The upgrade was refused before any step \
+         ran, so the database's committed contents are exactly as they were — no table, no row and \
+         not the version stamp changed — and this build will not repair, rewrite, move or delete it. \
+         Open it with the build that wrote it.",
+        current = Store::CURRENT_SCHEMA_VERSION
+    ))
+}
+
+/// The reading tables V12 owns: the statement this build writes for each, and the columns that
+/// statement declares, in declaration order.
+///
+/// The column list is what lets a refusal name the fact an earlier shape is missing. A drift between
+/// it and the statement cannot go unnoticed: it would make this build refuse the tables it just
+/// created, which every fresh-database test would fail on immediately.
+const READING_TABLES: [(&str, &str, &[&str]); 2] = [
+    (
+        "reading_sessions",
+        SCHEMA_V12_READING_SESSIONS,
+        &["id", "doc_id", "started_at", "ended_at", "active_ms"],
+    ),
+    (
+        "page_visits",
+        SCHEMA_V12_PAGE_VISITS,
+        &[
+            "id",
+            "doc_id",
+            "session_id",
+            "page",
+            "observed_at",
+            "visible_ms",
+        ],
+    ),
+];
+
+/// Refuses a database that claims schema 12 but holds reading tables this build did not write.
+///
+/// Schema 12 was revised in place before it shipped, so a development database can carry an earlier
+/// pre-release shape under the same stamp: `page_visits` without `session_id`/`observed_at`, or the
+/// same columns without the storage-class checks, the timestamp bounds, the `u32` page bound and the
+/// same-document key. `PRAGMA user_version` cannot tell those apart from this build's shape, so the
+/// tables' own stored definitions are compared with the statements the migration executes.
+///
+/// A mismatch fails the open **before any reading fact is read or written**, and changes nothing in
+/// the database's committed contents: no table, no row, and not the version stamp. There is
+/// deliberately no repair. Rebuilding the tables would have to invent the session and time facts of
+/// every existing visit, and a fabricated provenance is exactly the lie this crate exists to prevent.
+///
+/// The comparison is **exact**: a database is accepted only if its reading tables and indexes carry
+/// the bytes this build's statements write. SQLite stores the statement text verbatim, so the
+/// migration's own output matches by construction; the only thing dropped is the statement terminator,
+/// which SQLite does not store. A semantically equivalent definition that is formatted differently —
+/// keyword case, spacing, comments, a quoted identifier, a reordered constraint — is **refused**. That
+/// is deliberate: SQLite's tokenizer is not Rust's (U+00A0 is whitespace to Rust but an identifier
+/// character to SQLite), so a comparison that ignored formatting could accept a definition it cannot
+/// prove equivalent. The cost is that a harmless reformat is refused; the benefit is that only the
+/// bytes this build wrote are trusted.
+///
+/// The three indexes the step creates are part of that shape: each must be present and identical, and
+/// any other index or trigger attached to a reading table is refused. A unique index is a correctness
+/// constraint — it can reject a fact this build records — and a trigger can rewrite or delete one, so
+/// neither is treated as a harmless addition.
+///
+/// What this does **not** verify is the rest of the database: triggers on other tables that might
+/// reach these rows, views, and a file whose schema was edited through `PRAGMA writable_schema`. That
+/// is the explicit trust boundary — the gate checks the reading facts' own objects, not the whole file
+/// — and it is the same trust this crate already places in the V1–V11 schema. The check runs inside
+/// the transaction the open already uses — the read snapshot for a current database, the immediate
+/// upgrade transaction when one is needed — so it cannot race a competing writer during the open;
+/// once the open has finished, a writer could still change the schema, and this build does not claim
+/// to police the file afterwards.
+fn verify_reading_tables(connection: &Connection, origin: Option<&Path>) -> Result<(), MirkError> {
+    // Every difference is collected before refusing, so the error names the whole gap rather than
+    // whichever table happened to be checked first.
+    let mut differences: Vec<String> = Vec::new();
+    for (table, expected_statement, expected_columns) in READING_TABLES {
+        let stored: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1 COLLATE NOCASE",
+                params![table],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+
+        let Some(stored) = stored else {
+            differences.push(format!("the table `{table}` is missing"));
+            continue;
+        };
+        if stored_definition_matches(&stored, expected_statement) {
+            continue;
+        }
+
+        let actual_columns = table_columns(connection, table)?;
+        let missing: Vec<&str> = expected_columns
+            .iter()
+            .copied()
+            .filter(|column| !actual_columns.iter().any(|actual| actual == column))
+            .collect();
+        if missing.is_empty() {
+            differences.push(format!(
+                "the definition of `{table}` differs from the one this build writes"
+            ));
+        } else {
+            differences.push(format!(
+                "the table `{table}` is missing the column(s) {}",
+                quoted_list(&missing)
+            ));
+        }
+    }
+
+    for (index, expected_statement) in READING_INDEXES {
+        let stored: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1 COLLATE NOCASE",
+                params![index],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        match stored {
+            None => differences.push(format!("the index `{index}` is missing")),
+            Some(stored) if !stored_definition_matches(&stored, expected_statement) => {
+                differences.push(format!(
+                    "the index `{index}` is not the one this build writes"
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+
+    // Any other index or trigger attached to a reading table is an object this build did not create
+    // and cannot vouch for. An autoindex belongs to the table's own definition, which was compared
+    // above, so it is not a separate object here.
+    let mut statement = connection
+        .prepare(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master \
+             WHERE type IN ('index', 'trigger') \
+             ORDER BY type, name",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(storage_error)?;
+    for row in rows {
+        let (kind, name, table, sql) = row.map_err(storage_error)?;
+        // Only SQLite's own autoindexes are not separate objects: they carry no SQL and the exact
+        // reserved prefix. A `LIKE` pattern would be wrong here — `_` is a wildcard, so it would also
+        // exempt an object named `sqliteXautoindexY...`, which this build did not create.
+        let is_autoindex = kind == "index"
+            && sql.is_none()
+            && name.to_ascii_lowercase().starts_with("sqlite_autoindex_");
+        if is_autoindex {
+            continue;
+        }
+        if !READING_TABLES
+            .iter()
+            .any(|(expected, _, _)| expected.eq_ignore_ascii_case(&table))
+        {
+            continue;
+        }
+        // Object names are case-insensitive in SQLite, so an index written with different case is the
+        // same index.
+        let expected_index = kind == "index"
+            && READING_INDEXES
+                .iter()
+                .any(|(expected, _)| expected.eq_ignore_ascii_case(&name));
+        if !expected_index {
+            differences.push(format!(
+                "the unexpected {kind} `{name}` is attached to a reading table"
+            ));
+        }
+    }
+
+    if differences.is_empty() {
+        return Ok(());
+    }
+    Err(incompatible_reading_schema(origin, differences.join("; ")))
+}
+
+/// The refusal an earlier schema 12 earns, worded so it can be acted on without guessing.
+fn incompatible_reading_schema(origin: Option<&Path>, detail: String) -> MirkError {
+    let database = match origin {
+        Some(path) => format!("the database at `{}`", path.display()),
+        None => "this database".to_string(),
+    };
+    MirkError::Storage(format!(
+        "{database} reports schema version {version} but its reading facts are not the shape this \
+         build wrote: {detail}. Schema version {version} was revised before it shipped, so this is \
+         most likely a development database written by an earlier pre-release build. The database's \
+         committed contents are exactly as they were — no table, no row, not the version stamp \
+         changed — and this build will not repair, rewrite, move or delete it, because the missing \
+         session and time facts cannot be recovered by guessing. Open it with the build that wrote it.",
+        version = Store::CURRENT_SCHEMA_VERSION
+    ))
+}
+
+/// Whether a database's stored definition is exactly the one this build writes.
+///
+/// SQLite stores the text of the `CREATE` statement it executed, so a table this build created
+/// carries the bytes of the constant the migration ran — spacing, comments, keyword case, quoted text
+/// and all. The guard's tests pin that all five definitions come back byte-identical; the only
+/// transformation applied here is dropping the statement terminator, which SQLite does not store and
+/// this build's statements do not carry.
+///
+/// Everything else must match exactly. A definition that is semantically equivalent but formatted
+/// differently is **refused**: SQLite's tokenizer is not Rust's — U+00A0 is whitespace to Rust but an
+/// identifier character to SQLite, so `INTEGER\u{A0}NOT NULL` is a different column — and any
+/// normalization rule would be a guess this build cannot prove safe. Refusing is the conservative
+/// direction; the cost is that a harmless reformat is refused too, and only the bytes this build wrote
+/// are trusted.
+fn stored_definition_matches(stored: &str, canonical: &str) -> bool {
+    stored == canonical.strip_suffix(';').unwrap_or(canonical)
+}
+
+/// The column names of one table, in declaration order.
+fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, MirkError> {
+    let mut statement = connection
+        .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(storage_error)?;
+
+    let mut columns = Vec::new();
+    for row in rows {
+        columns.push(row.map_err(storage_error)?);
+    }
+    Ok(columns)
+}
+
+/// A backticked, comma-separated list, for naming several columns in one sentence.
+fn quoted_list(values: &[&str]) -> String {
+    values
+        .iter()
+        .map(|value| format!("`{value}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Moves every non-blank `documents.user_author` into a one-entry `document_authors` row (R42/S1).
@@ -3807,7 +4356,7 @@ mod tests {
             .busy_timeout(Duration::from_millis(1234))
             .expect("set a timeout that is neither zero nor the driver's default");
 
-        upgrade(&mut connection).expect("the upgrade must succeed");
+        upgrade(&mut connection, None).expect("the upgrade must succeed");
 
         assert_eq!(
             busy_timeout_millis(&connection),
@@ -3832,7 +4381,8 @@ mod tests {
             .busy_timeout(Duration::from_millis(1234))
             .expect("set a timeout that is neither zero nor the driver's default");
 
-        let error = upgrade(&mut connection).expect_err("the upgrade must fail on the collision");
+        let error =
+            upgrade(&mut connection, None).expect_err("the upgrade must fail on the collision");
         assert!(
             matches!(error, MirkError::Storage(_)),
             "the failure must reach the caller as a storage error, got {error:?}"
@@ -3856,7 +4406,7 @@ mod tests {
             .busy_timeout(Duration::from_millis(1234))
             .expect("set a timeout that is neither zero nor the driver's default");
 
-        upgrade(&mut connection).expect("an upgrade with nothing to do succeeds");
+        upgrade(&mut connection, None).expect("an upgrade with nothing to do succeeds");
 
         assert_eq!(
             busy_timeout_millis(&connection),
@@ -4004,5 +4554,503 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM open_events", [], |row| row.get(0))
             .expect("count the open events");
         assert_eq!(events, 0, "an open event cannot outlive its document");
+    }
+
+    // --- A genuine version 11 database, built from the frozen statements ------------------------
+
+    /// Builds a database exactly as version 11 left it, from the **frozen** V1–V11 statements the
+    /// migrations execute — not by building the current shape and rewinding the stamp, which would
+    /// only prove that this build can open its own output.
+    ///
+    /// Every step is applied as the migration applies it, including the V9 backfill that moves the
+    /// reader's `user_author` into `authors`/`document_authors` and the V10 cover-source backfill. The
+    /// fixture therefore carries representative existing data: a watched folder, a document with its
+    /// own and the reader's title and author, a position with provenance and reading time, an
+    /// undecided suggestion with its history time, and the interface language.
+    ///
+    /// `pre_existing` — when given — is created after V11, as the incompatible object the V12 step
+    /// would meet.
+    fn a_genuine_version_11_database(pre_existing: Option<&str>) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("mirk.sqlite3");
+        let connection = Connection::open(&path).expect("open raw");
+        for schema in [
+            SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
+        ] {
+            connection
+                .execute_batch(schema)
+                .expect("apply a schema a version 11 database has");
+        }
+        connection
+            .execute(
+                "INSERT INTO folders (path, recursive, enabled, added_at) VALUES (?1, 1, 1, 7)",
+                params!["/library/watched"],
+            )
+            .expect("record a folder the way version 8 did");
+        connection
+            .execute(
+                "INSERT INTO documents \
+                 (path, path_normalized, uri, title, author, pages, first_seen_at, user_title, user_author) \
+                 VALUES (?1, ?1, ?2, ?3, ?4, 80, 9, ?5, ?6)",
+                params![
+                    "/library/watched/read.pdf",
+                    "file:///library/watched/read.pdf",
+                    "The document's own title",
+                    "Sagan, Carl; Druyan, Ann",
+                    "The reader's title",
+                    "Carl Sagan"
+                ],
+            )
+            .expect("record a document the way version 8 did");
+
+        // V9 exactly as the migration applies it: the tables, the backfill that moves the reader's
+        // author into them, and the retirement of the column it came from.
+        let transaction = connection
+            .unchecked_transaction()
+            .expect("open the V9 unit");
+        transaction
+            .execute_batch(SCHEMA_V9)
+            .expect("apply the V9 schema");
+        backfill_reader_authors(&transaction).expect("run the V9 backfill");
+        transaction
+            .execute_batch(SCHEMA_V9_RETIRE_USER_AUTHOR)
+            .expect("retire the column V9 replaces");
+        transaction.commit().expect("commit the V9 unit");
+
+        // V10 and V11, as the migration applies them.
+        connection
+            .execute_batch(SCHEMA_V10_ADD)
+            .expect("add the V10 column");
+        connection
+            .execute_batch(SCHEMA_V10_BACKFILL)
+            .expect("run the V10 backfill");
+
+        // A suggestion that exists **before** the V11 step. It has no `history_at` column yet, so the
+        // value this row ends up with is the one `ALTER TABLE ... ADD COLUMN history_at` supplies:
+        // NULL, meaning "no source said when this was seen", not 1970 and not the first sighting.
+        connection
+            .execute(
+                "INSERT INTO suggestions (path, seen_count, first_seen_at, decided_at, decision) \
+                 VALUES (?1, 2, 1650000000, NULL, NULL)",
+                params!["/elsewhere/pending.pdf"],
+            )
+            .expect("record a suggestion the way version 10 did");
+        connection
+            .execute_batch(SCHEMA_V11)
+            .expect("add the V11 column");
+
+        // The rest of the library a version 11 reader already had, including a suggestion recorded
+        // after V11 with the history time the desktop knows.
+        connection
+            .execute(
+                "INSERT INTO progress (doc_id, page, total, source, confidence, read_at, updated_at) \
+                 VALUES (1, 12, 80, ?1, ?2, 1600000000, 99)",
+                params!["native", "exact"],
+            )
+            .expect("record a position the way version 11 did");
+        connection
+            .execute(
+                "INSERT INTO suggestions (path, seen_count, first_seen_at, decided_at, decision, history_at) \
+                 VALUES (?1, 3, 1700000000, NULL, NULL, 1600000000)",
+                params!["/elsewhere/suggested.pdf"],
+            )
+            .expect("record a suggestion the way version 11 did");
+        connection
+            .execute(
+                "INSERT INTO settings (key, value) VALUES ('language', 'es')",
+                [],
+            )
+            .expect("record a setting the way version 11 did");
+
+        if let Some(statement) = pre_existing {
+            connection
+                .execute_batch(statement)
+                .expect("create the incompatible object the step will meet");
+        }
+        connection
+            .pragma_update(None, "user_version", 11i64)
+            .expect("stamp version 11");
+        drop(connection);
+        (dir, path)
+    }
+
+    #[test]
+    fn a_genuine_version_11_database_upgrades_to_12_without_losing_a_row() {
+        // The fixture is a real version 11 database: frozen statements, the real V9 and V10
+        // backfills, and rows a reader already had. The upgrade must add the reading tables and
+        // change nothing else — a row, a column value or a relation.
+        let (_dir, path) = a_genuine_version_11_database(None);
+        {
+            let raw = Connection::open(&path).expect("open raw");
+            assert_eq!(read_schema_version(&raw).expect("version"), 11);
+            assert!(
+                !schema_object_exists(&raw, "table", "reading_sessions")
+                    && !schema_object_exists(&raw, "table", "page_visits"),
+                "a version 11 database cannot already hold the tables V12 adds"
+            );
+            // The suggestion that existed before the V11 step carries the V11 column's default: NULL,
+            // meaning "no source said when this was seen". The fixture records the other suggestion
+            // after V11 precisely so the two states are distinguishable.
+            let pending_history: Option<i64> = raw
+                .query_row(
+                    "SELECT history_at FROM suggestions WHERE path = '/elsewhere/pending.pdf'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("read the pre-V11 suggestion's history time");
+            assert_eq!(
+                pending_history, None,
+                "a suggestion present before the V11 step must get the column default, not a time"
+            );
+        }
+
+        let store = Store::open(&path).expect("a genuine version 11 database migrates");
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+        let tables = store.table_names().expect("table names");
+        for added in ["reading_sessions", "page_visits"] {
+            assert!(
+                tables.iter().any(|name| name == added),
+                "the migration must create `{added}`; found {tables:?}"
+            );
+        }
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM reading_sessions", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("count the sessions"),
+            0,
+            "the migration creates a home for facts, it does not invent any"
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM page_visits", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("count the visits"),
+            0
+        );
+
+        let stored = store
+            .document_by_id(1)
+            .expect("read")
+            .expect("the document is still there");
+        assert_eq!(
+            stored.document.path,
+            PathBuf::from("/library/watched/read.pdf")
+        );
+        assert_eq!(stored.document.pages, Some(80));
+        assert_eq!(
+            stored.document.title.as_deref(),
+            Some("The document's own title")
+        );
+        assert_eq!(
+            stored.document.author.as_deref(),
+            Some("Sagan, Carl; Druyan, Ann")
+        );
+        assert_eq!(
+            stored.document.user_title.as_deref(),
+            Some("The reader's title")
+        );
+        assert_eq!(stored.document.authors, vec!["Carl Sagan".to_string()]);
+
+        let progress = store.progress_for_document(1).expect("read the position");
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0].page, 12);
+        assert_eq!(progress[0].total, Some(80));
+        assert_eq!(progress[0].source, ProgressSource::Native);
+        assert_eq!(progress[0].confidence, Confidence::Exact);
+        assert_eq!(progress[0].read_at, Some(1_600_000_000));
+
+        let suggestion = store.suggestion(1).expect("read").expect("still present");
+        assert_eq!(suggestion.seen_count, 2);
+        assert_eq!(suggestion.first_seen_at, 1_650_000_000);
+        assert_eq!(
+            suggestion.history_at, None,
+            "the V11 default survives the upgrade: no history time was ever recorded"
+        );
+
+        let suggestion = store.suggestion(2).expect("read").expect("still present");
+        assert_eq!(suggestion.seen_count, 3);
+        assert_eq!(suggestion.first_seen_at, 1_700_000_000);
+        assert_eq!(suggestion.history_at, Some(1_600_000_000));
+
+        assert_eq!(store.folders().expect("list folders").len(), 1);
+        assert_eq!(
+            store.get_setting("language").expect("read the setting"),
+            Some("es".to_string())
+        );
+    }
+
+    #[test]
+    fn the_upgraded_genuine_version_11_database_reopens_without_losing_a_row() {
+        // The upgrade's output has to survive the next open: the guard compares the tables again and
+        // the version 11 data must still read back exactly.
+        let (_dir, path) = a_genuine_version_11_database(None);
+        drop(Store::open(&path).expect("migrate the genuine version 11 database"));
+
+        let store = Store::open(&path).expect("the upgraded database reopens");
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+        let stored = store.document_by_id(1).expect("read").expect("row");
+        assert_eq!(
+            stored.document.user_title.as_deref(),
+            Some("The reader's title")
+        );
+        assert_eq!(stored.document.authors, vec!["Carl Sagan".to_string()]);
+        assert_eq!(
+            store
+                .progress_for_document(1)
+                .expect("read the position")
+                .first()
+                .expect("the position is still there")
+                .page,
+            12
+        );
+        assert_eq!(
+            store.suggestion(1).expect("read").expect("row").history_at,
+            None,
+            "the V11 column default survives the upgrade and the reopen"
+        );
+        assert_eq!(
+            store.suggestion(2).expect("read").expect("row").history_at,
+            Some(1_600_000_000),
+            "a history time recorded after V11 survives too"
+        );
+        assert_eq!(
+            store.get_setting("language").expect("read the setting"),
+            Some("es".to_string())
+        );
+    }
+
+    #[test]
+    fn a_pre_existing_reading_sessions_table_stops_the_upgrade_before_any_step_runs() {
+        // A table the upgrade must create already exists with a shape this build cannot use. The
+        // collision is checked before the migration starts, so the database is left exactly at
+        // version 11 with nothing the step would create and nothing rewritten.
+        let (_dir, path) = a_genuine_version_11_database(Some(
+            "CREATE TABLE reading_sessions (id INTEGER PRIMARY KEY, doc_id INTEGER, started_at INTEGER);",
+        ));
+
+        let error = Store::open(&path).expect_err("a collision must stop the upgrade");
+        match &error {
+            MirkError::Storage(message) => {
+                assert!(
+                    message.contains("reading_sessions"),
+                    "the refusal must name the object in the way: {message}"
+                );
+                assert!(
+                    message.contains("version 11") && message.contains("version 12"),
+                    "the refusal must name the version the database is at and the one it would claim: {message}"
+                );
+                assert!(
+                    message.contains(&path.display().to_string()),
+                    "the refusal must name the database it is about: {message}"
+                );
+                assert!(
+                    message.contains("refused before any step ran"),
+                    "the refusal must say nothing was migrated: {message}"
+                );
+            }
+            other => panic!("a collision must be a storage error, got {other:?}"),
+        }
+
+        let raw = Connection::open(&path).expect("open raw");
+        assert_eq!(read_schema_version(&raw).expect("version"), 11);
+        assert!(!schema_object_exists(&raw, "table", "page_visits"));
+        assert_eq!(
+            table_columns(&raw, "reading_sessions").expect("columns"),
+            vec!["id", "doc_id", "started_at"],
+            "the pre-existing table must be untouched"
+        );
+        let (page, read_at): (i64, Option<i64>) = raw
+            .query_row(
+                "SELECT page, read_at FROM progress WHERE doc_id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("the old position must still be there");
+        assert_eq!((page, read_at), (12, Some(1_600_000_000)));
+        let language: String = raw
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'language'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("the old setting must still be there");
+        assert_eq!(language, "es");
+
+        // The fixture — and only the fixture — removes the obstacle it planted. This build offers no
+        // automated repair; the point is that the refusal left a database a later open can migrate
+        // normally, with every version 11 row preserved.
+        raw.execute_batch("DROP TABLE reading_sessions;")
+            .expect("the fixture removes the obstacle it planted");
+        drop(raw);
+
+        let store = Store::open(&path).expect("the retry must migrate successfully");
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+        let tables = store.table_names().expect("table names");
+        for added in ["reading_sessions", "page_visits"] {
+            assert!(
+                tables.iter().any(|name| name == added),
+                "the retry must create `{added}`; found {tables:?}"
+            );
+        }
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM reading_sessions", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("count the sessions"),
+            0
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM page_visits", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("count the visits"),
+            0
+        );
+
+        // The old data is still exactly what the version 11 build recorded.
+        let stored = store
+            .document_by_id(1)
+            .expect("read")
+            .expect("the document survived the refusal and the retry");
+        assert_eq!(stored.document.pages, Some(80));
+        assert_eq!(
+            stored.document.user_title.as_deref(),
+            Some("The reader's title")
+        );
+        assert_eq!(stored.document.authors, vec!["Carl Sagan".to_string()]);
+        let progress = store.progress_for_document(1).expect("read the position");
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0].page, 12);
+        assert_eq!(progress[0].read_at, Some(1_600_000_000));
+        assert_eq!(
+            store.suggestion(1).expect("read").expect("row").history_at,
+            None
+        );
+        assert_eq!(
+            store.suggestion(2).expect("read").expect("row").history_at,
+            Some(1_600_000_000)
+        );
+        assert_eq!(store.folders().expect("list folders").len(), 1);
+        assert_eq!(
+            store.get_setting("language").expect("read the setting"),
+            Some("es".to_string())
+        );
+    }
+
+    #[test]
+    fn a_pre_existing_page_visits_table_stops_the_upgrade_before_reading_sessions_is_created() {
+        // The same promise for the second table, and in the other order: nothing the step creates may
+        // exist after the refusal.
+        let (_dir, path) = a_genuine_version_11_database(Some(
+            "CREATE TABLE page_visits (id INTEGER PRIMARY KEY, note TEXT);",
+        ));
+
+        let error = Store::open(&path).expect_err("a collision must stop the upgrade");
+        match &error {
+            MirkError::Storage(message) => assert!(
+                message.contains("page_visits"),
+                "the refusal must name the object in the way: {message}"
+            ),
+            other => panic!("a collision must be a storage error, got {other:?}"),
+        }
+
+        let raw = Connection::open(&path).expect("open raw");
+        assert_eq!(read_schema_version(&raw).expect("version"), 11);
+        assert!(
+            !schema_object_exists(&raw, "table", "reading_sessions"),
+            "the V12 step must not have created `reading_sessions`"
+        );
+        assert_eq!(
+            table_columns(&raw, "page_visits").expect("columns"),
+            vec!["id", "note"],
+            "the pre-existing table must be untouched"
+        );
+    }
+
+    #[test]
+    fn a_pre_existing_v12_object_named_in_another_case_still_stops_the_upgrade() {
+        // SQLite resolves object names case-insensitively, so a table called `READING_SESSIONS` is
+        // the name the V12 step's `CREATE TABLE reading_sessions` collides with. The preflight must
+        // use the same rule, or the step would run and fail only after earlier steps had committed.
+        let (_dir, path) = a_genuine_version_11_database(Some(
+            "CREATE TABLE READING_SESSIONS (id INTEGER PRIMARY KEY, doc_id INTEGER, started_at INTEGER);",
+        ));
+
+        let error = Store::open(&path).expect_err("a case-variant collision must stop the upgrade");
+        match &error {
+            MirkError::Storage(message) => assert!(
+                message.contains("READING_SESSIONS") && message.contains("version 11"),
+                "the refusal must name the object as stored and the version: {message}"
+            ),
+            other => panic!("a collision must be a storage error, got {other:?}"),
+        }
+        let raw = Connection::open(&path).expect("open raw");
+        assert_eq!(read_schema_version(&raw).expect("version"), 11);
+        assert!(!schema_object_exists(&raw, "table", "page_visits"));
+    }
+
+    #[test]
+    fn a_genuine_v11_upgrade_creates_reading_tables_this_build_reopens() {
+        // The guard must not refuse the migration's own output: a genuine version 11 database is
+        // upgraded, given facts, closed, and opened again — and the facts are still there.
+        let (_dir, path) = a_genuine_version_11_database(None);
+        {
+            let store = Store::open(&path).expect("a version 11 database migrates");
+            assert_eq!(
+                store.schema_version().expect("schema version"),
+                Store::CURRENT_SCHEMA_VERSION
+            );
+            let raw = Connection::open(&path).expect("open raw");
+            raw.execute(
+                "INSERT INTO reading_sessions (id, doc_id, started_at, ended_at, active_ms) \
+                 VALUES (1, 1, 1700000000, 1700000600, 480000)",
+                [],
+            )
+            .expect("record a session");
+            raw.execute(
+                "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+                 VALUES (1, 1, 4, 1700000100, 90000)",
+                [],
+            )
+            .expect("record a visit");
+        }
+
+        let store = Store::open(&path).expect("the upgraded database reopens");
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+        let session: (i64, i64, i64, i64) = store
+            .connection
+            .query_row(
+                "SELECT doc_id, started_at, ended_at, active_ms FROM reading_sessions",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("the session survived the reopen");
+        assert_eq!(session, (1, 1_700_000_000, 1_700_000_600, 480_000));
+        let visit: (i64, i64, i64, i64) = store
+            .connection
+            .query_row(
+                "SELECT session_id, page, observed_at, visible_ms FROM page_visits",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("the visit survived the reopen");
+        assert_eq!(visit, (1, 4, 1_700_000_100, 90_000));
     }
 }
