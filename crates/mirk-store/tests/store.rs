@@ -12,7 +12,8 @@ use mirk_core::{
 };
 use mirk_store::{
     adopt_legacy_data_dir, covering_folder, database_file_in, database_path, user_data_dir_for,
-    AuthorEdit, ReadingSession, Store, StoredReadingSession, SuggestionDecision, WatchedFolder,
+    AuthorEdit, PageVisit, ReadingSession, Store, StoredPageVisit, StoredReadingSession,
+    SuggestionDecision, WatchedFolder,
 };
 
 fn temp_db() -> (tempfile::TempDir, PathBuf) {
@@ -5143,6 +5144,478 @@ fn recording_a_session_leaves_existing_document_and_progress_reads_unchanged() {
         store.progress_for_document(read).expect("read progress"),
         vec![progress]
     );
+}
+
+// --- F1 part 1: the typed store API for page visits -------------------------------------------
+//
+// A visit is the per-document depth the roadmap asks for: which page was actually on screen, in
+// which session, when it was observed, and for how long. These tests are the boundary the reader
+// will call: the store refuses what cannot be a fact before reaching the database, stores the two
+// recorded times exactly as reported, and returns the id the database assigned.
+
+/// A read's rows as `(id, facts)`, so an assertion states both without repeating every literal.
+fn visits(rows: Vec<StoredPageVisit>) -> Vec<(i64, PageVisit)> {
+    rows.into_iter().map(|row| (row.id, row.visit)).collect()
+}
+
+/// The same projection for the session reads used to prove a visit did not restate its session.
+fn sessions(rows: Vec<StoredReadingSession>) -> Vec<(i64, ReadingSession)> {
+    rows.into_iter().map(|row| (row.id, row.session)).collect()
+}
+
+#[test]
+fn a_stored_page_visit_returns_its_stable_id_and_facts_across_a_reopen() {
+    // A visit's id is the row's own identity, so a read has to return it alongside the facts. It is
+    // assigned on insert and never chosen by the caller; a close and reopen must not change it.
+    let (_dir, path) = temp_db();
+    let read;
+    let other;
+    let read_session;
+    let earlier;
+    let same_moment;
+    let later;
+    let other_visit;
+    let earlier_id;
+    let same_moment_id;
+    let later_id;
+    let other_visit_id;
+    {
+        let store = Store::open(&path).expect("open");
+        read = store
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 60, ino: 1 },
+            ))
+            .expect("insert");
+        other = store
+            .upsert_document(&document(
+                "/library/other.pdf",
+                FileId::Posix { dev: 60, ino: 2 },
+            ))
+            .expect("insert");
+        read_session = store
+            .record_reading_session(&ReadingSession {
+                doc_id: read,
+                started_at: 1_700_000_000,
+                ended_at: 1_700_001_200,
+                active_ms: 480_000,
+            })
+            .expect("record the reading session");
+        let other_session = store
+            .record_reading_session(&ReadingSession {
+                doc_id: other,
+                started_at: 1_700_000_000,
+                ended_at: 1_700_000_600,
+                active_ms: 120_000,
+            })
+            .expect("record another document's session");
+
+        earlier = PageVisit {
+            doc_id: read,
+            session_id: read_session,
+            page: 3,
+            observed_at: 1_700_000_100,
+            visible_ms: 40_000,
+        };
+        same_moment = PageVisit {
+            doc_id: read,
+            session_id: read_session,
+            page: 4,
+            observed_at: 1_700_000_100,
+            visible_ms: 5_000,
+        };
+        later = PageVisit {
+            doc_id: read,
+            session_id: read_session,
+            page: 12,
+            observed_at: 1_700_000_900,
+            visible_ms: 30_000,
+        };
+        // Page 0 is the first page of a zero-based document, exactly as `progress.page` is.
+        other_visit = PageVisit {
+            doc_id: other,
+            session_id: other_session,
+            page: 0,
+            observed_at: 1_700_000_050,
+            visible_ms: 1_500,
+        };
+
+        // Written newest first, with two pages observed in the same second, so the read order can
+        // only be the documented (observed_at, id) order rather than the insertion order.
+        later_id = store
+            .record_page_visit(&later)
+            .expect("record the later visit");
+        earlier_id = store
+            .record_page_visit(&earlier)
+            .expect("record the earlier visit");
+        same_moment_id = store
+            .record_page_visit(&same_moment)
+            .expect("record the visit observed in the same second");
+        other_visit_id = store
+            .record_page_visit(&other_visit)
+            .expect("record another document's visit");
+    }
+
+    let store = Store::open(&path).expect("reopen");
+    assert_eq!(
+        visits(store.page_visits_for_document(read).expect("read visits")),
+        vec![
+            (earlier_id, earlier),
+            (same_moment_id, same_moment),
+            (later_id, later),
+        ],
+        "every returned id is the one insertion returned, the same-moment tie keeps insertion \
+         order, and each visit keeps its own facts and session across a reopen"
+    );
+    assert_eq!(
+        visits(store.page_visits_for_document(other).expect("read visits")),
+        vec![(other_visit_id, other_visit)],
+        "another document's visit is filtered out and keeps its own id"
+    );
+    assert!(
+        store
+            .page_visits_for_document(9_999)
+            .expect("read visits")
+            .is_empty(),
+        "an id no document carries is an empty answer, not an error"
+    );
+
+    // Ids are the database's to assign, are stable, and are distinct per row.
+    let mut ids = vec![later_id, earlier_id, same_moment_id, other_visit_id];
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 4, "each stored visit has its own stable id");
+}
+
+#[test]
+fn a_visit_keeps_its_own_moment_and_may_name_an_earlier_session() {
+    // The reader flushes visits late, so a visit can reach the store after a later session already
+    // started and still belong to the earlier one. And `observed_at` is a UTC wall-clock reading:
+    // the clock can be corrected or moved, so a visit is not required to fall inside its session's
+    // span, and a session whose span runs backwards is no reason to refuse the moment it was seen.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let read = store
+        .upsert_document(&document(
+            "/library/read.pdf",
+            FileId::Posix { dev: 61, ino: 1 },
+        ))
+        .expect("insert");
+
+    let first = ReadingSession {
+        doc_id: read,
+        started_at: 1_700_000_000,
+        ended_at: 1_700_000_300,
+        active_ms: 240_000,
+    };
+    let second = ReadingSession {
+        doc_id: read,
+        started_at: 1_700_000_600,
+        ended_at: 1_700_001_200,
+        active_ms: 480_000,
+    };
+    let corrected_back = ReadingSession {
+        doc_id: read,
+        started_at: 1_700_010_000,
+        ended_at: 1_700_009_000,
+        active_ms: 60_000,
+    };
+    let first_session = store
+        .record_reading_session(&first)
+        .expect("record the first session");
+    let second_session = store
+        .record_reading_session(&second)
+        .expect("record the second session");
+    let corrected_back_session = store
+        .record_reading_session(&corrected_back)
+        .expect("a span whose clock was corrected backwards is a fact");
+
+    let during_the_first = PageVisit {
+        doc_id: read,
+        session_id: first_session,
+        page: 3,
+        observed_at: 1_700_000_100,
+        visible_ms: 40_000,
+    };
+    // Read in the first session and recorded only after the second one had already started.
+    let flushed_late = PageVisit {
+        doc_id: read,
+        session_id: first_session,
+        page: 4,
+        observed_at: 1_700_000_200,
+        visible_ms: 20_000,
+    };
+    // Before its session started and long after it ended: both are recorded readings, not errors.
+    let before_its_session = PageVisit {
+        doc_id: read,
+        session_id: second_session,
+        page: 5,
+        observed_at: 1_700_000_400,
+        visible_ms: 1_000,
+    };
+    let after_its_session = PageVisit {
+        doc_id: read,
+        session_id: second_session,
+        page: 6,
+        observed_at: 1_700_009_900,
+        visible_ms: 2_000,
+    };
+    // Inside a span whose two readings run backwards: still a moment the reader observed.
+    let inside_a_corrected_span = PageVisit {
+        doc_id: read,
+        session_id: corrected_back_session,
+        page: 7,
+        observed_at: 1_700_009_500,
+        visible_ms: 3_000,
+    };
+
+    let during_the_first_id = store
+        .record_page_visit(&during_the_first)
+        .expect("record a visit of the first session");
+    let flushed_late_id = store
+        .record_page_visit(&flushed_late)
+        .expect("a visit recorded after a later session began still names the earlier one");
+    let before_its_session_id = store
+        .record_page_visit(&before_its_session)
+        .expect("an observation before its session started is a recorded reading");
+    let after_its_session_id = store
+        .record_page_visit(&after_its_session)
+        .expect("an observation after its session ended is a recorded reading");
+    let inside_a_corrected_span_id = store
+        .record_page_visit(&inside_a_corrected_span)
+        .expect("a corrected wall clock is not a reason to lose a visit");
+
+    assert_eq!(
+        visits(store.page_visits_for_document(read).expect("read visits")),
+        vec![
+            (during_the_first_id, during_the_first),
+            (flushed_late_id, flushed_late),
+            (before_its_session_id, before_its_session),
+            (inside_a_corrected_span_id, inside_a_corrected_span),
+            (after_its_session_id, after_its_session),
+        ],
+        "each visit keeps the session it names and the moment it was observed, ordered by that \
+         moment rather than by insertion or by its session's start"
+    );
+
+    // Recording visits does not restate the sessions it names; they keep their own facts and ids.
+    assert_eq!(
+        sessions(store.reading_sessions_for_document(read).expect("read")),
+        vec![
+            (first_session, first),
+            (second_session, second),
+            (corrected_back_session, corrected_back),
+        ]
+    );
+}
+
+#[test]
+fn an_invalid_page_visit_is_refused_without_touching_stored_facts() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let read = store
+        .upsert_document(&document(
+            "/library/read.pdf",
+            FileId::Posix { dev: 62, ino: 1 },
+        ))
+        .expect("insert");
+    let other = store
+        .upsert_document(&document(
+            "/library/other.pdf",
+            FileId::Posix { dev: 62, ino: 2 },
+        ))
+        .expect("insert");
+
+    let read_progress =
+        StoredProgress::new(3, Some(80), ProgressSource::Manual, Confidence::Manual);
+    let other_progress =
+        StoredProgress::new(9, Some(20), ProgressSource::Manual, Confidence::Manual);
+    store
+        .record_progress(read, &read_progress)
+        .expect("record a reading position");
+    store
+        .record_progress(other, &other_progress)
+        .expect("record another reading position");
+    let read_session_facts = ReadingSession {
+        doc_id: read,
+        started_at: 1_700_000_000,
+        ended_at: 1_700_000_300,
+        active_ms: 240_000,
+    };
+    let other_session_facts = ReadingSession {
+        doc_id: other,
+        started_at: 1_700_000_000,
+        ended_at: 1_700_000_200,
+        active_ms: 100_000,
+    };
+    let read_session = store
+        .record_reading_session(&read_session_facts)
+        .expect("record a session");
+    let other_session = store
+        .record_reading_session(&other_session_facts)
+        .expect("record another document's session");
+
+    let valid = PageVisit {
+        doc_id: read,
+        session_id: read_session,
+        page: 7,
+        observed_at: 1_700_000_500,
+        visible_ms: 42_000,
+    };
+    let other_valid = PageVisit {
+        doc_id: other,
+        session_id: other_session,
+        page: 1,
+        observed_at: 1_700_000_400,
+        visible_ms: 8_000,
+    };
+    let valid_id = store
+        .record_page_visit(&valid)
+        .expect("record a valid visit");
+    let other_valid_id = store
+        .record_page_visit(&other_valid)
+        .expect("record another document's valid visit");
+
+    let refused_cases = [
+        (
+            PageVisit {
+                doc_id: 9_999,
+                ..valid.clone()
+            },
+            "document",
+        ),
+        // A session of another document: refused, because a visit cannot be attributed across
+        // documents. An id no session carries is refused the same way.
+        (
+            PageVisit {
+                session_id: other_session,
+                ..valid.clone()
+            },
+            "session_id",
+        ),
+        (
+            PageVisit {
+                session_id: 9_999,
+                ..valid.clone()
+            },
+            "session_id",
+        ),
+        (
+            PageVisit {
+                observed_at: -1,
+                ..valid.clone()
+            },
+            "observed_at",
+        ),
+        (
+            PageVisit {
+                visible_ms: -1,
+                ..valid.clone()
+            },
+            "visible_ms",
+        ),
+    ];
+    for (visit, field) in refused_cases {
+        let refused = store.record_page_visit(&visit);
+        assert!(
+            matches!(&refused, Err(MirkError::InvalidInput { field: named, .. }) if *named == field),
+            "`{visit:?}` must be refused as `{field}`, got {refused:?}"
+        );
+    }
+
+    // Both documents are exactly as they were: a refusal wrote no visit and changed no session or
+    // progress row, including the document the refused visit tried to borrow a session from.
+    assert_eq!(row_count(&path, "page_visits"), 2);
+    assert_eq!(row_count(&path, "reading_sessions"), 2);
+    assert_eq!(row_count(&path, "progress"), 2);
+    assert_eq!(
+        visits(store.page_visits_for_document(read).expect("read visits")),
+        vec![(valid_id, valid)]
+    );
+    assert_eq!(
+        visits(store.page_visits_for_document(other).expect("read visits")),
+        vec![(other_valid_id, other_valid)]
+    );
+    assert_eq!(
+        store.progress_for_document(read).expect("read progress"),
+        vec![read_progress]
+    );
+    assert_eq!(
+        store.progress_for_document(other).expect("read progress"),
+        vec![other_progress]
+    );
+    assert_eq!(
+        sessions(store.reading_sessions_for_document(read).expect("read")),
+        vec![(read_session, read_session_facts)],
+        "the refused cross-document visit borrowed no session and changed none"
+    );
+    assert_eq!(
+        sessions(store.reading_sessions_for_document(other).expect("read")),
+        vec![(other_session, other_session_facts)]
+    );
+}
+
+#[test]
+fn recording_a_page_visit_leaves_progress_sessions_and_documents_unchanged() {
+    // A visit is a fact of its own: it does not move the reading position, does not extend the
+    // session it names, and never appears under another document.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let read = store
+        .upsert_document(&document(
+            "/library/read.pdf",
+            FileId::Posix { dev: 63, ino: 1 },
+        ))
+        .expect("insert");
+    let other = store
+        .upsert_document(&document(
+            "/library/other.pdf",
+            FileId::Posix { dev: 63, ino: 2 },
+        ))
+        .expect("insert");
+    let session = ReadingSession {
+        doc_id: read,
+        started_at: 1_700_000_000,
+        ended_at: 1_700_000_300,
+        active_ms: 240_000,
+    };
+
+    let progress = StoredProgress::new(3, Some(80), ProgressSource::Manual, Confidence::Manual);
+    store
+        .record_progress(read, &progress)
+        .expect("record a reading position");
+    let session_id = store
+        .record_reading_session(&session)
+        .expect("record a session");
+    store
+        .record_page_visit(&PageVisit {
+            doc_id: read,
+            session_id,
+            page: 7,
+            observed_at: 1_700_000_500,
+            visible_ms: 42_000,
+        })
+        .expect("record a visit");
+
+    assert_eq!(
+        store.progress_for_document(read).expect("read progress"),
+        vec![progress],
+        "a page on screen is not a reading position"
+    );
+    assert_eq!(
+        sessions(store.reading_sessions_for_document(read).expect("read")),
+        vec![(session_id, session)],
+        "recording a visit does not restate or extend the session it names"
+    );
+    assert!(
+        store
+            .page_visits_for_document(other)
+            .expect("read visits")
+            .is_empty(),
+        "a visit never appears under another document"
+    );
+    assert_eq!(store.document_count().expect("count"), 2);
+    assert_eq!(store.library().expect("library").len(), 2);
 }
 
 // --- S8, again: an earlier, uncommitted schema 12 must not be adopted --------------------------

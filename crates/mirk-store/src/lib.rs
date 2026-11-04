@@ -56,14 +56,19 @@
 //! and `visible_ms` are durations the reader will hand over already measured under the owner's rule
 //! (L4): only visible-and-focused time counts, paused after 20 minutes without interaction. The
 //! tables exist as the home for those facts, and [`Store::record_reading_session`] writes a session
-//! exactly as given. Capture is deliberately absent from this build: no reader observes a session
-//! yet and nothing calls the recording method, so no reading fact is written in production and none
-//! of the timing rules above is implemented.
+//! exactly as given while [`Store::record_page_visit`] writes a page visit exactly as given. Capture
+//! is deliberately absent from this build: no reader observes a session or a page yet and nothing
+//! calls either recording method, so no reading fact is written in production and none of the
+//! timing rules above is implemented.
 //!
 //! **A page visit keeps its own moment and its session.** `observed_at` is when the page was on
 //! screen and `session_id` is the session it happened in, so the read order is chronology rather
 //! than insertion order: a writer that flushes visits late cannot make an earlier page look later,
-//! and a visit cannot be attributed to a session of another document.
+//! and a visit cannot be attributed to a session of another document. That check is about the
+//! sessions that exist **now**: `reading_sessions.id` is SQLite's rowid alias, so a deleted
+//! session's id can be handed to a later session, and an id a caller kept across that deletion can
+//! name a different session than the one it observed. Nothing here makes a stale identifier safe
+//! (see [`PageVisit`]).
 //!
 //! **Time is stored, not adjudicated.** `started_at`, `ended_at` and `observed_at` are the reader's
 //! UTC wall-clock readings, stored verbatim. The UTC clock can move — an NTP correction, a manual
@@ -135,8 +140,10 @@
 //!   leaves those columns unset for the scanner (T6) to fill;
 //! - reading facts: the `reading_sessions` and `page_visits` schema and its compatibility guard are
 //!   present, and [`Store::record_reading_session`] / [`Store::reading_sessions_for_document`] store
-//!   and return first-party sessions through [`ReadingSession`] and [`StoredReadingSession`]. Capture
-//!   is still absent: nothing observes a session, and no page visit is written or read. Capture
+//!   and return first-party sessions through [`ReadingSession`] and [`StoredReadingSession`], while
+//!   [`Store::record_page_visit`] / [`Store::page_visits_for_document`] do the same for the pages
+//!   that were on screen through [`PageVisit`] and [`StoredPageVisit`]. Capture is still absent:
+//!   nothing observes a session or a page, and nothing calls those four methods. Capture
 //!   arrives with the reader that observes it, and with it the `source`, `viewer_id` and
 //!   `ended_reason` columns the roadmap sketched: 0.2.0 stores only first-party reader sessions, so
 //!   a `source` column could hold one constant, `viewer_id` would presume the still-open answer to
@@ -799,6 +806,64 @@ pub struct StoredReadingSession {
     pub id: i64,
     /// The session facts exactly as they were recorded.
     pub session: ReadingSession,
+}
+
+/// One page that was actually on screen in `mirk`'s own reader (F1 part 1).
+///
+/// A visit says what storage cannot infer: **which document**, **which page** (zero-based, exactly
+/// as `progress.page` is, so `0` is the first page), **which session it happened in**, and **when it
+/// was observed** — plus how long the page stayed visible. Two visits to one page are two facts,
+/// and a visit without its session has no provenance, so the session is part of the value rather
+/// than a loose column a caller could forget to fill.
+///
+/// **The session named is the one the reader meant, not the one that is current.** A visit may name
+/// a session that has already ended: the reader flushes visits late, and a page read before a later
+/// session started still belongs to the earlier one. The store requires only that the id names an
+/// existing session **of the same document**.
+///
+/// **A session id can outlive its meaning, and this interface does not make it safe.**
+/// `reading_sessions.id` is SQLite's `INTEGER PRIMARY KEY` — an alias for the rowid — so SQLite can
+/// assign a deleted session's id to a session inserted later. A caller that keeps an id across that
+/// deletion and reuse would attribute a visit to a different session than the one it observed, and
+/// the store cannot tell the difference: it checks that the id is *a* session of this document, not
+/// that it is *the* session the caller saw. Recording the session before its visits, and not
+/// keeping an id once the session may have been deleted (forgetting a folder takes its sessions and
+/// visits with it), stays the caller's discipline; nothing here makes a stale identifier safe.
+///
+/// `observed_at` and the session's `started_at`/`ended_at` are three separate UTC wall-clock
+/// readings, stored verbatim. The clock can be corrected or moved between them, so this build does
+/// not require a visit to fall inside its session's span and never derives one time from another:
+/// elapsed reading time is `visible_ms`, measured by the reader. See the crate documentation for the
+/// time policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageVisit {
+    /// The `documents.id` the page was on screen in.
+    pub doc_id: i64,
+    /// The `reading_sessions.id` of the session it happened in. The session must belong to
+    /// [`PageVisit::doc_id`].
+    pub session_id: i64,
+    /// Zero-based page number, exactly as `progress.page` is: `0` is the first page. `u32` is the
+    /// range the schema stores, so a page that is not a page number — negative, or beyond the last
+    /// page a `u32` can address — is not expressible here.
+    pub page: u32,
+    /// Unix seconds when the page was observed on screen, as the reader's clock read it.
+    pub observed_at: i64,
+    /// Visible-and-focused milliseconds the page stayed on screen; never negative.
+    pub visible_ms: i64,
+}
+
+/// One page visit as it was stored: the row's stable id plus the facts it holds (F1 part 1).
+///
+/// The id is assigned by the database on insert and is not a field of [`PageVisit`], so a caller
+/// cannot choose or forge it, and the same row keeps the same id across a close and reopen. It is
+/// stable for the life of the row: deleting the document, or the session the visit names, takes the
+/// visit with it, and a deleted row's id may be reused by a later visit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredPageVisit {
+    /// The `page_visits.id` primary key, assigned by the database on insert.
+    pub id: i64,
+    /// The visit's facts exactly as they were recorded.
+    pub visit: PageVisit,
 }
 
 /// A watched folder as stored.
@@ -1725,6 +1790,134 @@ impl Store {
         Ok(sessions)
     }
 
+    /// Records one page that was on screen and returns the new row id (F1 part 1).
+    ///
+    /// **The store validates, it does not measure.** `visible_ms` is stored exactly as given: the
+    /// visible-and-focused rule (L4) belongs to the reader, and a store that recomputed it would
+    /// disagree with the thing that observed it. What is refused is what cannot be a fact, and a
+    /// refusal writes nothing:
+    ///
+    /// - a `doc_id` no document carries (`document`), because there is nothing to attach the visit
+    ///   to;
+    /// - a `session_id` that is not a session of *that* document (`session_id`), because a visit
+    ///   cannot be attributed across documents. A session of another document and an id no session
+    ///   carries are refused the same way: the answer does not disclose another document's rows;
+    /// - a negative `observed_at` (`observed_at`), because Unix seconds begin at the epoch;
+    /// - a negative `visible_ms` (`visible_ms`).
+    ///
+    /// `page` needs no runtime check: it is a `u32`, exactly the range the schema stores, so a page
+    /// a typed read could not represent is not expressible through this interface. A writer that
+    /// bypasses [`Store`] is refused by the schema's own bounds.
+    ///
+    /// **A visit is not required to fall inside its session's span.** `observed_at` and the
+    /// session's `started_at`/`ended_at` are three UTC readings, and the clock can be corrected or
+    /// moved between them; elapsed reading time is `visible_ms`, not a wall-clock subtraction. A
+    /// page observed before its session started or after it ended is an honest reading and is stored
+    /// verbatim, as is a visit that names an earlier session of the same document — a reader that
+    /// flushes visits late records them in the session they happened in, not the one that is
+    /// current. Inventing an interval constraint here would reject facts that cannot be observed
+    /// again.
+    ///
+    /// **The id is the database's to assign.** [`PageVisit`] carries no id field, so a caller cannot
+    /// choose one; the returned id is the row's stable primary key, and
+    /// [`Store::page_visits_for_document`] returns it with the facts.
+    ///
+    /// **The checks are not atomic with the insert.** They answer for the moment they run, so a
+    /// document or session deleted between a check and the insert — a [`Store::forget_folder`] in
+    /// another connection — is refused by the foreign key as [`MirkError::Storage`], not
+    /// [`MirkError::InvalidInput`]. Either way the refused write stores nothing; see
+    /// `require_session_of_document` for what the two refusals mean.
+    ///
+    /// **A reused session id is not detected.** See [`PageVisit`]: SQLite may hand a deleted
+    /// session's id to a later session, so an id a caller kept across that deletion can name a
+    /// different session than the one it observed.
+    pub fn record_page_visit(&self, visit: &PageVisit) -> Result<i64, MirkError> {
+        self.require_document(visit.doc_id)?;
+        self.require_session_of_document(visit.session_id, visit.doc_id)?;
+        if visit.observed_at < 0 {
+            return Err(invalid_input(
+                "observed_at",
+                visit.observed_at,
+                "Unix seconds at or after the epoch",
+            ));
+        }
+        if visit.visible_ms < 0 {
+            return Err(invalid_input(
+                "visible_ms",
+                visit.visible_ms,
+                "a non-negative duration in milliseconds",
+            ));
+        }
+
+        self.connection
+            .execute(
+                "INSERT INTO page_visits (doc_id, session_id, page, observed_at, visible_ms) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    visit.doc_id,
+                    visit.session_id,
+                    i64::from(visit.page),
+                    visit.observed_at,
+                    visit.visible_ms
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(self.connection.last_insert_rowid())
+    }
+
+    /// Every page visit stored for a document, in the order the pages were observed.
+    ///
+    /// Each item carries the row's stable [`StoredPageVisit::id`] together with its facts and the
+    /// session it names, so a caller can tell two visits of one page apart and attribute each to the
+    /// session that observed it. Ordering is by `observed_at` and then by row id, so a writer that
+    /// flushed visits late still reads them in observation order and two pages observed in the same
+    /// second come back in a stable order. That is ordering by the recorded wall clock, not a claim
+    /// that the clock was monotonic. An id no document carries is an empty answer rather than an
+    /// error: nothing was ever recorded for it.
+    pub fn page_visits_for_document(&self, doc_id: i64) -> Result<Vec<StoredPageVisit>, MirkError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, doc_id, session_id, page, observed_at, visible_ms FROM page_visits \
+                 WHERE doc_id = ?1 ORDER BY observed_at, id",
+            )
+            .map_err(storage_error)?;
+
+        let rows = statement
+            .query_map(params![doc_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })
+            .map_err(storage_error)?;
+
+        let mut visits = Vec::new();
+        for row in rows {
+            let (id, doc_id, session_id, page, observed_at, visible_ms) =
+                row.map_err(storage_error)?;
+            let page = u32::try_from(page).map_err(|_| {
+                MirkError::Storage(format!("stored page {page} is not a page number"))
+            })?;
+
+            visits.push(StoredPageVisit {
+                id,
+                visit: PageVisit {
+                    doc_id,
+                    session_id,
+                    page,
+                    observed_at,
+                    visible_ms,
+                },
+            });
+        }
+        Ok(visits)
+    }
+
     /// Refuses a document id this store does not hold, as an invalid argument naming the field.
     ///
     /// The foreign key would refuse the row anyway; asking first is what turns the refusal into an
@@ -1752,6 +1945,40 @@ impl Store {
                 "document",
                 doc_id,
                 "the id of a document this store holds",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Refuses a session that is not a session of `doc_id`, as an invalid argument naming the field.
+    ///
+    /// One question, one answer: `session_id` must name a row of `reading_sessions` whose `doc_id`
+    /// is the document the fact belongs to. A session of **another** document and an id no session
+    /// carries are refused identically, and deliberately: a page visit names a session, not a
+    /// document's session list, and a different refusal for "belongs to somebody else" would report
+    /// that another document's row exists.
+    ///
+    /// **This check is not a guarantee, in either direction.** A session deleted between this check
+    /// and the insert is caught by the foreign key as [`MirkError::Storage`] instead of
+    /// [`MirkError::InvalidInput`]; and because `reading_sessions.id` is SQLite's rowid alias, an id
+    /// deleted earlier may already belong to a **different** session by the time this check runs, so
+    /// a stale id passes it. See [`PageVisit`].
+    fn require_session_of_document(&self, session_id: i64, doc_id: i64) -> Result<(), MirkError> {
+        let known = self
+            .connection
+            .query_row(
+                "SELECT 1 FROM reading_sessions WHERE id = ?1 AND doc_id = ?2",
+                params![session_id, doc_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(storage_error)?;
+
+        if known.is_none() {
+            return Err(invalid_input(
+                "session_id",
+                session_id,
+                "the id of a session recorded for this document",
             ));
         }
         Ok(())
