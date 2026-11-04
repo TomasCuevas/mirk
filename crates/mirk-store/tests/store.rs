@@ -721,6 +721,83 @@ fn reopening_a_current_database_changes_nothing() {
 }
 
 #[test]
+fn opening_a_current_database_takes_no_write_reservation() {
+    // Opening a store that is already current takes no write reservation, and a second process
+    // writing the same file must not stand in its way: only the upgrade needs a write lock. The lock
+    // held here is the writer's RESERVED lock, which does not block readers; if the open tried to take
+    // one it would wait out the connection's own busy timeout behind it and then fail. (A lock that
+    // excludes readers, such as an exclusive lock, does block this read — as it blocks any read — but
+    // that is a different question from the write reservation this test is about.)
+    let (_dir, path) = temp_db();
+    {
+        let store = Store::open(&path).expect("migrate a fresh database");
+        store
+            .set_setting("language", "es")
+            .expect("write a setting");
+    }
+
+    let competitor = rusqlite::Connection::open(&path).expect("open raw");
+    competitor
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("take the database's write lock");
+
+    let store = Store::open(&path)
+        .expect("opening a current database must not need the write lock a writer holds");
+    assert_eq!(
+        store.schema_version().expect("schema version"),
+        Store::CURRENT_SCHEMA_VERSION
+    );
+    assert_eq!(
+        store.get_setting("language").expect("read the setting"),
+        Some("es".to_string())
+    );
+    drop(store);
+
+    competitor
+        .execute_batch("ROLLBACK")
+        .expect("release the write lock");
+
+    // And the writes the store exists for still happen once the lock is free.
+    let store = Store::open(&path).expect("reopen");
+    store
+        .set_setting("language", "en")
+        .expect("write after the lock is gone");
+    assert_eq!(
+        store.get_setting("language").expect("read the setting"),
+        Some("en".to_string())
+    );
+}
+
+#[test]
+fn a_newer_database_is_refused_without_taking_the_write_lock() {
+    // The refusal is the version check, which is a read: it must be reported as such, and not as the
+    // busy error an open that took the write lock first would produce here.
+    let (_dir, path) = temp_db();
+    drop(Store::open(&path).expect("migrate a fresh database"));
+
+    let competitor = rusqlite::Connection::open(&path).expect("open raw");
+    competitor
+        .pragma_update(None, "user_version", Store::CURRENT_SCHEMA_VERSION + 1)
+        .expect("simulate a database a future build wrote");
+    competitor
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("take the database's write lock");
+
+    let error = Store::open(&path).expect_err("a newer schema must be refused");
+    match error {
+        MirkError::Storage(message) => assert!(
+            message.contains("newer than this build supports"),
+            "the refusal must be the version check, not a lock error: {message}"
+        ),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    competitor
+        .execute_batch("ROLLBACK")
+        .expect("release the write lock");
+}
+
+#[test]
 fn a_database_from_a_newer_build_is_refused_rather_than_downgraded() {
     let (_dir, path) = temp_db();
     {
@@ -748,9 +825,10 @@ fn a_database_from_a_newer_build_is_refused_rather_than_downgraded() {
 
 #[test]
 fn a_step_that_fails_on_the_way_to_v4_leaves_the_database_at_v3_untouched() {
-    // Every migration step is one transaction, so a step that fails must leave the recorded version
-    // and every existing row exactly as they were. The success path cannot show that: only a step
-    // that actually fails can tell one transaction from "do the work, then stamp the version".
+    // The upgrade is one transaction, so a step that fails must leave the recorded version and every
+    // existing row exactly as they were. The success path cannot show that: only a step that actually
+    // fails can tell one transaction from "do the work, then stamp the version". The first pending
+    // step fails here; the whole-upgrade unit is pinned by the rollback test beside the migration itself.
     //
     // The failure needs no seam and no mock. A database is built with real rows and the store's own
     // current schema — so `progress` already has `read_at` — and then only its version stamp is

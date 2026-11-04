@@ -47,9 +47,17 @@
 //!
 //! The schema version is recorded inside the database with SQLite's own `PRAGMA user_version`.
 //! Opening a database brings it to [`Store::CURRENT_SCHEMA_VERSION`] and records that version;
-//! reopening an already-current database is a no-op; a fresh file is created at the current
-//! version. Migrations are forward-only: a database written by a newer build is refused rather
-//! than silently downgraded.
+//! reopening an already-current database is a no-op and takes **no write reservation** — it can be
+//! opened while another process is writing, and it does not stop that write. It is a read like any
+//! other, so a lock that excludes readers (a writer mid-commit) still blocks it for as long as the
+//! connection's own busy timeout allows; what it never does is queue behind the write lock an upgrade
+//! takes. A fresh file is created at the current version. Migrations are forward-only: a database
+//! written by a newer build is refused rather than silently downgraded. A database that does need
+//! migrating is upgraded as **one serialized write**: the write lock is taken first, the version is
+//! re-read under it, every missing step is applied in one transaction, and the connection's own busy
+//! timeout — raised only for that wait — is put back afterwards, so competing opens cannot both apply
+//! a step and a failure leaves the database at the version it was opened with. See `upgrade` for the
+//! rollback and contention consequences of that.
 //!
 //! # Where the database lives
 //!
@@ -84,13 +92,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mirk_core::{
     Confidence, CoverChoice, CoverSource, Document, FileId, MirkError, Platform, ProgressSource,
     StoredProgress,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 /// The application directory name appended to each platform's user data directory.
 const APP_DIR: &str = "mirk";
@@ -254,7 +262,8 @@ CREATE TABLE settings (
 /// **frozen**: a database an earlier build already created reports their versions, and editing the
 /// text would leave that database without the column forever while claiming otherwise. `ALTER TABLE
 /// ... ADD COLUMN` is idempotent in the sense that matters here because the recorded version gates
-/// it: it runs only on the V3 -> V4 step, once, and the step is stamped in its own transaction.
+/// it: it runs only on the V3 -> V4 step, once, and the step is committed with the rest of the
+/// upgrade it belongs to (see `upgrade`).
 const SCHEMA_V4: &str = "
 ALTER TABLE progress ADD COLUMN read_at INTEGER;
 ";
@@ -309,9 +318,9 @@ ALTER TABLE documents ADD COLUMN cover_image TEXT;
 ///
 /// Added as a migration rather than by editing an earlier schema, because all of them are **frozen**:
 /// a database an earlier build already created reports their versions, and editing the text would
-/// leave that database without the column forever while claiming otherwise. The step is stamped in
-/// its own transaction, so a failure leaves the version behind and no half-added column (the V7
-/// atomicity test pins exactly that).
+/// leave that database without the column forever while claiming otherwise. The step is committed
+/// with the rest of the upgrade it belongs to, so a failure leaves the version behind and no
+/// half-added column (the V7 atomicity test pins exactly that).
 ///
 /// **This column does not survive the schema.** [`SCHEMA_V9`] moves every non-blank value here into
 /// `document_authors` and then drops it, because a reader's single author became the reader's ordered
@@ -2290,10 +2299,39 @@ fn decode_cover_source(value: Option<String>) -> Option<CoverSource> {
     value.and_then(|text| CoverSource::parse(text.trim()))
 }
 
-/// Brings `connection` to [`Store::CURRENT_SCHEMA_VERSION`], forward-only.
-fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
-    let mut version = read_schema_version(connection)?;
+/// How long an open that has migrations to apply waits for a competing writer.
+///
+/// Applying a migration is a write, so the open has to wait for whoever is already writing — in
+/// practice another `mirk` process upgrading the same file after an update, or a scanner mid-save.
+/// The wait is bounded on purpose: a writer that never finishes is a fault worth reporting, and this
+/// reports it as an honest [`MirkError::Storage`] instead of a launch that never returns.
+///
+/// This is a **floor, not a replacement.** [`upgrade`] raises the connection's own busy timeout to at
+/// least this value while it takes the lock and puts the original back afterwards, on every path. The
+/// original is read from the connection ([`current_busy_timeout`]) and never assumed: `rusqlite`
+/// installs a five-second timeout when it opens a connection, so restoring "the default" from a guess
+/// is how a store that was migrated ends up contending differently from one that was only opened.
+const MIGRATION_LOCK_WAIT: Duration = Duration::from_secs(10);
 
+/// The busy timeout `connection` currently has, in the units SQLite reports it in.
+///
+/// The query form of `PRAGMA busy_timeout` reads the value without changing it, which is what makes it
+/// usable here: the upgrade has to put back exactly what it found, not what it believes the driver's
+/// default to be. The one prior state SQLite does not report is a handler installed directly with
+/// `sqlite3_busy_handler`; nothing in this crate installs one, and a connection this crate opens never
+/// has one.
+fn current_busy_timeout(connection: &Connection) -> Result<Duration, MirkError> {
+    let millis: i64 = connection
+        .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+        .map_err(storage_error)?;
+    let millis = u64::try_from(millis).map_err(|_| {
+        MirkError::Storage(format!("database reports an invalid busy timeout {millis}"))
+    })?;
+    Ok(Duration::from_millis(millis))
+}
+
+/// Refuses a database written by a newer build instead of pretending to read it.
+fn refuse_newer_version(version: u32) -> Result<(), MirkError> {
     if version > Store::CURRENT_SCHEMA_VERSION {
         return Err(MirkError::Storage(format!(
             "database schema version {version} is newer than this build supports \
@@ -2301,110 +2339,148 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
             Store::CURRENT_SCHEMA_VERSION
         )));
     }
+    Ok(())
+}
 
-    // One step per version, each recorded as it is applied, so a database left at any version by an
-    // older build is brought forward by exactly the steps it is missing. Every step is applied in
-    // its own transaction: an interrupted migration leaves the recorded version untouched, so the
-    // next open retries the same step instead of finding half a schema.
+/// Brings `connection` to [`Store::CURRENT_SCHEMA_VERSION`], forward-only.
+///
+/// **Opening a current database takes no write reservation.** The version is read once and, when it
+/// is already the version this build writes, the open returns without beginning a write transaction:
+/// another process may be writing the same file, and this open neither queues behind that writer nor
+/// stops it. It is still a read, so a lock that excludes readers — an exclusive lock, a writer in the
+/// middle of a commit — blocks it until this connection's own busy timeout runs out, exactly as it
+/// would block any other read. The same read is what refuses a database written by a newer build, so
+/// that refusal takes no write either.
+///
+/// **Upgrading is one serialized write** ([`upgrade`]): the connection's own busy timeout is raised
+/// while the write lock is taken and put back afterwards, the version is re-read under the lock, and
+/// every missing step is applied in the same transaction.
+fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
+    let version = read_schema_version(connection)?;
+    // Test builds only: the counter the migration tests watch to force their interleaving. It is
+    // compiled out of every build that ships, so no caller can observe it.
+    #[cfg(test)]
+    observations::note_version_read(connection.path());
+    refuse_newer_version(version)?;
+    if version == Store::CURRENT_SCHEMA_VERSION {
+        return Ok(());
+    }
+    upgrade(connection)
+}
+
+/// Applies every missing migration step, serialized against competing writers.
+///
+/// The version check and the steps are **one unit and one transaction**. Two opens of the same
+/// database at the same time cannot both apply a step: the second waits for the first and then finds
+/// the work done. A step that fails undoes the steps this open already applied, instead of leaving a
+/// database half-upgraded for the next launch to trip over.
+///
+/// **The re-read is the other half of that promise.** The version that decides what to apply is read
+/// again after the write lock is taken, never the one read before it: while this open waited,
+/// another process may have finished the whole upgrade, and replaying steps from the stale version
+/// would apply an `ALTER TABLE` twice and fail — or, worse, succeed and write the same facts twice.
+///
+/// **What this changes about rollback.** Each step used to be committed as it was applied. Now they
+/// are committed together at the end, so a failure in the last step leaves the database at the
+/// version it was opened with and **no** step from this open applied, where the old shape kept the
+/// earlier ones. That trade is deliberate: "some steps committed" is the state this rewrite exists
+/// to make impossible, the recorded version still says where to resume, and the retry on the next
+/// open redoes the same work from the same starting point. The per-version tests in this crate still
+/// pass because each of them opens a database that needs exactly one step; the whole-upgrade test is
+/// the one that pins the new unit.
+///
+/// **What it does not change is how the store contends for the database.** The longer wait belongs to
+/// this function and to nothing else: the connection's own busy timeout is read before it is raised and
+/// restored on every path, so a store that was upgraded locks exactly like one that was already current.
+fn upgrade(connection: &mut Connection) -> Result<(), MirkError> {
+    // Whatever this connection was opened with is what it must still have afterwards, on every path.
+    let previous = current_busy_timeout(connection)?;
+    connection
+        .busy_timeout(previous.max(MIGRATION_LOCK_WAIT))
+        .map_err(storage_error)?;
+    let outcome = upgrade_locked(connection);
+    // Back to the value this connection already had, so a store that was upgraded contends exactly
+    // like one that was not when restoration succeeds. If both operations fail, report the upgrade
+    // error; the restoration error is not returned and the original timeout may not have been restored.
+    let restored = connection.busy_timeout(previous).map_err(storage_error);
+    outcome.and(restored)
+}
+
+/// The upgrade itself, in one immediate transaction: the version check under the write lock, every
+/// missing step, and the stamp.
+fn upgrade_locked(connection: &mut Connection) -> Result<(), MirkError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+
+    // Read again now that the write lock is ours. The value read before the lock describes a moment
+    // that has passed; this one describes the database this transaction is about to change.
+    let version = read_schema_version(&transaction)?;
+    refuse_newer_version(version)?;
+    if version == Store::CURRENT_SCHEMA_VERSION {
+        // A competing writer finished the upgrade while this open waited for the lock. Dropping the
+        // transaction rolls back a transaction that wrote nothing.
+        return Ok(());
+    }
+
+    // One step per version, applied in order to a database known to be at `version`. Every statement
+    // runs on `transaction`, so a failure anywhere undoes the whole upgrade and the recorded version
+    // stays where it was.
     if version < 1 {
-        let transaction = connection.transaction().map_err(storage_error)?;
         transaction
             .execute_batch(SCHEMA_V1)
             .map_err(storage_error)?;
-        transaction
-            .pragma_update(None, "user_version", 1i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
-        version = 1;
     }
 
     if version < 2 {
-        let transaction = connection.transaction().map_err(storage_error)?;
         transaction
             .execute_batch(SCHEMA_V2)
             .map_err(storage_error)?;
-        transaction
-            .pragma_update(None, "user_version", 2i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
     }
 
     if version < 3 {
-        let transaction = connection.transaction().map_err(storage_error)?;
         transaction
             .execute_batch(SCHEMA_V3)
             .map_err(storage_error)?;
-        transaction
-            .pragma_update(None, "user_version", 3i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
     }
 
     if version < 4 {
-        let transaction = connection.transaction().map_err(storage_error)?;
         transaction
             .execute_batch(SCHEMA_V4)
             .map_err(storage_error)?;
-        transaction
-            .pragma_update(None, "user_version", 4i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
-        version = 4;
     }
 
     if version < 5 {
-        let transaction = connection.transaction().map_err(storage_error)?;
         transaction
             .execute_batch(SCHEMA_V5)
             .map_err(storage_error)?;
-        transaction
-            .pragma_update(None, "user_version", 5i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
-        version = 5;
     }
 
     if version < 6 {
-        let transaction = connection.transaction().map_err(storage_error)?;
         transaction
             .execute_batch(SCHEMA_V6)
             .map_err(storage_error)?;
-        transaction
-            .pragma_update(None, "user_version", 6i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
     }
 
     if version < 7 {
-        let transaction = connection.transaction().map_err(storage_error)?;
         transaction
             .execute_batch(SCHEMA_V7)
             .map_err(storage_error)?;
-        transaction
-            .pragma_update(None, "user_version", 7i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
     }
 
     if version < 8 {
-        let transaction = connection.transaction().map_err(storage_error)?;
         transaction
             .execute_batch(SCHEMA_V8)
             .map_err(storage_error)?;
-        transaction
-            .pragma_update(None, "user_version", 8i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
-        version = 8;
     }
 
     if version < 9 {
-        // The three parts of this step are deliberately ONE transaction: the two tables, the backfill
-        // that moves the reader's existing author into them, and the retirement of the column it came
-        // from. A failure anywhere — including in the `DROP COLUMN` at the end, after the tables exist
-        // and the rows are written — leaves the version at 8 with every row where it was, so the next
-        // open retries the whole step instead of finding half a schema (the V9 atomicity test pins it).
-        let transaction = connection.transaction().map_err(storage_error)?;
+        // The three parts of this step stay ONE unit: the two tables, the backfill that moves the
+        // reader's existing author into them, and the retirement of the column it came from. A
+        // failure anywhere — including in the `DROP COLUMN` at the end, after the tables exist and
+        // the rows are written — leaves the database at version 8 with every row where it was, so
+        // the next open retries the whole step instead of finding half a schema (the V9 atomicity
+        // test pins it).
         transaction
             .execute_batch(SCHEMA_V9)
             .map_err(storage_error)?;
@@ -2412,15 +2488,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
         transaction
             .execute_batch(SCHEMA_V9_RETIRE_USER_AUTHOR)
             .map_err(storage_error)?;
-        transaction
-            .pragma_update(None, "user_version", 9i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
-        version = 9;
     }
 
     if version < 10 {
-        let transaction = connection.transaction().map_err(storage_error)?;
         // `ADD COLUMN` has no `IF NOT EXISTS` in SQLite, and a run that already added it — an
         // interrupted upgrade, or a database built from the current shape and stamped older — must
         // not fail the whole open. The column is asked for, then added only if it is missing.
@@ -2432,15 +2502,9 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
         transaction
             .execute_batch(SCHEMA_V10_BACKFILL)
             .map_err(storage_error)?;
-        transaction
-            .pragma_update(None, "user_version", 10i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
-        version = 10;
     }
 
     if version < 11 {
-        let transaction = connection.transaction().map_err(storage_error)?;
         // `ADD COLUMN` has no `IF NOT EXISTS` in SQLite, and a run that already added it — an
         // interrupted upgrade, or a database built from the current shape and stamped older — must
         // not fail the whole open.
@@ -2449,12 +2513,17 @@ fn migrate(connection: &mut Connection) -> Result<(), MirkError> {
                 .execute_batch(SCHEMA_V11)
                 .map_err(storage_error)?;
         }
-        transaction
-            .pragma_update(None, "user_version", 11i64)
-            .map_err(storage_error)?;
-        transaction.commit().map_err(storage_error)?;
     }
 
+    // One stamp for the whole upgrade, written in the same transaction as the work it describes.
+    transaction
+        .pragma_update(
+            None,
+            "user_version",
+            i64::from(Store::CURRENT_SCHEMA_VERSION),
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)?;
     Ok(())
 }
 
@@ -2775,6 +2844,55 @@ fn unix_now() -> i64 {
 
 fn storage_error(error: rusqlite::Error) -> MirkError {
     MirkError::Storage(error.to_string())
+}
+
+/// The one seam the migration-race tests have, compiled into test builds only.
+///
+/// The race those tests need cannot be forced from outside the process: a competing connection has to
+/// commit its version change in the window between an open's first version read and its write lock,
+/// and nothing outside [`migrate`] can see that window. So the window is *counted* here and the tests
+/// commit only once the count says an open has passed through it. A counter and not a pause, because a
+/// pause would have to be handed out to a caller to release, and the point of the tests is the
+/// behaviour around the real lock rather than around a controllable one.
+#[cfg(test)]
+mod observations {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    fn reads() -> &'static Mutex<HashMap<String, usize>> {
+        static READS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+        READS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Counts one pre-lock version read of the database at `path`.
+    ///
+    /// `None` is an in-memory database, which no second connection can reach, so there is nothing to
+    /// race with and nothing to count.
+    pub(super) fn note_version_read(path: Option<&str>) {
+        let Some(path) = path else {
+            return;
+        };
+        let mut reads = reads().lock().expect("the read counter is never poisoned");
+        *reads.entry(path.to_string()).or_default() += 1;
+    }
+
+    /// How many pre-lock version reads `path` has recorded so far.
+    pub(super) fn version_reads(path: &std::path::Path) -> usize {
+        let path = path
+            .to_str()
+            .expect("the temporary database paths are UTF-8");
+        let reads = reads().lock().expect("the read counter is never poisoned");
+        reads.get(path).copied().unwrap_or_default()
+    }
+
+    /// Forgets the reads recorded for `path`, so a test can count from its own fixture onwards.
+    pub(super) fn reset(path: &std::path::Path) {
+        let path = path
+            .to_str()
+            .expect("the temporary database paths are UTF-8");
+        let mut reads = reads().lock().expect("the read counter is never poisoned");
+        reads.remove(path);
+    }
 }
 
 #[cfg(test)]
@@ -3267,6 +3385,533 @@ mod tests {
             after, before,
             "a database already current must not be rewritten"
         );
+    }
+
+    // --- The upgrade as one serialized write ---------------------------------------------------
+
+    /// Builds a database exactly as version 1 left it, **with a library in it**: a watch, a document
+    /// and the position the older build recorded for it. Every fixture here is built from the real
+    /// schema constant, so it cannot drift away from the version it claims to reproduce.
+    fn a_version_1_database_with_a_position() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("mirk.sqlite3");
+        let connection = Connection::open(&path).expect("open raw");
+        connection
+            .execute_batch(SCHEMA_V1)
+            .expect("create the version 1 schema");
+        connection
+            .execute(
+                "INSERT INTO folders (path, recursive, enabled, added_at) VALUES (?1, 1, 1, 7)",
+                params!["/library/watched"],
+            )
+            .expect("record a folder the way version 1 did");
+        connection
+            .execute(
+                "INSERT INTO documents (path, path_normalized, uri, title, pages, first_seen_at) \
+                 VALUES (?1, ?1, ?2, ?3, 120, 9)",
+                params![
+                    "/library/watched/read.pdf",
+                    "file:///library/watched/read.pdf",
+                    "A document the older build knew"
+                ],
+            )
+            .expect("record a document the way version 1 did");
+        connection
+            .execute(
+                "INSERT INTO progress (doc_id, page, total, source, confidence, updated_at) \
+                 VALUES (1, 5, 120, ?1, ?2, 99)",
+                params!["native", "exact"],
+            )
+            .expect("record a position the way version 1 did");
+        connection
+            .pragma_update(None, "user_version", 1i64)
+            .expect("stamp version 1");
+        drop(connection);
+        (dir, path)
+    }
+
+    /// Builds a database this build created, stamped with the version it created: an ordinary launch
+    /// after the upgrade, with one setting of the reader's already in it.
+    fn a_current_database() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("mirk.sqlite3");
+        {
+            let store = Store::open(&path).expect("create a current database");
+            store
+                .set_setting("language", "es")
+                .expect("write a setting");
+        }
+        (dir, path)
+    }
+
+    /// A path that holds no database yet: opening it is the fresh-install path, which creates the file
+    /// and applies every migration.
+    fn a_fresh_database_path() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("mirk.sqlite3");
+        assert!(!path.exists(), "the fixture must not create the file");
+        (dir, path)
+    }
+
+    /// Builds a current-shaped database stamped as version 8 to detect replay of the V9 step.
+    fn a_current_database_stamped_8() -> (tempfile::TempDir, PathBuf) {
+        let (dir, path) = a_current_database();
+        {
+            let connection = Connection::open(&path).expect("open raw");
+            connection
+                .pragma_update(None, "user_version", 8i64)
+                .expect("leave the stamp behind the shape");
+        }
+        (dir, path)
+    }
+
+    /// A connection's busy timeout in milliseconds, as SQLite reports it.
+    fn busy_timeout_millis(connection: &Connection) -> i64 {
+        connection
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .expect("read the busy timeout")
+    }
+
+    /// Joins `handle`, failing instead of waiting forever if the thread never finishes.
+    ///
+    /// The opener threads below wait on another connection's lock, so a regression that made them wait
+    /// for good would otherwise hang the test run instead of reporting itself. The bound is well above
+    /// the migration's own wait, so a legitimate wait is never turned into a failure.
+    fn join_bounded<T>(handle: std::thread::JoinHandle<T>, what: &str) -> T {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !handle.is_finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{what} never finished; it is still waiting on a lock"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        handle.join().expect("the opener thread must not panic")
+    }
+
+    /// Whether `name` exists as an object of `kind` (`table`, `index`, ...). Unit tests may look at
+    /// SQLite's own catalogue; the crate's integration tests deliberately do not.
+    fn schema_object_exists(connection: &Connection, kind: &str, name: &str) -> bool {
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = ?1 AND name = ?2",
+                params![kind, name],
+                |row| row.get(0),
+            )
+            .expect("count the schema objects");
+        count > 0
+    }
+
+    /// Waits, bounded, until `path` has recorded `count` pre-lock version reads.
+    ///
+    /// This is the synchronization the race tests use: it proves the openers they spawned have read
+    /// the version *before* the competing writer commits, so the interleaving under test is forced
+    /// rather than hoped for. The bound turns "the open never got that far" into a failure instead of
+    /// a hang.
+    fn wait_for_version_reads(path: &Path, count: usize) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while observations::version_reads(path) < count {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no open read the schema version of {} {count} time(s); the race could not be forced",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn a_failed_late_step_rolls_the_whole_upgrade_back() {
+        // The unit of rollback is the upgrade, not the step. The fixture is a version 1 database with
+        // a real library in it, and the failure is planted where a hand-edited database would trip:
+        // V9 creates `authors`, so a table already holding that name makes the step that reaches it
+        // fail — after V2 to V8 have already been applied in this same open.
+        let (_dir, path) = a_version_1_database_with_a_position();
+        {
+            let connection = Connection::open(&path).expect("open raw");
+            connection
+                .execute_batch("CREATE TABLE authors (id INTEGER PRIMARY KEY)")
+                .expect("plant the collision the V9 step will hit");
+        }
+
+        let error = Store::open(&path).expect_err("the upgrade must fail on the planted collision");
+        assert!(
+            matches!(error, MirkError::Storage(_)),
+            "a failed migration must surface as a storage error, got {error:?}"
+        );
+
+        let connection = Connection::open(&path).expect("open raw");
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("read the version");
+        assert_eq!(
+            version, 1,
+            "a failed upgrade must leave the version it was opened with"
+        );
+
+        // Not one step of the upgrade survives, including the ones that had already run when V9
+        // failed. Each assertion names the step it belongs to.
+        assert!(
+            !schema_object_exists(&connection, "index", "idx_folders_path_unique"),
+            "the V2 folder index was applied before the failure and must be rolled back"
+        );
+        assert!(
+            !schema_object_exists(&connection, "table", "settings"),
+            "the V3 settings table was applied before the failure and must be rolled back"
+        );
+        assert!(
+            !column_exists(&connection, "progress", "read_at").expect("ask about read_at"),
+            "the V4 column must be rolled back"
+        );
+        assert!(
+            !column_exists(&connection, "documents", "user_title").expect("ask about user_title"),
+            "the V5 column must be rolled back"
+        );
+        assert!(
+            !column_exists(&connection, "documents", "cover_page").expect("ask about cover_page"),
+            "the V6 column must be rolled back"
+        );
+        assert!(
+            !column_exists(&connection, "documents", "user_author").expect("ask about user_author"),
+            "the V7 column must be rolled back"
+        );
+        assert!(
+            !column_exists(&connection, "suggestions", "decision").expect("ask about decision"),
+            "the V8 column must be rolled back"
+        );
+        assert!(
+            !schema_object_exists(&connection, "table", "document_authors"),
+            "the V9 tables must not survive the step that failed"
+        );
+
+        // Every row the older build recorded is still exactly where it was.
+        let (folder, recursive, enabled): (String, i64, i64) = connection
+            .query_row("SELECT path, recursive, enabled FROM folders", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .expect("the watch must survive the failed upgrade");
+        assert_eq!(folder, "/library/watched");
+        assert_eq!((recursive, enabled), (1, 1));
+        let (document, title, pages): (String, Option<String>, Option<i64>) = connection
+            .query_row("SELECT path, title, pages FROM documents", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .expect("the document must survive the failed upgrade");
+        assert_eq!(document, "/library/watched/read.pdf");
+        assert_eq!(title.as_deref(), Some("A document the older build knew"));
+        assert_eq!(pages, Some(120));
+        let (page, total): (i64, Option<i64>) = connection
+            .query_row("SELECT page, total FROM progress", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .expect("the position must survive the failed upgrade");
+        assert_eq!((page, total), (5, Some(120)));
+
+        // The collision itself is outside the transaction — it was planted by someone else — and the
+        // rollback must not have taken it with it.
+        assert!(
+            schema_object_exists(&connection, "table", "authors"),
+            "the planted table is not part of the upgrade and must be left alone"
+        );
+        drop(connection);
+
+        // And the rolled-back database is still a database an upgrade can be retried on: with the
+        // obstacle gone, the very next open applies every step and keeps the library.
+        {
+            let connection = Connection::open(&path).expect("open raw");
+            connection
+                .execute_batch("DROP TABLE authors")
+                .expect("remove the obstacle");
+        }
+        let store = Store::open(&path).expect("the retry must succeed");
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+        let library = store.library().expect("list the library");
+        assert_eq!(library.len(), 1);
+        assert_eq!(
+            library[0].document.document.path,
+            PathBuf::from("/library/watched/read.pdf")
+        );
+        assert_eq!(
+            library[0]
+                .progress
+                .as_ref()
+                .expect("the position survived")
+                .page,
+            5
+        );
+    }
+
+    #[test]
+    fn two_openers_at_once_migrate_an_old_database_exactly_once() {
+        // Two real opens of the same version 1 database, serialized by SQLite's own write lock. A
+        // third connection holds that lock and writes nothing, which is what makes the test
+        // deterministic: both openers read version 1 and then queue behind it, and only once both
+        // have read is the lock released. The winner migrates; the loser must find the work done
+        // rather than replay it — a replay fails on the V2 index it would create twice.
+        let (_dir, path) = a_version_1_database_with_a_position();
+
+        let gate = Connection::open(&path).expect("open raw");
+        gate.execute_batch("BEGIN IMMEDIATE")
+            .expect("take the write lock");
+
+        let openers: Vec<_> = (0..2)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || Store::open(&path))
+            })
+            .collect();
+
+        wait_for_version_reads(&path, 2);
+        gate.execute_batch("COMMIT")
+            .expect("release the write lock");
+
+        for opener in openers {
+            let store = join_bounded(opener, "one of the competing openers").expect(
+                "both openers must succeed: the second must re-read the version, not replay",
+            );
+            assert_eq!(
+                store.schema_version().expect("schema version"),
+                Store::CURRENT_SCHEMA_VERSION
+            );
+        }
+
+        // Exactly one upgrade happened, and it kept everything the older build recorded.
+        let store = Store::open(&path).expect("reopen the migrated database");
+        let folders = store.folders().expect("list folders");
+        assert_eq!(folders.len(), 1, "the watch was recorded once, not twice");
+        let library = store.library().expect("list the library");
+        assert_eq!(library.len(), 1);
+        assert_eq!(
+            library[0]
+                .progress
+                .as_ref()
+                .expect("the position survived")
+                .page,
+            5
+        );
+    }
+
+    #[test]
+    fn an_open_that_waited_for_the_write_lock_uses_the_version_it_finds_there() {
+        // The version a waiting open read before the lock is stale by the time it gets in. Here the
+        // shape is already current and only the stamp is behind, so a replay of V9 fails on the
+        // `user_author` column that is already gone: an open that did not re-read cannot finish.
+        let (_dir, path) = a_current_database_stamped_8();
+        // The fixture's own open read the version once; the test counts from here.
+        observations::reset(&path);
+
+        let competitor = Connection::open(&path).expect("open raw");
+        competitor
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("take the write lock");
+
+        let opener = {
+            let path = path.clone();
+            std::thread::spawn(move || Store::open(&path))
+        };
+
+        wait_for_version_reads(&path, 1);
+
+        // The competing writer finishes the upgrade it was already running and records the version
+        // while the opener is queued behind it.
+        competitor
+            .pragma_update(
+                None,
+                "user_version",
+                i64::from(Store::CURRENT_SCHEMA_VERSION),
+            )
+            .expect("record the version the upgrade reached");
+        competitor
+            .execute_batch("COMMIT")
+            .expect("release the lock");
+
+        let store = join_bounded(opener, "the waiting opener").expect(
+            "the waiting open must use the version it finds under the lock, not the stale one",
+        );
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+        // Nothing was rewritten: the reopen found the database current and left it alone.
+        assert_eq!(
+            store.get_setting("language").expect("read the setting"),
+            Some("es".to_string())
+        );
+        assert_eq!(
+            observations::version_reads(&path),
+            1,
+            "the fast path took no further version read: the re-read happens inside the lock"
+        );
+    }
+
+    #[test]
+    fn a_current_database_can_be_opened_while_a_writer_holds_the_lock() {
+        // Opening a current store takes no write reservation. If it took one it would have to wait out
+        // the connection's own busy timeout behind the lock below and then fail instead of opening.
+        let (_dir, path) = a_current_database_stamped_8();
+        {
+            let connection = Connection::open(&path).expect("open raw");
+            connection
+                .pragma_update(
+                    None,
+                    "user_version",
+                    i64::from(Store::CURRENT_SCHEMA_VERSION),
+                )
+                .expect("restore the current stamp");
+        }
+
+        let writer = Connection::open(&path).expect("open raw");
+        writer
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("take the write lock");
+
+        let store =
+            Store::open(&path).expect("a current database must open without the write lock");
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            store.get_setting("language").expect("read the setting"),
+            Some("es".to_string())
+        );
+        drop(store);
+
+        writer.execute_batch("ROLLBACK").expect("release the lock");
+
+        // And the store the write is meant for still writes, once the lock is free.
+        let store = Store::open(&path).expect("reopen");
+        store
+            .set_setting("language", "en")
+            .expect("write after the lock is gone");
+        assert_eq!(
+            store.get_setting("language").expect("read the setting"),
+            Some("en".to_string())
+        );
+    }
+
+    // --- The connection's own contention settings survive an upgrade ---------------------------
+
+    #[test]
+    fn a_successful_upgrade_restores_the_busy_timeout_it_found() {
+        // The upgrade lengthens the connection's busy timeout so it can wait for a competing writer.
+        // What it must not do is leave a different value behind: a store that had to be migrated has
+        // to contend exactly like one that was already current, and the value is read from the
+        // connection rather than assumed to be any particular default.
+        let (_dir, path) = a_version_1_database_with_a_position();
+        let mut connection = Connection::open(&path).expect("open raw");
+        connection
+            .busy_timeout(Duration::from_millis(1234))
+            .expect("set a timeout that is neither zero nor the driver's default");
+
+        upgrade(&mut connection).expect("the upgrade must succeed");
+
+        assert_eq!(
+            busy_timeout_millis(&connection),
+            1234,
+            "a successful upgrade must put the connection's own busy timeout back"
+        );
+    }
+
+    #[test]
+    fn a_failed_upgrade_restores_the_busy_timeout_it_found() {
+        // The same promise on the path that fails: the open is refused, and the connection it was
+        // refused on is left as it was found rather than holding the upgrade's longer wait.
+        let (_dir, path) = a_version_1_database_with_a_position();
+        {
+            let connection = Connection::open(&path).expect("open raw");
+            connection
+                .execute_batch("CREATE TABLE authors (id INTEGER PRIMARY KEY)")
+                .expect("plant the collision the V9 step will hit");
+        }
+        let mut connection = Connection::open(&path).expect("open raw");
+        connection
+            .busy_timeout(Duration::from_millis(1234))
+            .expect("set a timeout that is neither zero nor the driver's default");
+
+        let error = upgrade(&mut connection).expect_err("the upgrade must fail on the collision");
+        assert!(
+            matches!(error, MirkError::Storage(_)),
+            "the failure must reach the caller as a storage error, got {error:?}"
+        );
+
+        assert_eq!(
+            busy_timeout_millis(&connection),
+            1234,
+            "a failed upgrade must put the connection's own busy timeout back"
+        );
+    }
+
+    #[test]
+    fn an_upgrade_that_finds_the_work_done_restores_the_busy_timeout_it_found() {
+        // The no-op path: an upgrade whose write lock finds the database already current — what an
+        // open sees when a competing writer finished while it waited. It applies nothing and still
+        // owes the connection its own timeout back.
+        let (_dir, path) = a_current_database();
+        let mut connection = Connection::open(&path).expect("open raw");
+        connection
+            .busy_timeout(Duration::from_millis(1234))
+            .expect("set a timeout that is neither zero nor the driver's default");
+
+        upgrade(&mut connection).expect("an upgrade with nothing to do succeeds");
+
+        assert_eq!(
+            busy_timeout_millis(&connection),
+            1234,
+            "an upgrade that applied nothing must still put the connection's timeout back"
+        );
+    }
+
+    #[test]
+    fn an_upgraded_store_contends_exactly_like_a_current_one() {
+        // The regression this pins: the upgrade overrides the busy timeout and used to restore a
+        // guessed value, so a fresh or upgraded store ended up contending differently from a store
+        // that was already current. Both are compared with an untouched connection, so the assertion
+        // is "the driver's value survived", not "the value is any particular constant".
+        let (_fresh_dir, fresh_path) = a_fresh_database_path();
+        let fresh = Store::open(&fresh_path).expect("migrate a fresh database");
+        let (_current_dir, current_path) = a_current_database();
+        let current = Store::open(&current_path).expect("open a current database");
+        let untouched = Connection::open_in_memory().expect("open an untouched connection");
+
+        assert_eq!(
+            busy_timeout_millis(&fresh.connection),
+            busy_timeout_millis(&current.connection),
+            "an upgraded store and a current store must contend the same way"
+        );
+        assert_eq!(
+            busy_timeout_millis(&fresh.connection),
+            busy_timeout_millis(&untouched),
+            "the upgrade must keep the busy timeout the driver opened the connection with"
+        );
+
+        // And the write path still reports contention instead of retrying it away: with another
+        // connection holding the write lock, the store's own write is refused. The wait is shortened
+        // for this check alone; what the assertions above pin is that no migration wait was left
+        // behind to lengthen it.
+        for (what, store, path) in [
+            ("the upgraded store", &fresh, &fresh_path),
+            ("the current store", &current, &current_path),
+        ] {
+            store
+                .connection
+                .busy_timeout(Duration::from_millis(10))
+                .expect("shorten the wait so the check is quick");
+            let gate = Connection::open(path).expect("open raw");
+            gate.execute_batch("BEGIN IMMEDIATE")
+                .expect("hold the write lock");
+
+            let outcome = store.set_setting("language", "en");
+
+            assert!(
+                matches!(outcome, Err(MirkError::Storage(_))),
+                "{what} must report a busy database rather than retrying it away: {outcome:?}"
+            );
+            gate.execute_batch("ROLLBACK").expect("release the lock");
+        }
     }
 
     /// A watched folder whose single document has a position and an open event, for the removal tests
