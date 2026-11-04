@@ -52,11 +52,13 @@
 //! cannot say whether anybody read, and `mirk` cannot vouch for time it did not observe (D3), so no
 //! external-viewer session is stored here.
 //!
-//! **The schema measures nothing and this build records nothing yet.** `active_ms` and `visible_ms`
-//! are durations the reader will hand over already measured under the owner's rule (L4): only
-//! visible-and-focused time counts, paused after 20 minutes without interaction. The tables exist as
-//! the home for those facts; recording and capture are deliberately absent from this build, so no
-//! reading fact is written anywhere and none of the timing rules above is implemented.
+//! **The schema measures nothing; this build only stores what the reader measures.** `active_ms`
+//! and `visible_ms` are durations the reader will hand over already measured under the owner's rule
+//! (L4): only visible-and-focused time counts, paused after 20 minutes without interaction. The
+//! tables exist as the home for those facts, and [`Store::record_reading_session`] writes a session
+//! exactly as given. Capture is deliberately absent from this build: no reader observes a session
+//! yet and nothing calls the recording method, so no reading fact is written in production and none
+//! of the timing rules above is implemented.
 //!
 //! **A page visit keeps its own moment and its session.** `observed_at` is when the page was on
 //! screen and `session_id` is the session it happened in, so the read order is chronology rather
@@ -132,10 +134,13 @@
 //!   [`mirk_core::Document`] value type does not carry them yet, so [`Store::upsert_document`]
 //!   leaves those columns unset for the scanner (T6) to fill;
 //! - reading facts: the `reading_sessions` and `page_visits` schema and its compatibility guard are
-//!   present, but nothing writes or reads a session or a visit yet. Capture arrives with the reader
-//!   that observes it, and with it the `source`, `viewer_id` and `ended_reason` columns the roadmap
-//!   sketched: 0.2.0 stores only first-party reader sessions, so a `source` column could hold one
-//!   constant, `viewer_id` would presume the still-open answer to D3, and an `ended_reason`
+//!   present, and [`Store::record_reading_session`] / [`Store::reading_sessions_for_document`] store
+//!   and return first-party sessions through [`ReadingSession`] and [`StoredReadingSession`]. Capture
+//!   is still absent: nothing observes a session, and no page visit is written or read. Capture
+//!   arrives with the reader that observes it, and with it the `source`, `viewer_id` and
+//!   `ended_reason` columns the roadmap sketched: 0.2.0 stores only first-party reader sessions, so
+//!   a `source` column could hold one constant, `viewer_id` would presume the still-open answer to
+//!   D3, and an `ended_reason`
 //!   vocabulary has no owner decision behind it yet;
 //! - path normalisation: paths are stored as opaque UTF-8 and are **never** Unicode-normalised
 //!   (risk R7), so `path_normalized` deliberately holds the same bytes as `path`.
@@ -748,6 +753,52 @@ pub struct LibraryEntry {
     pub progress: Option<StoredProgress>,
     /// Unix seconds when `progress` was recorded, or [`None`] alongside a [`None`] progress.
     pub progress_recorded_at: Option<i64>,
+}
+
+/// One reading session in `mirk`'s own reader, as storage keeps it (F1 part 1).
+///
+/// A session is a fact about **reading**, not about a process: `open_events` already records that
+/// some viewer had a document open, and it cannot say whether anybody read. Only the reader writes
+/// this type — an external viewer's session would be time `mirk` cannot vouch for (D3), and there is
+/// no such row here.
+///
+/// `started_at` and `ended_at` are the session's wall-clock span in Unix seconds; `active_ms` is the
+/// **visible-and-focused** milliseconds inside that span, as the reader measured them. The store
+/// derives neither from the other: the owner's rule (L4 — pause after 20 minutes without
+/// interaction) is a measurement rule, so a session that idled keeps its active time, which is
+/// smaller than the span.
+///
+/// Both timestamps are UTC wall-clock readings stored verbatim. The clock can be corrected or moved
+/// between them, so the store claims nothing about the span beyond the two numbers: it is not a
+/// monotonic interval, and `active_ms` is not required to fit inside it. See the crate documentation
+/// for the time policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadingSession {
+    /// The `documents.id` the session read.
+    pub doc_id: i64,
+    /// Unix seconds when the session started, as the reader's clock read it.
+    pub started_at: i64,
+    /// Unix seconds when it ended, as the reader's clock read it. The clock can be corrected
+    /// backwards in between, so this may be earlier than [`ReadingSession::started_at`].
+    pub ended_at: i64,
+    /// Visible-and-focused milliseconds actually spent reading; never negative.
+    pub active_ms: i64,
+}
+
+/// One reading session as it was stored: the row's stable id plus the facts it holds (F1 part 1).
+///
+/// The id is the provenance a page visit names when it says which session it happened in, so a read
+/// has to return it: a caller cannot attribute a visit to a session it can only re-insert. It is
+/// assigned by the database on insert and is not a field of [`ReadingSession`], so a caller cannot
+/// choose or forge it, and the same row keeps the same id across a close and reopen. It is stable
+/// for the life of the row: deleting the document takes its sessions with it, and a deleted
+/// session's id may be reused by a later row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredReadingSession {
+    /// The `reading_sessions.id` primary key, assigned by the database on insert.
+    pub id: i64,
+    /// The session facts exactly as they were recorded.
+    pub session: ReadingSession,
 }
 
 /// A watched folder as stored.
@@ -1565,6 +1616,145 @@ impl Store {
             );
         }
         Ok(progress)
+    }
+
+    /// Records one completed reading session and returns the new row id (F1 part 1).
+    ///
+    /// **The store validates, it does not measure.** `active_ms` is stored exactly as given: the
+    /// visible-and-focused rule (L4) belongs to the reader, and a store that recomputed it would
+    /// disagree with the thing that observed it. What is refused is what cannot be a fact: a
+    /// `doc_id` no document carries (nothing to attach the session to), a negative time (Unix
+    /// seconds begin at the epoch), or a negative `active_ms`. A refusal writes nothing.
+    ///
+    /// **A backwards wall-clock span is stored as given.** `started_at` and `ended_at` are two UTC
+    /// readings, and the clock can be corrected backwards between them (an NTP correction, a manual
+    /// change, a suspend and resume). Elapsed reading time is not `ended_at - started_at`; it is the
+    /// separately measured `active_ms`, so this build deliberately does not require `ended_at` to be
+    /// at or after `started_at`, does not normalise the span, and never compares `active_ms` with
+    /// it. Both readings are kept verbatim, because refusing an honest session would lose a fact
+    /// that cannot be recorded again.
+    ///
+    /// **The id is the database's to assign.** [`ReadingSession`] carries no id field, so a caller
+    /// cannot choose one; the returned id is the row's stable primary key, and
+    /// [`Store::reading_sessions_for_document`] returns it with the facts.
+    ///
+    /// **The document check is not atomic with the insert.** When the document is already absent,
+    /// the pre-check refuses with [`MirkError::InvalidInput`] naming `document`. A concurrent
+    /// deletion between that check and the insert — a [`Store::forget_folder`] running in another
+    /// connection — is instead refused by the foreign key, which surfaces as
+    /// [`MirkError::Storage`]. This build does not promise `InvalidInput` for that race: the two
+    /// refusals are different events, and the storage error is SQLite's constraint failure, not a
+    /// stable typed outcome. Either way the refused write stores nothing.
+    pub fn record_reading_session(&self, session: &ReadingSession) -> Result<i64, MirkError> {
+        self.require_document(session.doc_id)?;
+        if session.started_at < 0 {
+            return Err(invalid_input(
+                "started_at",
+                session.started_at,
+                "Unix seconds at or after the epoch",
+            ));
+        }
+        if session.ended_at < 0 {
+            return Err(invalid_input(
+                "ended_at",
+                session.ended_at,
+                "Unix seconds at or after the epoch",
+            ));
+        }
+        if session.active_ms < 0 {
+            return Err(invalid_input(
+                "active_ms",
+                session.active_ms,
+                "a non-negative duration in milliseconds",
+            ));
+        }
+
+        self.connection
+            .execute(
+                "INSERT INTO reading_sessions (doc_id, started_at, ended_at, active_ms) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    session.doc_id,
+                    session.started_at,
+                    session.ended_at,
+                    session.active_ms
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(self.connection.last_insert_rowid())
+    }
+
+    /// Every reading session stored for a document, in the order of their recorded start times.
+    ///
+    /// Each item carries the row's stable [`StoredReadingSession::id`] together with its facts, so a
+    /// caller can attribute a later page visit to a session that already exists instead of having to
+    /// insert it again. Ordering is by `started_at` and then by row id, so two sessions that began
+    /// in the same second still come back in a stable order. That is ordering by the recorded wall
+    /// clock, not a claim that the clock was monotonic. An id no document carries is an empty answer
+    /// rather than an error: nothing was ever recorded for it.
+    pub fn reading_sessions_for_document(
+        &self,
+        doc_id: i64,
+    ) -> Result<Vec<StoredReadingSession>, MirkError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, doc_id, started_at, ended_at, active_ms FROM reading_sessions \
+                 WHERE doc_id = ?1 ORDER BY started_at, id",
+            )
+            .map_err(storage_error)?;
+
+        let rows = statement
+            .query_map(params![doc_id], |row| {
+                Ok(StoredReadingSession {
+                    id: row.get(0)?,
+                    session: ReadingSession {
+                        doc_id: row.get(1)?,
+                        started_at: row.get(2)?,
+                        ended_at: row.get(3)?,
+                        active_ms: row.get(4)?,
+                    },
+                })
+            })
+            .map_err(storage_error)?;
+
+        let mut sessions = Vec::new();
+        for row in rows {
+            sessions.push(row.map_err(storage_error)?);
+        }
+        Ok(sessions)
+    }
+
+    /// Refuses a document id this store does not hold, as an invalid argument naming the field.
+    ///
+    /// The foreign key would refuse the row anyway; asking first is what turns the refusal into an
+    /// invalid argument that names the field, instead of a storage failure that sends whoever reads
+    /// the log looking at the disk. It also keeps the refusal free of side effects.
+    ///
+    /// **This check is not a guarantee against concurrent deletion.** It answers for the moment it
+    /// runs. A document deleted before the insert — by a [`Store::forget_folder`] in another
+    /// connection — is caught here as [`MirkError::InvalidInput`]; a deletion that lands between
+    /// this check and the insert is caught by the foreign key as [`MirkError::Storage`]. Neither
+    /// refusal writes a row, and this build does not claim one stable error type across that race.
+    fn require_document(&self, doc_id: i64) -> Result<(), MirkError> {
+        let known = self
+            .connection
+            .query_row(
+                "SELECT 1 FROM documents WHERE id = ?1",
+                params![doc_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(storage_error)?;
+
+        if known.is_none() {
+            return Err(invalid_input(
+                "document",
+                doc_id,
+                "the id of a document this store holds",
+            ));
+        }
+        Ok(())
     }
 
     /// Records a watched folder and returns its row id.
@@ -3393,6 +3583,23 @@ fn unix_now() -> i64 {
 
 fn storage_error(error: rusqlite::Error) -> MirkError {
     MirkError::Storage(error.to_string())
+}
+
+/// A caller-supplied value this build cannot act on, named as the interface names it.
+///
+/// One spelling for the refusals in this crate, so the field, the value that arrived and what is
+/// accepted cannot drift apart between callers — and so an invalid argument is never reported as a
+/// storage failure ([`MirkError::InvalidInput`] explains why that distinction matters).
+fn invalid_input(
+    field: &'static str,
+    value: impl std::fmt::Display,
+    expected: &'static str,
+) -> MirkError {
+    MirkError::InvalidInput {
+        field,
+        value: value.to_string(),
+        expected: expected.to_string(),
+    }
 }
 
 /// The one seam the migration-race tests have, compiled into test builds only.

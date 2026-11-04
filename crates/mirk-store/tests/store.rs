@@ -12,7 +12,7 @@ use mirk_core::{
 };
 use mirk_store::{
     adopt_legacy_data_dir, covering_folder, database_file_in, database_path, user_data_dir_for,
-    AuthorEdit, Store, SuggestionDecision, WatchedFolder,
+    AuthorEdit, ReadingSession, Store, StoredReadingSession, SuggestionDecision, WatchedFolder,
 };
 
 fn temp_db() -> (tempfile::TempDir, PathBuf) {
@@ -4739,6 +4739,409 @@ fn removing_a_watched_folder_takes_the_reading_facts_of_its_documents_with_it() 
         })
         .expect("the surviving visit belongs to the document outside the watch"),
         outside
+    );
+}
+
+// --- F1 part 1: the typed store API for first-party reading sessions --------------------------
+//
+// The schema tests above write through SQLite directly, because the constraints must hold for a
+// writer that bypassed `Store`. These tests are the other boundary: the public store interface the
+// reader will call, which must refuse what cannot be a fact before it reaches the database, and
+// must store the two wall-clock readings exactly as reported.
+
+#[test]
+fn a_stored_session_returns_its_stable_id_and_facts_across_a_reopen() {
+    // A session's id is the provenance a page visit will name, so the read must return it. It is
+    // assigned on insert and never chosen by the caller; a close and reopen must not change it.
+    let (_dir, path) = temp_db();
+    let read;
+    let other;
+    let later_id;
+    let earlier_id;
+    let same_second_id;
+    let other_id;
+    let later = ReadingSession {
+        doc_id: 0,
+        started_at: 1_700_000_600,
+        ended_at: 1_700_001_200,
+        active_ms: 480_000,
+    };
+    let earlier = ReadingSession {
+        doc_id: 0,
+        started_at: 1_700_000_000,
+        ended_at: 1_700_000_300,
+        active_ms: 240_000,
+    };
+    let same_second = ReadingSession {
+        doc_id: 0,
+        started_at: 1_700_000_000,
+        ended_at: 1_700_000_100,
+        active_ms: 10_000,
+    };
+    let other_session = ReadingSession {
+        doc_id: 0,
+        started_at: 1_700_000_100,
+        ended_at: 1_700_000_200,
+        active_ms: 100_000,
+    };
+    {
+        let store = Store::open(&path).expect("open");
+        read = store
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 44, ino: 1 },
+            ))
+            .expect("insert");
+        other = store
+            .upsert_document(&document(
+                "/library/other.pdf",
+                FileId::Posix { dev: 44, ino: 2 },
+            ))
+            .expect("insert");
+
+        // Written newest first, and two sessions start in the same second, so the read order can
+        // only be the documented (started_at, id) order.
+        later_id = store
+            .record_reading_session(&ReadingSession {
+                doc_id: read,
+                ..later.clone()
+            })
+            .expect("record the later session");
+        earlier_id = store
+            .record_reading_session(&ReadingSession {
+                doc_id: read,
+                ..earlier.clone()
+            })
+            .expect("record the earlier session");
+        same_second_id = store
+            .record_reading_session(&ReadingSession {
+                doc_id: read,
+                ..same_second.clone()
+            })
+            .expect("record the same-second session");
+        other_id = store
+            .record_reading_session(&ReadingSession {
+                doc_id: other,
+                ..other_session.clone()
+            })
+            .expect("record another document's session");
+    }
+
+    let store = Store::open(&path).expect("reopen");
+    assert_eq!(
+        store.reading_sessions_for_document(read).expect("read"),
+        vec![
+            StoredReadingSession {
+                id: earlier_id,
+                session: ReadingSession {
+                    doc_id: read,
+                    ..earlier
+                },
+            },
+            StoredReadingSession {
+                id: same_second_id,
+                session: ReadingSession {
+                    doc_id: read,
+                    ..same_second
+                },
+            },
+            StoredReadingSession {
+                id: later_id,
+                session: ReadingSession {
+                    doc_id: read,
+                    ..later
+                },
+            },
+        ],
+        "every returned id is the one insertion returned, the same-second tie keeps insertion order, \
+         and each session keeps its own facts across a reopen"
+    );
+    assert_eq!(
+        store.reading_sessions_for_document(other).expect("read"),
+        vec![StoredReadingSession {
+            id: other_id,
+            session: ReadingSession {
+                doc_id: other,
+                ..other_session
+            },
+        }],
+        "another document's session is filtered out and keeps its own id"
+    );
+    assert!(store
+        .reading_sessions_for_document(9_999)
+        .expect("read")
+        .is_empty());
+
+    // Ids are the database's to assign, are stable, and are distinct per row.
+    let mut ids = vec![earlier_id, same_second_id, later_id, other_id];
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 4, "each stored session has its own stable id");
+}
+
+#[test]
+fn a_reading_session_round_trips_in_a_deterministic_order() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let read = store
+        .upsert_document(&document(
+            "/library/read.pdf",
+            FileId::Posix { dev: 40, ino: 1 },
+        ))
+        .expect("insert");
+    let other = store
+        .upsert_document(&document(
+            "/library/other.pdf",
+            FileId::Posix { dev: 40, ino: 2 },
+        ))
+        .expect("insert");
+
+    // Written newest first, so the read order cannot be the write order. The two sessions that
+    // start in the same second pin the tie-break: row id, so a repeated read never reorders them.
+    let later = ReadingSession {
+        doc_id: read,
+        started_at: 1_700_000_600,
+        ended_at: 1_700_001_200,
+        active_ms: 480_000,
+    };
+    let earlier = ReadingSession {
+        doc_id: read,
+        started_at: 1_700_000_000,
+        ended_at: 1_700_000_300,
+        active_ms: 240_000,
+    };
+    let same_second = ReadingSession {
+        doc_id: read,
+        started_at: 1_700_000_000,
+        ended_at: 1_700_000_100,
+        active_ms: 10_000,
+    };
+    let other_session = ReadingSession {
+        doc_id: other,
+        started_at: 1_700_000_100,
+        ended_at: 1_700_000_200,
+        active_ms: 100_000,
+    };
+    let later_id = store
+        .record_reading_session(&later)
+        .expect("record the later session");
+    let earlier_id = store
+        .record_reading_session(&earlier)
+        .expect("record the earlier session");
+    let same_second_id = store
+        .record_reading_session(&same_second)
+        .expect("record the same-second session");
+    let other_id = store
+        .record_reading_session(&other_session)
+        .expect("record another document's session");
+
+    assert_eq!(
+        store.reading_sessions_for_document(read).expect("read"),
+        vec![
+            StoredReadingSession {
+                id: earlier_id,
+                session: earlier,
+            },
+            StoredReadingSession {
+                id: same_second_id,
+                session: same_second,
+            },
+            StoredReadingSession {
+                id: later_id,
+                session: later,
+            },
+        ],
+        "sessions are ordered by start time and then by row id, each keeping its own values"
+    );
+    assert_eq!(
+        store.reading_sessions_for_document(other).expect("read"),
+        vec![StoredReadingSession {
+            id: other_id,
+            session: other_session,
+        }],
+        "one document's sessions never appear under another"
+    );
+    // An id no document carries is an empty answer, not an error: nothing was ever recorded there.
+    assert!(store
+        .reading_sessions_for_document(9_999)
+        .expect("read")
+        .is_empty());
+}
+
+#[test]
+fn a_session_whose_wall_clock_went_backwards_round_trips_through_the_store() {
+    // The UTC clock can be corrected backwards between the two readings: an NTP correction, a
+    // manual change, a suspend and resume. Elapsed reading time is not `ended_at - started_at`, so
+    // the store must keep an honest backwards span rather than reject it or normalise it.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let read = store
+        .upsert_document(&document(
+            "/library/read.pdf",
+            FileId::Posix { dev: 41, ino: 1 },
+        ))
+        .expect("insert");
+
+    let corrected_back = ReadingSession {
+        doc_id: read,
+        started_at: 1_700_000_500,
+        ended_at: 1_700_000_100,
+        active_ms: 90_000,
+    };
+    let backwards_to_the_epoch = ReadingSession {
+        doc_id: read,
+        started_at: 200,
+        ended_at: 100,
+        active_ms: 0,
+    };
+    let corrected_back_id = store
+        .record_reading_session(&corrected_back)
+        .expect("a backwards correction is a fact, not a violation");
+    let backwards_to_the_epoch_id = store
+        .record_reading_session(&backwards_to_the_epoch)
+        .expect("a span ending before it started is still two recorded readings");
+
+    assert_eq!(
+        store.reading_sessions_for_document(read).expect("read"),
+        vec![
+            StoredReadingSession {
+                id: backwards_to_the_epoch_id,
+                session: backwards_to_the_epoch,
+            },
+            StoredReadingSession {
+                id: corrected_back_id,
+                session: corrected_back,
+            },
+        ],
+        "both readings are stored verbatim and the measured active time is never derived from them"
+    );
+}
+
+#[test]
+fn an_invalid_session_is_refused_without_touching_stored_facts() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let read = store
+        .upsert_document(&document(
+            "/library/read.pdf",
+            FileId::Posix { dev: 42, ino: 1 },
+        ))
+        .expect("insert");
+
+    let valid = ReadingSession {
+        doc_id: read,
+        started_at: 1_700_000_000,
+        ended_at: 1_700_000_300,
+        active_ms: 240_000,
+    };
+    let valid_id = store
+        .record_reading_session(&valid)
+        .expect("record a valid session");
+
+    let refused_cases = [
+        (
+            ReadingSession {
+                doc_id: read + 1,
+                ..valid.clone()
+            },
+            "document",
+        ),
+        (
+            ReadingSession {
+                started_at: -1,
+                ..valid.clone()
+            },
+            "started_at",
+        ),
+        (
+            ReadingSession {
+                ended_at: -1,
+                ..valid.clone()
+            },
+            "ended_at",
+        ),
+        (
+            ReadingSession {
+                active_ms: -1,
+                ..valid.clone()
+            },
+            "active_ms",
+        ),
+    ];
+    for (session, field) in refused_cases {
+        let refused = store.record_reading_session(&session);
+        assert!(
+            matches!(&refused, Err(MirkError::InvalidInput { field: named, .. }) if *named == field),
+            "`{session:?}` must be refused as `{field}`, got {refused:?}"
+        );
+    }
+
+    // Nothing refused was written, and the one valid row is exactly as it was.
+    assert_eq!(row_count(&path, "reading_sessions"), 1);
+    assert_eq!(
+        store.reading_sessions_for_document(read).expect("read"),
+        vec![StoredReadingSession {
+            id: valid_id,
+            session: valid,
+        }]
+    );
+}
+
+#[test]
+fn recording_a_session_leaves_existing_document_and_progress_reads_unchanged() {
+    let (_dir, path) = temp_db();
+    let read;
+    let progress;
+    let session_id;
+    {
+        let store = Store::open(&path).expect("open");
+        read = store
+            .upsert_document(&document(
+                "/library/read.pdf",
+                FileId::Posix { dev: 43, ino: 1 },
+            ))
+            .expect("insert");
+        progress = StoredProgress::new(3, Some(80), ProgressSource::Manual, Confidence::Manual);
+        store
+            .record_progress(read, &progress)
+            .expect("record a reading position");
+        session_id = store
+            .record_reading_session(&ReadingSession {
+                doc_id: read,
+                started_at: 1_700_000_000,
+                ended_at: 1_700_000_300,
+                active_ms: 240_000,
+            })
+            .expect("record a session");
+
+        // Recording reading time is a fact of its own: it neither rewrites the position nor
+        // changes what the document and library reads report.
+        assert_eq!(
+            store.progress_for_document(read).expect("read progress"),
+            vec![progress.clone()]
+        );
+        assert_eq!(store.document_count().expect("count"), 1);
+        assert_eq!(store.library().expect("library").len(), 1);
+        assert!(store.document_by_id(read).expect("read").is_some());
+    }
+
+    // A session is a stored fact, so reopening the database keeps it and its id.
+    let store = Store::open(&path).expect("reopen");
+    assert_eq!(
+        store.reading_sessions_for_document(read).expect("read"),
+        vec![StoredReadingSession {
+            id: session_id,
+            session: ReadingSession {
+                doc_id: read,
+                started_at: 1_700_000_000,
+                ended_at: 1_700_000_300,
+                active_ms: 240_000,
+            },
+        }]
+    );
+    assert_eq!(
+        store.progress_for_document(read).expect("read progress"),
+        vec![progress]
     );
 }
 
