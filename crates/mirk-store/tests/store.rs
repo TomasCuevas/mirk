@@ -6203,5 +6203,5 @@ fn a_v12_stamp_without_the_reading_objects_is_refused_and_left_untouched() {
         ),
         other => panic!("a missing index must be a storage error, got {other:?}"),
     }
-    assert_eq!(raw_version(&index_path), 12);
+    assert_eq!(raw_version(&index_path), i64::from(Store::CURRENT_SCHEMA_VERSION));
 }

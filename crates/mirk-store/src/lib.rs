@@ -638,6 +638,59 @@ const SCHEMA_V12_PAGE_VISITS_DOC_INDEX: &str =
 const SCHEMA_V12_PAGE_VISITS_SESSION_INDEX: &str =
     "CREATE INDEX idx_page_visits_session ON page_visits (session_id, observed_at)";
 
+/// The V12 `reading_sessions` statement as a pre-release build wrote it, byte for byte.
+///
+/// It is the shipped one plus `CHECK (ended_at >= started_at)`, a rule the shipped shape dropped: the
+/// clock can be corrected backwards between a session's start and its end, and the store's time policy
+/// records the two readings rather than refusing the session. Taken from a development database a
+/// pre-release build stamped as current, which is why schema 13 exists.
+const PRERELEASE_V12_READING_SESSIONS: &str = "CREATE TABLE reading_sessions (
+    id         INTEGER PRIMARY KEY,
+    doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    started_at INTEGER NOT NULL,
+    ended_at   INTEGER NOT NULL,
+    active_ms  INTEGER NOT NULL,
+    -- The parent key of `page_visits`' composite foreign key: a visit and its session must name
+    -- the same document, and SQLite can only enforce that against a unique parent key.
+    UNIQUE (id, doc_id),
+    -- The storage class is part of the fact: an INTEGER column otherwise accepts text and reals,
+    -- and a typed read would then fail on a row the schema had already accepted.
+    CHECK (typeof(doc_id) = 'integer'),
+    CHECK (typeof(started_at) = 'integer'),
+    CHECK (typeof(ended_at) = 'integer'),
+    CHECK (typeof(active_ms) = 'integer'),
+    CHECK (started_at >= 0),
+    CHECK (ended_at >= 0),
+    CHECK (ended_at >= started_at),
+    CHECK (active_ms >= 0)
+)";
+
+/// The V12 `page_visits` statement as a pre-release build wrote it.
+///
+/// The only difference from the shipped statement is a comment. It is a difference anyway: a stored
+/// schema is compared as the text that was written, so a table this build did not write is a table this
+/// build cannot vouch for — and the shape is rebuilt either way.
+const PRERELEASE_V12_PAGE_VISITS: &str = "CREATE TABLE page_visits (
+    id          INTEGER PRIMARY KEY,
+    doc_id      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    session_id  INTEGER NOT NULL,
+    page        INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL,
+    visible_ms  INTEGER NOT NULL,
+    -- A visit's session must belong to the same document. One composite key instead of two loose
+    -- references, so a raw writer cannot attribute reading time to another document's session.
+    FOREIGN KEY (session_id, doc_id) REFERENCES reading_sessions(id, doc_id) ON DELETE CASCADE,
+    CHECK (typeof(doc_id) = 'integer'),
+    CHECK (typeof(session_id) = 'integer'),
+    CHECK (typeof(page) = 'integer'),
+    CHECK (typeof(observed_at) = 'integer'),
+    CHECK (typeof(visible_ms) = 'integer'),
+    -- `u32` in [`PageVisit::page`]: a page outside this range is one a typed read cannot represent.
+    CHECK (page BETWEEN 0 AND 4294967295),
+    CHECK (observed_at >= 0),
+    CHECK (visible_ms >= 0)
+)";
+
 /// The indexes V12 creates, with the statement this build writes for each.
 ///
 /// Kept as their own list because both the collision preflight and [`verify_reading_tables`] need
@@ -1076,7 +1129,7 @@ pub fn covering_folder<'a>(folders: &'a [WatchedFolder], path: &Path) -> Option<
 
 impl Store {
     /// The schema version this build creates and migrates to.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 12;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 13;
 
     /// Opens the database at `path`, creating parent directories and the file when needed, and
     /// brings it to [`Self::CURRENT_SCHEMA_VERSION`].
@@ -3151,6 +3204,13 @@ fn upgrade_locked(connection: &mut Connection, origin: Option<&Path>) -> Result<
         }
     }
 
+    if version < 13 {
+        // Schema 12 was revised before it shipped, so a database stamped 12 can carry the pre-release
+        // reading tables. They are replaced, not repaired: the difference is a CHECK constraint SQLite
+        // cannot drop. A pre-release table with facts in it is refused instead, inside this step.
+        replace_prerelease_reading_tables(&transaction, origin)?;
+    }
+
     // The step's own output is checked before the version stamp claims it: a database this build
     // would refuse to reopen must not be stamped as if it were current.
     verify_reading_tables(&transaction, origin)?;
@@ -3189,12 +3249,93 @@ fn upgrade_locked(connection: &mut Connection, origin: Option<&Path>) -> Result<
 /// transaction — and a writer that arrives while the upgrade is in progress waits for SQLite's busy
 /// timeout and then fails with a storage error instead of interleaving. A current database never
 /// reaches this path: it is validated in a read snapshot that takes no write reservation.
+/// Replaces the reading tables a pre-release build wrote under stamp 12 (schema 13).
+///
+/// Schema 12 was revised before it shipped. A development database can therefore carry the earlier shape
+/// under the same stamp: `reading_sessions` with `CHECK (ended_at >= started_at)`, and `page_visits`
+/// differing only in a comment — which counts, because a stored schema is compared as the text that was
+/// written, not as the intention behind it.
+///
+/// Neither difference can be edited in place, because SQLite cannot drop a CHECK constraint, so the two
+/// tables are dropped and recreated with [`SCHEMA_V12`]. That is only ever safe when they hold no rows,
+/// and that is the one condition this step refuses on: a pre-release database with sessions or visits in
+/// it is left exactly as it was and named, because those facts cannot be rebuilt by guessing. Any other
+/// shape is `verify_reading_tables`'s to refuse, with a message that lists every difference.
+fn replace_prerelease_reading_tables(
+    connection: &Connection,
+    origin: Option<&Path>,
+) -> Result<(), MirkError> {
+    let stored: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'reading_sessions'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    let stored_visits: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'page_visits'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(storage_error)?;
+
+    // Absent means the V12 step is about to create them in this build's shape. Both known statements
+    // have to match before anything is dropped: one table of the pre-release shape is a database this
+    // function does not recognise, and `verify_reading_tables` is where an unrecognised shape belongs.
+    let (Some(stored), Some(stored_visits)) = (stored, stored_visits) else {
+        return Ok(());
+    };
+    if !stored_definition_matches(&stored, PRERELEASE_V12_READING_SESSIONS)
+        || !stored_definition_matches(&stored_visits, PRERELEASE_V12_PAGE_VISITS)
+    {
+        return Ok(());
+    }
+
+    for table in ["page_visits", "reading_sessions"] {
+        let rows: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM \"{table}\""), [], |row| {
+                row.get(0)
+            })
+            .map_err(storage_error)?;
+        if rows > 0 {
+            let database = origin
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<in memory>".to_string());
+            return Err(MirkError::Storage(format!(
+                "the database at `{database}` carries the pre-release schema 12 reading tables, and                  `{table}` holds {rows} row(s). Replacing that shape would drop reading facts that                  cannot be rebuilt, so this build leaves the database exactly as it is. Open it with                  the build that wrote it."
+            )));
+        }
+    }
+
+    // `page_visits` references `reading_sessions`, so it has to go first; the indexes go with their
+    // tables but are dropped by name so a database that lost one mid-upgrade cannot wedge this step.
+    for statement in [
+        "DROP INDEX IF EXISTS idx_page_visits_session",
+        "DROP INDEX IF EXISTS idx_page_visits_doc",
+        "DROP INDEX IF EXISTS idx_reading_sessions_doc",
+        "DROP TABLE IF EXISTS page_visits",
+        "DROP TABLE IF EXISTS reading_sessions",
+    ] {
+        connection.execute_batch(statement).map_err(storage_error)?;
+    }
+    for statement in SCHEMA_V12 {
+        connection.execute_batch(statement).map_err(storage_error)?;
+    }
+    Ok(())
+}
+
 fn preflight_v12_collisions(
     connection: &Connection,
     origin: Option<&Path>,
 ) -> Result<(), MirkError> {
     let version = read_schema_version(connection)?;
-    if version >= Store::CURRENT_SCHEMA_VERSION {
+    // At 12 and above the reading objects are expected to exist: 12 is where they were created, so this
+    // check only guards the step that creates them for the first time.
+    if version >= 12 {
         return Ok(());
     }
 
@@ -5279,7 +5420,8 @@ mod tests {
                     "the refusal must name the object in the way: {message}"
                 );
                 assert!(
-                    message.contains("version 11") && message.contains("version 12"),
+                    message.contains("version 11")
+                        && message.contains(&format!("version {}", Store::CURRENT_SCHEMA_VERSION)),
                     "the refusal must name the version the database is at and the one it would claim: {message}"
                 );
                 assert!(
@@ -5435,6 +5577,84 @@ mod tests {
         let raw = Connection::open(&path).expect("open raw");
         assert_eq!(read_schema_version(&raw).expect("version"), 11);
         assert!(!schema_object_exists(&raw, "table", "page_visits"));
+    }
+
+    /// Brings a genuine version 11 database to the shape a pre-release build stamped as 12.
+    ///
+    /// Schema 12 was revised before it shipped, so this is what such a database actually holds: the two
+    /// tables created, then replaced by the earlier statements under the same stamp.
+    fn a_pre_release_version_12_database() -> (tempfile::TempDir, std::path::PathBuf) {
+        let (dir, path) = a_genuine_version_11_database(None);
+        let raw = Connection::open(&path).expect("open raw");
+        for statement in SCHEMA_V12 {
+            raw.execute_batch(statement).expect("create the shipped tables");
+        }
+        raw.execute_batch("DROP TABLE page_visits; DROP TABLE reading_sessions;")
+            .expect("drop them again");
+        raw.execute_batch(PRERELEASE_V12_READING_SESSIONS)
+            .expect("write the pre-release sessions");
+        raw.execute_batch(PRERELEASE_V12_PAGE_VISITS)
+            .expect("write the pre-release visits");
+        for index in [
+            SCHEMA_V12_READING_SESSIONS_INDEX,
+            SCHEMA_V12_PAGE_VISITS_DOC_INDEX,
+            SCHEMA_V12_PAGE_VISITS_SESSION_INDEX,
+        ] {
+            raw.execute_batch(index).expect("recreate the index");
+        }
+        raw.pragma_update(None, "user_version", 12i64)
+            .expect("stamp the pre-release version");
+        (dir, path)
+    }
+
+    #[test]
+    fn the_pre_release_schema_12_reading_tables_are_replaced_and_the_library_survives() {
+        let (_dir, path) = a_pre_release_version_12_database();
+
+        let store = Store::open(&path).expect("a pre-release database opens by being replaced");
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            Store::CURRENT_SCHEMA_VERSION
+        );
+        // The replacement is the shape this build writes, and the guard that refused it before agrees.
+        verify_reading_tables(&store.connection, None).expect("the replaced tables are this build's");
+        // The library itself is not part of the replacement.
+        assert!(
+            !store.library().expect("read the library").is_empty(),
+            "the documents the database held are still there"
+        );
+    }
+
+    #[test]
+    fn a_pre_release_table_with_facts_in_it_is_refused_instead_of_replaced() {
+        let (_dir, path) = a_pre_release_version_12_database();
+        {
+            let raw = Connection::open(&path).expect("open raw");
+            raw.execute(
+                "INSERT INTO reading_sessions (id, doc_id, started_at, ended_at, active_ms) \
+                 VALUES (1, 1, 1700000000, 1700000600, 480000)",
+                [],
+            )
+            .expect("record a pre-release session");
+        }
+
+        let error = Store::open(&path).expect_err("a pre-release session is not replaced");
+        let message = error.to_string();
+        assert!(
+            message.contains("cannot be rebuilt"),
+            "the refusal says why: {message}"
+        );
+
+        // And nothing happened to it: the stamp, the row and the shape are exactly as they were.
+        let raw = Connection::open(&path).expect("open raw");
+        let version: i64 = raw
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("read the version");
+        assert_eq!(version, 12);
+        let sessions: i64 = raw
+            .query_row("SELECT COUNT(*) FROM reading_sessions", [], |row| row.get(0))
+            .expect("count the sessions");
+        assert_eq!(sessions, 1);
     }
 
     #[test]
