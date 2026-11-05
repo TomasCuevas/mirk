@@ -17,7 +17,13 @@ mirk-core = { workspace = true }
 mirk-platform = { workspace = true }
 mirk-store = { workspace = true }
 mirk-scan = { workspace = true }
-tauri = { version = "2", features = ["tray-icon"] }
+# The one `open` that turns a library row's path into a handle needs flag constants that `std` does
+# not name: `O_NOFOLLOW` (never follow a link in the final component), `O_NONBLOCK` (a substituted
+# FIFO or device must not be able to block the open) and `O_NOCTTY` (a substituted terminal must not
+# become this process's controlling terminal). `libc` is already in `Cargo.lock` through `tauri` and
+# `rusqlite`, so no new crate enters the graph. License: MIT OR Apache-2.0, GPL-3.0 compatible.
+libc = "0.2"
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 # `serde` is already a workspace dependency (and already in `Cargo.lock` as a transitive dependency
 # of `tauri`); the commands need it directly to derive `Serialize` for the values they return over
 # IPC. No new crate enters the dependency graph.
