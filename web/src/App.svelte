@@ -518,6 +518,10 @@
     reading = null;
   }
 
+  // Whether the reader on screen was opened by a measurement run, which is the only thing that makes it
+  // report what ended up on the canvases.
+  let measuring = $state(false);
+
   // A measurement run, and nothing else: `MIRK_READER_MEASURE=<path>` — read by the desktop process —
   // makes the shell open that document in the reader by itself, because the number R1 asks for (a real
   // document, in a real window) cannot be triggered by a click a harness cannot make. Without the
@@ -526,6 +530,7 @@
     void invoke<string | null>("reader_measure_target")
       .then((path) => {
         if (path === null) return;
+        measuring = true;
         reading = {
           id: 0,
           path,
@@ -979,6 +984,7 @@
       <ReaderScreen
         entry={reading}
         {t}
+        measure={measuring}
         onClose={closeReader}
         onFallback={() => void openWithSystemViewer(reading)}
       />
