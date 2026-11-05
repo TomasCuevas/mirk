@@ -7,9 +7,16 @@
   //
   // It takes the window (S3). The window's own bar above it stays, because the window is undecorated
   // and that bar is the only way to move or close it; what goes away is the navigation and the screens.
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import ReaderPages from "./ReaderPages.svelte";
   import { openReaderDocument, type ReaderSource } from "../lib/reader-source";
+  import {
+    samplePaint,
+    probeFirstPage,
+    probeRenderOnly,
+    probeFrames,
+    collectErrors,
+  } from "../lib/reader-measure";
   import { invoke, runningInTauri } from "../lib/tauri";
   import type { LibraryEntry } from "../lib/library";
   import type { Translate } from "../lib/i18n";
@@ -19,6 +26,7 @@
     t,
     onClose,
     onFallback,
+    measure = false,
   }: {
     entry: LibraryEntry;
     /** The interface's word catalogue. */
@@ -27,18 +35,67 @@
     onClose: () => void;
     /** Opens the document with the system's own application, when the reader cannot lay it out. */
     onFallback: () => void;
+    /**
+     * Whether this open is a measurement run, which also reports what ended up on the canvases.
+     *
+     * Only `MIRK_READER_MEASURE` sets it, so a normal open reports the load and samples nothing.
+     */
+    measure?: boolean;
   } = $props();
 
   /** The loaded document, or `null` while it is still being opened. */
   let source = $state<ReaderSource | null>(null);
   /** Why the document could not be opened at all, if it could not. */
   let failure = $state<string | null>(null);
+  /** The surface the pages are drawn on, sampled only by a measurement run. */
+  let pages: HTMLDivElement | undefined = $state();
+  /** The webview's own errors, collected only by a measurement run: pdf.js reports failures that way. */
+  let collected: { entries: string[]; stop: () => void } | null = null;
+
+  /**
+   * Sends the measurement of one load, and — in a measurement run — of what ended up on the canvases.
+   *
+   * The webview's console is not visible from the terminal that started the application, so the line goes
+   * through the desktop process; a browser without it, or a command that is not registered, is not a
+   * failure the reader should ever surface.
+   */
+  async function report(load: {
+    ms: number;
+    stats: ReaderSource["stats"];
+    document: ReaderSource["document"];
+  }): Promise<void> {
+    console.info(`reader opened in ${load.ms} ms`, { path: entry.path, ...load.stats });
+    const line: Record<string, unknown> = { path: entry.path, ms: load.ms, ...load.stats };
+
+    if (measure) {
+      // Two different questions, answered at once: does the page's content parse at all, and what ended up
+      // on the canvas. A page stuck on `drawing` can be either, and the stage that stops answering says
+      // which.
+      await tick();
+      const [frames, probe, render, paint] = await Promise.all([
+        probeFrames().catch((error: unknown) => ({ error: String(error) })),
+        probeFirstPage(load.document).catch((error: unknown) => ({ error: String(error) })),
+        probeRenderOnly(load.document).catch((error: unknown) => ({ error: String(error) })),
+        samplePaint(pages ?? document.body),
+      ]);
+      line.frames = frames;
+      line.probe = probe;
+      line.render = render;
+      line.paint = paint;
+    }
+
+    if (collected !== null) line.errors = collected.entries;
+
+    if (!runningInTauri()) return;
+    void invoke("reader_measured", { line: JSON.stringify(line) }).catch(() => {});
+  }
 
   onMount(() => {
     // A screen that is replaced before the document settles must not keep it: the loader owns a worker
     // and a transport, and neither has an owner left once this component is gone.
     let live = true;
     const started = performance.now();
+    if (measure) collected = collectErrors();
 
     void openReaderDocument(entry.path).then(
       (opened) => {
@@ -46,18 +103,9 @@
           opened.destroy();
           return;
         }
-        // The number 0.2.0 turns on: how long a real document takes to become readable, and what the
-        // ranges cost. The webview's console is not visible from the terminal that started the
-        // application, so the line goes through the desktop process; a browser without it, or a
-        // command that is not registered, is not a failure the reader should ever surface.
         const ms = Math.round(performance.now() - started);
-        console.info(`reader opened in ${ms} ms`, { path: entry.path, ...opened.stats });
-        if (runningInTauri()) {
-          void invoke("reader_measured", {
-            line: JSON.stringify({ path: entry.path, ms, ...opened.stats }),
-          }).catch(() => {});
-        }
         source = opened;
+        void report({ ms, stats: opened.stats, document: opened.document });
       },
       (error: unknown) => {
         if (live) failure = String(error);
@@ -66,6 +114,8 @@
 
     return () => {
       live = false;
+      collected?.stop();
+      collected = null;
       source?.destroy();
       source = null;
     };
@@ -86,7 +136,7 @@
   {:else if source === null}
     <p class="state">{t("reader.opening")}</p>
   {:else}
-    <div class="pages">
+    <div class="pages" bind:this={pages}>
       <ReaderPages document={source.document} />
     </div>
   {/if}
