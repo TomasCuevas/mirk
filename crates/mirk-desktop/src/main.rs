@@ -1368,6 +1368,15 @@ fn main() {
                 eprintln!("the stored window layout could not be applied: {error}");
             }
 
+            // The window is declared hidden so that the restored size is in place before anything is
+            // drawn, and this is the end of that sequence. Without it the process runs with an invisible
+            // 0x0 webview: nothing is ever mapped, the compositor never hands out a frame, and WebKit
+            // suspends `requestAnimationFrame` — which is what pdf.js paints pages on, so a reader drawn
+            // in that window parses every page and paints none, with no error anywhere.
+            if let Err(error) = window.show() {
+                eprintln!("the window could not be shown: {error}");
+            }
+
             // The tray's menu is built from the stored language and the window's real visibility;
             // `current_tray_menu` reports a database it cannot read and falls back to English, so a
             // launch without a readable store still leaves a tray with a way back.
