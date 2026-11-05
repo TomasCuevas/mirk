@@ -18,6 +18,7 @@
     collectErrors,
   } from "../lib/reader-measure";
   import { invoke, runningInTauri } from "../lib/tauri";
+  import { createPageRecorder } from "../lib/reader-progress";
   import type { LibraryEntry } from "../lib/library";
   import type { Translate } from "../lib/i18n";
 
@@ -49,6 +50,10 @@
   let failure = $state<string | null>(null);
   /** The surface the pages are drawn on, sampled only by a measurement run. */
   let pages: HTMLDivElement | undefined = $state();
+  /** The page the store remembers for this document, zero-based; `null` when it has never heard of one. */
+  let position = $state<number | null>(null);
+  /** Turns page turns into one stored fact, and holds the last one until the reader closes (S4). */
+  let recorder: ReturnType<typeof createPageRecorder> | null = null;
   /** The webview's own errors, collected only by a measurement run: pdf.js reports failures that way. */
   let collected: { entries: string[]; stop: () => void } | null = null;
 
@@ -65,7 +70,13 @@
     document: ReaderSource["document"];
   }): Promise<void> {
     console.info(`reader opened in ${load.ms} ms`, { path: entry.path, ...load.stats });
-    const line: Record<string, unknown> = { path: entry.path, ms: load.ms, ...load.stats };
+    const line: Record<string, unknown> = {
+      path: entry.path,
+      ms: load.ms,
+      ...load.stats,
+      id: entry.id,
+      at: position,
+    };
 
     if (measure) {
       // Two different questions, answered at once: does the page's content parse at all, and what ended up
@@ -97,13 +108,21 @@
     const started = performance.now();
     if (measure) collected = collectErrors();
 
-    void openReaderDocument(entry.path).then(
-      (opened) => {
+    // The page and the document are asked for at the same time: the reader must not open at page one and
+    // then jump, and the store's answer is needed before the page view exists.
+    const remembered = invoke<number | null>("reader_position", { id: entry.id }).catch(() => null);
+
+    void Promise.all([openReaderDocument(entry.path), remembered]).then(
+      ([opened, page]) => {
         if (!live) {
           opened.destroy();
           return;
         }
         const ms = Math.round(performance.now() - started);
+        position = page;
+        recorder = createPageRecorder((changed) =>
+          invoke("reader_remember_page", { id: entry.id, page: changed }).then(() => undefined),
+        );
         source = opened;
         void report({ ms, stats: opened.stats, document: opened.document });
       },
@@ -114,6 +133,11 @@
 
     return () => {
       live = false;
+      // The last page of a session is the one a resume needs, so it is written before the recorder goes
+      // away rather than lost with the quiet period it was waiting out.
+      void recorder?.flush();
+      recorder?.stop();
+      recorder = null;
       collected?.stop();
       collected = null;
       source?.destroy();
@@ -137,7 +161,11 @@
     <p class="state">{t("reader.opening")}</p>
   {:else}
     <div class="pages" bind:this={pages}>
-      <ReaderPages document={source.document} />
+      <ReaderPages
+        document={source.document}
+        initialPage={position ?? 0}
+        onPageChange={(page) => recorder?.observe(page)}
+      />
     </div>
   {/if}
 </section>

@@ -528,10 +528,19 @@
   // variable this asks, receives `null`, and does nothing at all.
   onMount(() => {
     void invoke<string | null>("reader_measure_target")
-      .then((path) => {
+      .then(async (path) => {
         if (path === null) return;
         measuring = true;
-        reading = {
+        // The measured document is opened the way any document is, so it needs the library's own entry:
+        // with a made-up id, progress has nothing to be written to, and a measurement of persistence
+        // would silently measure nothing. The wait is because the library is read after the shell mounts.
+        for (let attempt = 0; attempt < 40 && entries.length === 0; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        // The named document may not be in the library at all (a file the reader has not added), and a
+        // made-up id writes nowhere. Falling back to the library's first document keeps the run measuring
+        // a real row: the transport and the paint were already measured on a real book.
+        reading = entries.find((entry) => entry.path === path) ?? entries[0] ?? {
           id: 0,
           path,
           title: path.split("/").pop() ?? path,

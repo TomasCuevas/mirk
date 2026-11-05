@@ -226,6 +226,26 @@ fn list_library() -> Result<Vec<LibraryEntryView>, String> {
     commands::library_entries(&store).map_err(error_message)
 }
 
+/// The page `mirk`'s own reader should open the document with `id` at (S4).
+///
+/// `null` means no source ever reported a position for it, which the reader answers by starting at the
+/// beginning; it is not page zero.
+#[tauri::command]
+fn reader_position(id: i64) -> Result<Option<u32>, String> {
+    let store = open_store()?;
+    commands::reader_position(&store, id).map_err(error_message)
+}
+
+/// Records the page `mirk`'s own reader has on screen for the document with `id` (S4).
+///
+/// The provenance is decided in `commands::reader_remember_page`, not here: a page counted by this
+/// application is `native` however it reached the command.
+#[tauri::command]
+fn reader_remember_page(id: i64, page: u32) -> Result<(), String> {
+    let store = open_store()?;
+    commands::reader_remember_page(&store, id, page).map_err(error_message)
+}
+
 /// Saves the reader's naming of the document with `id` in ONE write (R31, R37, R42/S5).
 ///
 /// The editor's Save decides the reader's title and the reader's authors in one action, so this is one
@@ -1404,6 +1424,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             reader_measure_target,
             reader_measured,
+            reader_position,
+            reader_remember_page,
             minimize_window,
             hide_window,
             close_app,

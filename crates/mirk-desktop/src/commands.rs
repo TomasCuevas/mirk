@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use mirk_core::domain::CoverChoice;
 use mirk_core::{
-    CoverSource, FileIdentity, LaunchOutcome, Launcher, MirkError, OpenDocumentDetector,
-    RecentDocumentsSource, StoredProgress,
+    Confidence, CoverSource, FileIdentity, LaunchOutcome, Launcher, MirkError, OpenDocumentDetector,
+    ProgressSource, RecentDocumentsSource, StoredProgress,
 };
 use mirk_scan::{cover_for, CoverOutcome, ScanReport, Scanner};
 use mirk_store::{
@@ -330,6 +330,49 @@ pub fn library_entries(store: &Store) -> Result<Vec<LibraryEntryView>, MirkError
         .into_iter()
         .map(LibraryEntryView::from)
         .collect())
+}
+
+/// The page `mirk`'s own reader should open a document at.
+///
+/// It is the same progress the card shows: [`Store::library`] is the one place a document and its
+/// progress are resolved together, so the reader and the card cannot disagree about where somebody got
+/// to. `None` means no source ever reported a position, which is a different answer from page zero —
+/// and the reader starts at the beginning for it.
+pub fn reader_position(store: &Store, id: i64) -> Result<Option<u32>, MirkError> {
+    Ok(store
+        .library()?
+        .into_iter()
+        .find(|entry| entry.document.id == id)
+        .and_then(|entry| entry.progress)
+        .map(|progress| progress.page))
+}
+
+/// Records the page `mirk`'s own reader has on screen, with `mirk` itself as the source.
+///
+/// [`ProgressSource::Native`] is the provenance the interface has always meant by the built-in reader: a
+/// page counted by this application, not typed in by hand ([`ProgressSource::Manual`]) and not read back
+/// from another program's window ([`ProgressSource::External`]). Confidence is [`Confidence::Exact`] for
+/// the same reason: this is a page somebody was looking at, not an inference from a cover.
+///
+/// A document removed while the reader had it open writes nothing and reports nothing: the next library
+/// read is where its absence belongs.
+pub fn reader_remember_page(store: &Store, id: i64, page: u32) -> Result<(), MirkError> {
+    let Some(entry) = store
+        .library()?
+        .into_iter()
+        .find(|entry| entry.document.id == id)
+    else {
+        return Ok(());
+    };
+
+    let progress = StoredProgress::new(
+        page,
+        entry.document.document.pages,
+        ProgressSource::Native,
+        Confidence::Exact,
+    );
+    store.record_progress(id, &progress)?;
+    Ok(())
 }
 
 /// Saves the reader's naming of one document in ONE write (R31, R37).
@@ -1331,6 +1374,39 @@ mod tests {
     };
     use std::path::PathBuf;
     use std::sync::Mutex;
+
+    /// The reader's own page is stored as the document's progress, with mirk as the source (S4).
+    #[test]
+    fn the_readers_page_becomes_the_documents_progress_with_its_own_provenance() {
+        let store = in_memory_store();
+        let id = store
+            .upsert_document(&document("/home/somebody/Libros/book.pdf", 1, 2))
+            .expect("insert a document");
+
+        // Nothing has ever reported a position, so the reader is told to start at the beginning rather
+        // than at page zero-as-a-fact.
+        assert_eq!(reader_position(&store, id).expect("read the position"), None);
+
+        reader_remember_page(&store, id, 7).expect("remember the page");
+
+        assert_eq!(reader_position(&store, id).expect("read the position"), Some(7));
+        let recorded = store
+            .progress_for_document(id)
+            .expect("read the recorded progress");
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].page, 7);
+        assert_eq!(recorded[0].source, ProgressSource::Native);
+        assert_eq!(recorded[0].confidence, Confidence::Exact);
+    }
+
+    /// A document the library no longer holds is not a failure: there is nothing to remember.
+    #[test]
+    fn remembering_a_page_of_a_removed_document_writes_nothing_and_reports_nothing() {
+        let store = in_memory_store();
+
+        reader_remember_page(&store, 404, 3).expect("a removed document is not an error");
+        assert_eq!(reader_position(&store, 404).expect("read the position"), None);
+    }
 
     fn in_memory_store() -> Store {
         Store::open_in_memory().expect("open an in-memory store")
