@@ -62,6 +62,7 @@
   import HomeScreen from "./components/HomeScreen.svelte";
   import LibraryScreen from "./components/LibraryScreen.svelte";
   import Navbar from "./components/Navbar.svelte";
+  import ReaderScreen from "./components/ReaderScreen.svelte";
   import SettingsScreen from "./components/SettingsScreen.svelte";
   import SettingsAppScreen from "./components/SettingsAppScreen.svelte";
   import SettingsLibraryScreen from "./components/SettingsLibraryScreen.svelte";
@@ -507,12 +508,52 @@
     }
   }
 
-  // The card's open action (R37): the document goes to the system's own application for it, at the
-  // page the reader last reached. The card renders no outcome — the folder action's two sentences
-  // were removed at the user's request (L27, L30) and this one is the same kind of action — so a
-  // failure is reported to the console, which is where the window actions report the failures that
-  // have no user state to carry them.
-  async function openDocument(entry: LibraryEntry): Promise<void> {
+  // The document the reader has open, or `null` when no reader is showing. It is the whole reader
+  // switch: the screens and the navigation are hidden while it is set, and the reader pane takes their
+  // place in the window's column.
+  let reading = $state<LibraryEntry | null>(null);
+
+  /** Leaves the reader. The screen behind it was hidden, not unmounted, so it is exactly as it was. */
+  function closeReader(): void {
+    reading = null;
+  }
+
+  // A measurement run, and nothing else: `MIRK_READER_MEASURE=<path>` — read by the desktop process —
+  // makes the shell open that document in the reader by itself, because the number R1 asks for (a real
+  // document, in a real window) cannot be triggered by a click a harness cannot make. Without the
+  // variable this asks, receives `null`, and does nothing at all.
+  onMount(() => {
+    void invoke<string | null>("reader_measure_target")
+      .then((path) => {
+        if (path === null) return;
+        reading = {
+          id: 0,
+          path,
+          title: path.split("/").pop() ?? path,
+          userTitle: null,
+          authors: [],
+          readerAuthors: [],
+          pages: null,
+          progress: null,
+        };
+      })
+      .catch(() => {});
+  });
+
+  // The card's open action (S1, S3): the document opens in mirk's own reader, which takes the window.
+  // It no longer hands the file to the system's application — that reader is what 0.2.0 is — but the
+  // handoff survives as the fallback a failed open offers, because a document this reader cannot lay
+  // out must not become a document that cannot be opened at all.
+  function openDocument(entry: LibraryEntry): void {
+    reading = entry;
+  }
+
+  // The fallback, and the behaviour every open action had before the reader existed: the document goes
+  // to the system's own application for it, at the page the reader last reached. The card renders no
+  // outcome (L27, L30), so a failure is reported to the console.
+  async function openWithSystemViewer(entry: LibraryEntry | null): Promise<void> {
+    if (entry === null) return;
+    reading = null;
     const [settled] = await Promise.allSettled([
       invoke<OpenedDocument>("open_document", { id: entry.id }),
     ]);
@@ -812,7 +853,7 @@
   <!-- The shell's body is what the layout arranges: a column (screen, then bottom bar) in a window, a
        row (sidebar, then screen) in full screen. It is the same screen element either way, so the
        listing keeps its state and its scroll container while the navigation changes place. -->
-  <div class="body" class:side={sidebar}>
+  <div class="body" class:side={sidebar} class:reading={reading !== null}>
     {#if sidebar}
       <Navbar mode="side" screen={navbarScreen(view)} {t} onSelect={selectScreen} />
     {/if}
@@ -928,6 +969,21 @@
       <Navbar mode="bottom" screen={navbarScreen(view)} {t} onSelect={selectScreen} />
     {/if}
   </div>
+
+  {#if reading !== null}
+    <!-- The reader takes the window (S3). The screens and the navigation are hidden rather than
+         unmounted, so the listing keeps its scroll position and nothing is rebuilt on the way out; the
+         window bar above stays, because the window is undecorated and that bar is the only way to
+         move or close it. -->
+    <div class="reading-pane">
+      <ReaderScreen
+        entry={reading}
+        {t}
+        onClose={closeReader}
+        onFallback={() => void openWithSystemViewer(reading)}
+      />
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -935,6 +991,19 @@
      the top bar and the navbar stay put and only the screen between them scrolls. `--grid-columns` is
      the layout published to the document grid; the canvas, the font and the base type live in
      `styles/tokens.css`, which is the single place a theme is decided. */
+  /* While a document is open the shell's body is hidden and the reader takes its place in the same
+     column, so the window bar keeps the height it always had. */
+  .body.reading {
+    display: none;
+  }
+
+  .reading-pane {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+  }
+
   .app {
     position: relative;
     height: 100vh;

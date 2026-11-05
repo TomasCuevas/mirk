@@ -44,6 +44,11 @@ const english: Catalogue = {
   "app.name": "mirk",
   "app.outsideTauri": "The interface is running outside the desktop shell; nothing is connected.",
 
+  "reader.opening": "Opening the document…",
+  "reader.close": "Close the reader",
+  "reader.failed": "The document could not be opened: {message}",
+  "reader.fallback": "Open it with the system viewer",
+
   "window.controls": "Window controls",
   "window.minimize": "Minimise",
   "window.maximize": "Maximise",
@@ -312,6 +317,11 @@ const spanish: Catalogue = {
   "app.name": "mirk",
   "app.outsideTauri":
     "La interfaz se está ejecutando fuera del entorno de escritorio; no hay nada conectado.",
+
+  "reader.opening": "Abriendo el documento…",
+  "reader.close": "Cerrar el lector",
+  "reader.failed": "No se pudo abrir el documento: {message}",
+  "reader.fallback": "Abrirlo con el visor del sistema",
 
   "window.controls": "Controles de la ventana",
   "window.minimize": "Minimizar",

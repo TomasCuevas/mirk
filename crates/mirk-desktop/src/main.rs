@@ -41,6 +41,42 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 
 mod commands;
 mod layout;
+// T1 debug-only runtime proof: an embedded checked-in PDF, served in bounded slices so the real webview
+// can render its first page through the interface's range transport, plus the explicit completion signal
+// the proof page sends once `page.render(...).promise` has resolved. It is `cfg(debug_assertions)`, so a
+// release build neither compiles it nor registers its commands; it has no file access, no path or id
+// argument and no session. It is entered only through `MIRK_READER_FIXTURE_PROOF=1`, which makes `main`
+// skip the application's whole startup (see `fixture_proof_requested` and `proof_startup`). See
+// `reader_fixture`'s module documentation for what it does not prove.
+#[cfg(debug_assertions)]
+mod reader_fixture;
+// The one process-wide byte budget every reader response buffer is paid for out of. `reader_session`
+// reserves each range answer's bytes here before allocating them and holds them until the caller drops
+// the buffer, so the bound on this process's reader memory is real for the native path. It is compiled
+// into the application so it cannot rot, and it registers no command: it is not reachable from the
+// interface, and it bounds request bytes only — not IPC serialisation copies, queues, session counts or
+// time.
+mod reader_budget;
+// The bounded native file reads the reader's range transport will call once T1 is wired end to end.
+// The module is compiled into the application, not just into its tests, so the primitive it holds
+// cannot rot between now and that wiring; it registers no command and never opens a path of its own.
+mod reader_file;
+// The unexposed IPC prototype remains available to tests while its lifecycle and resource limits
+// are corrected. It is not compiled or registered in application builds.
+#[cfg(test)]
+#[allow(dead_code)]
+mod reader_ipc;
+#[cfg(test)]
+mod reader_range;
+// The bounded native session the reader's transport will open a document through once T1 is wired
+// end to end. Like `reader_file`, it is compiled into the application so it cannot rot, and it
+// registers no command: it selects a document by library id only, never by a caller's path.
+mod reader_session;
+// The narrow registry the reader's Tauri transport will open a document through: sessions are
+// selected by library id only, each holds one open handle from `reader_file`, and both the number of
+// open sessions and the bytes of one read are fixed server-side limits. It registers no command yet,
+// and it is compiled into the application so it cannot rot before that wiring.
+mod reader_serve;
 mod shell;
 mod track;
 mod watch;
@@ -1230,21 +1266,70 @@ fn report_tracking(report: &track::TrackReport) {
     }
 }
 
+/// The document a measurement run opens by itself, or `None` for a normal launch.
+///
+/// `MIRK_READER_MEASURE=/path/to/document.pdf` makes the interface open that document in the reader as
+/// soon as the shell mounts. It exists because the measurement R1 asks for — a real document, a real
+/// window, a real number — cannot be triggered by a click a harness cannot make. The value is read from
+/// the environment once and never stored, so a normal launch is unaffected.
+#[tauri::command]
+fn reader_measure_target() -> Option<String> {
+    std::env::var("MIRK_READER_MEASURE")
+        .ok()
+        .filter(|path| !path.is_empty())
+}
+
+/// Prints one reader measurement to the terminal that started the application.
+///
+/// The webview's own console is not visible from `tauri dev`, and the numbers 0.2.0 turns on — how long
+/// a real document takes to become readable, and what its ranges cost — have to be readable from there.
+/// Debug builds only; the command stays registered so the call site needs no second code path.
+#[tauri::command]
+fn reader_measured(line: String) {
+    #[cfg(debug_assertions)]
+    println!("[reader] {line}");
+    #[cfg(not(debug_assertions))]
+    drop(line);
+}
+
 fn main() {
-    tauri::Builder::default()
+    // DEBUG-ONLY (T1): whether this process was started as the embedded-fixture proof.
+    //
+    // A release build always answers `false` — the module that could answer `true` is not compiled into
+    // it — so every production path below is reached exactly as before by every shipped binary.
+    let fixture_proof = fixture_proof_requested();
+
+    let mut builder = tauri::Builder::default()
         // The dialog plugin is initialized so the application can open the system folder browser
         // from Rust through `DialogExt` (R11). It is a plugin of this process, not of the interface.
-        .plugin(tauri_plugin_dialog::init())
-        // S7: the update channel. The plugin is registered unconditionally and reads its endpoints and
-        // the public key from `plugins.updater` in `tauri.conf.json`; with no configuration yet it answers
-        // every check with an error, which the interface reports as "could not check" instead of
-        // pretending the version is current. Silence here would be the exact defect the check exists to
-        // avoid — an installed copy that quietly never updates.
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        // S7: and this is what turns an installed update into a running one. Kept beside the updater
-        // because they are one story: install writes the new bundle, relaunch enters it.
-        .plugin(tauri_plugin_process::init())
-        .setup(|app| {
+        .plugin(tauri_plugin_dialog::init());
+    // The two update plugins are not registered in the proof: a run whose only job is to show one page
+    // of an embedded PDF has nothing to check, download or restart, and their commands are then absent
+    // from the process entirely rather than merely unused. This is the one difference the proof makes to
+    // the builder; the ordinary launch registers both exactly as it always did.
+    if !fixture_proof {
+        builder = builder
+            // S7: the update channel. For every ordinary launch the plugin is registered here, without a
+            // condition the reader can reach, and reads its endpoints and the public key from
+            // `plugins.updater` in `tauri.conf.json`; with no configuration yet it answers every check with
+            // an error, which the interface reports as "could not check" instead of pretending the version
+            // is current. Silence here would be the exact defect the check exists to avoid — an installed
+            // copy that quietly never updates.
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            // S7: and this is what turns an installed update into a running one. Kept beside the updater
+            // because they are one story: install writes the new bundle, relaunch enters it.
+            .plugin(tauri_plugin_process::init());
+    }
+
+    let context = with_proof_window(tauri::generate_context!(), fixture_proof);
+
+    builder
+        .setup(move |app| {
+            // DEBUG-ONLY (T1): the proof's whole startup, and everything it skips, is in `proof_startup`.
+            #[cfg(debug_assertions)]
+            if fixture_proof {
+                return proof_startup(app);
+            }
             // S5: an installed application carries pdfium inside its own package, where neither
             // `vendor/pdfium` nor `$MIRK_PDFIUM_LIB` exists. The resource directory is the one place
             // that knows where a bundle put its files, so it is resolved here, once, and handed to
@@ -1308,6 +1393,8 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            reader_measure_target,
+            reader_measured,
             minimize_window,
             hide_window,
             close_app,
@@ -1338,10 +1425,117 @@ fn main() {
             open_containing_folder,
             open_folder,
             open_document,
-            pick_folder
+            pick_folder,
+            // T1's debug-only runtime proof. All three arms carry `#[cfg(debug_assertions)]`, so a release
+            // build registers none of them — the module is not compiled there at all. They are callable in
+            // debug builds and answer only with the length or bounded slices of one embedded checked-in
+            // fixture, and with the proof's one render-completion line. The separate dev page is
+            // `reader-fixture.html`.
+            #[cfg(debug_assertions)]
+            reader_fixture::reader_fixture_info,
+            #[cfg(debug_assertions)]
+            reader_fixture::reader_fixture_range,
+            // The proof's explicit completion signal: only after the page's render promise has resolved,
+            // and with the error instead of the geometry when the run failed. Also debug-only, so a
+            // release build registers no command that can report a render.
+            #[cfg(debug_assertions)]
+            reader_fixture::reader_fixture_render
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("failed to start the mirk desktop application");
+}
+
+/// Whether this process was started as T1's DEBUG-ONLY fixture proof.
+///
+/// DEBUG-ONLY: the answer is `reader_fixture::proof_requested_now()` in a debug build — the exact
+/// `MIRK_READER_FIXTURE_PROOF=1` opt-in, nothing looser — and `false` in a release build, where
+/// `reader_fixture` is not compiled at all. The signature is the same in both so `main` reads the same
+/// way, and so the release path is the ordinary launch with no branch a user can reach.
+fn fixture_proof_requested() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        reader_fixture::proof_requested_now()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        false
+    }
+}
+
+/// Points the declared main window at T1's DEBUG-ONLY proof page, when this launch is the proof.
+///
+/// The window is decided before the application is built because the declared window would otherwise
+/// load the shell's `index.html`, and the proof page is a separate Vite entry. Changing the context's
+/// URL is what keeps the shell out of an evidence run: the shell is never loaded, so its startup, its
+/// refresh clock and its desktop subscriptions do not have to be delayed, restarted or stopped around a
+/// debug page (L26). The window is also made visible, because an unmapped surface is not painted, and
+/// retitled so it can never be mistaken for the application's own. Anything but the proof returns the
+/// context untouched.
+#[cfg(debug_assertions)]
+fn with_proof_window(
+    mut context: tauri::Context<tauri::Wry>,
+    proof: bool,
+) -> tauri::Context<tauri::Wry> {
+    if !proof {
+        return context;
+    }
+    let window = context
+        .config_mut()
+        .app
+        .windows
+        .first_mut()
+        .expect("the main window is declared in tauri.conf.json");
+    window.url = tauri::WebviewUrl::App(reader_fixture::PROOF_PAGE.into());
+    window.visible = true;
+    window.title = "mirk · debug fixture proof".to_string();
+    context
+}
+
+/// The release twin of [`with_proof_window`]: a release build has no proof page to point a window at,
+/// and [`fixture_proof_requested`] cannot answer `true`, so the context is the configuration's own.
+#[cfg(not(debug_assertions))]
+fn with_proof_window(
+    context: tauri::Context<tauri::Wry>,
+    _proof: bool,
+) -> tauri::Context<tauri::Wry> {
+    context
+}
+
+/// The whole startup of T1's DEBUG-ONLY fixture proof.
+///
+/// What it does, in full: write one line naming the directories this process was given, write the URL
+/// the window is showing, and focus that window. What it deliberately does not do is the rest of
+/// `setup`: no pdfium resource is resolved, no stored layout is read or applied, no store is opened, no
+/// tray is built, no ingestion loop, folder watch or layout reconciler is started, and no event is
+/// emitted. The update plugins are not registered in proof mode either (see `main`), so nothing in this
+/// process can check for, download or install an update.
+///
+/// The environment line is evidence, not a guarantee: it says which directories the process was given,
+/// which is what a launch has to redirect for the proof to be isolated from the reader's own state. The
+/// proof is still only fixture-only runtime evidence — it says nothing about the real reader's file
+/// access, its authorization or its sessions.
+#[cfg(debug_assertions)]
+fn proof_startup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!(
+        "{}",
+        reader_fixture::isolation_line(|name| std::env::var(name).ok())
+    );
+
+    let window = app
+        .get_webview_window(MAIN_WINDOW)
+        .expect("the main window is declared in tauri.conf.json");
+    match window.url() {
+        Ok(url) => eprintln!("[reader-fixture] proof window shows {url}"),
+        Err(error) => {
+            eprintln!("[reader-fixture] the proof window's URL could not be read: {error}")
+        }
+    }
+    if let Err(error) = window.set_focus() {
+        // A compositor that refuses focus still maps the window, and this proof's evidence is a render,
+        // not a focused window, so the refusal is reported rather than fatal.
+        eprintln!("[reader-fixture] the proof window could not be focused: {error}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
