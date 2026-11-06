@@ -37,8 +37,10 @@
   .body { flex: 1; min-height: 0; display: flex; justify-content: center; min-width: 0; }
   .frame { display: grid; grid-template-columns: 88px auto; min-height: 0; }
   .gutter { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
-  .page-num, .total { writing-mode: vertical-rl; color: var(--fg-subtle); font-size: 12px; letter-spacing: 0.14em; }
-  .page-num { font-family: var(--font-display); font-size: 17px; letter-spacing: 0.16em; }
+  /* Los números son el dato y se leen primero: más grandes y en el tono que sí se lee a un metro de la
+     pantalla. La palabra es una aclaración, así que va más chica y en el tono apagado. */
+  .page-num, .total { writing-mode: vertical-rl; color: var(--fg-muted); font-size: 15px; letter-spacing: 0.14em; }
+  .page-num { font-family: var(--font-display); font-size: 22px; letter-spacing: 0.16em; color: var(--fg); }
 
   /* La palabra acompaña al número cuando el margen tiene ancho para ella: dice qué es el 199 sin que el
      lector tenga que deducirlo del contexto. Es la primera cosa que cede en una ventana angosta. */
@@ -48,7 +50,7 @@
     letter-spacing: 0.2em;
     text-transform: uppercase;
     color: var(--fg-subtle);
-    opacity: 0.85;
+    opacity: 1;
   }
 
   @media (max-width: 1199px) {

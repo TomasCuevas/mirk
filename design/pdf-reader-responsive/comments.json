@@ -22,6 +22,17 @@
       "status": "resolved",
       "sentAt": "2026-11-06T17:43:25.336Z",
       "resolvedAt": "2026-11-06T17:43:45.623Z"
+    },
+    {
+      "id": "qah9kloc",
+      "file": "04-fullscreen.html",
+      "selector": "body > main > div:nth-of-type(3) > div > aside",
+      "excerpt": "44 199 PÁGINAS",
+      "comment": "Los numeros deben ser un poco más grandes y la palabra \"PÁGINAS\" debe tener un color diferente a los numeros",
+      "createdAt": "2026-11-06T17:44:31.939Z",
+      "status": "open",
+      "sentAt": "2026-11-06T17:44:31.971Z",
+      "resolvedAt": null
     }
   ]
 }
