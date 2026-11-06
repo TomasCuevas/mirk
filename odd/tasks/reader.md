@@ -264,3 +264,5 @@ Four boards in `design/pdf-reader-responsive/`, one per window mode at its real 
 
 The owner iterates on the canvas and then names the boards to implement. Recorded because it is the workflow the release note L76 promised: the interface waits for their review of the running application.
 
+L78 — The owner approved all four boards and asked for the first group to go: `design/pdf-reader/` (the first three directions, including the 03-margins board the current chrome was implemented from) is deleted, leaving `design/pdf-reader-responsive/` as the only reader design. The removal is the owner's call and it is recorded rather than argued: the board was a spec for code that now exists, and this document plus L69–L70 keep what it said.
+
