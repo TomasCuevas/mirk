@@ -619,7 +619,10 @@
   .reader {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    /* It fills the flex cell it is given instead of resolving a percentage against it: a percentage here
+       collapses to `auto` whenever the parent has no definite height, and the scroller inside then grows
+       to the whole document and never scrolls. */
+    flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
   }

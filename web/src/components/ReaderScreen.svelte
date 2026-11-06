@@ -336,11 +336,15 @@
     outline-offset: 2px;
   }
 
+  /* `minmax(0, 1fr)` on BOTH axes is what makes the page view scrollable: with an `auto` row the stack
+     grows to its full height, the scroller never overflows, and nothing on the screen can move — which
+     looks exactly like a reader whose progress tracker is broken. */
   .body {
     flex: 1;
     min-height: 0;
     display: grid;
     grid-template-columns: 56px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
   }
 
   /* The gutter: page number, rail, total — read top to bottom, so the rail fills the way a book runs. */
@@ -391,6 +395,8 @@
   }
 
   .stage {
+    display: flex;
+    flex-direction: column;
     min-width: 0;
     min-height: 0;
     padding-right: 8px;

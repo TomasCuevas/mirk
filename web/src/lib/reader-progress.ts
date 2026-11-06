@@ -72,9 +72,11 @@ export function createPageRecorder(
     written = page;
     try {
       await write(page);
-    } catch {
+    } catch (error) {
       // The page stays unrecorded; the next page turn tries again. Nothing is retried in a loop, because
-      // a document the store cannot write is not a reason to spend the reader's battery on it.
+      // a document the store cannot write is not a reason to spend the reader's battery on it — but a
+      // failure that says nothing cost a whole debugging session, so it says its reason and stops there.
+      console.error("mirk: the page could not be stored", error);
     }
   }
 
