@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "comments": [
+    {
+      "id": "2u3wv5vf",
+      "file": "04-fullscreen.html",
+      "selector": "body > main > div:nth-of-type(3) > aside:nth-of-type(1)",
+      "excerpt": "44 199",
+      "comment": "Esta seccion debe estar mas cerca de la pagina renderizada.",
+      "createdAt": "2026-11-06T17:42:30.232Z",
+      "status": "resolved",
+      "sentAt": "2026-11-06T17:42:30.253Z",
+      "resolvedAt": "2026-11-06T17:42:52.394Z"
+    },
+    {
+      "id": "mtyvru7x",
+      "file": "04-fullscreen.html",
+      "selector": "body > main > div:nth-of-type(3) > div > aside > span:nth-of-type(3)",
+      "excerpt": "199",
+      "comment": "Luego de este numero, debe estar el texto \"Páginas\". Unicamente debe aparecer si tiene espacio",
+      "createdAt": "2026-11-06T17:43:25.290Z",
+      "status": "resolved",
+      "sentAt": "2026-11-06T17:43:25.336Z",
+      "resolvedAt": "2026-11-06T17:43:45.623Z"
+    }
+  ]
+}
