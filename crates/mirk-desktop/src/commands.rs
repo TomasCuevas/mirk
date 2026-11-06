@@ -339,6 +339,27 @@ pub fn library_entries(store: &Store) -> Result<Vec<LibraryEntryView>, MirkError
 /// to. `None` means no source ever reported a position, which is a different answer from page zero —
 /// and the reader starts at the beginning for it.
 pub fn reader_position(store: &Store, id: i64) -> Result<Option<u32>, MirkError> {
+    // The reader resumes where its own last page was, not where the library's ranking puts the document.
+    //
+    // A page this reader wrote carries no `read_at` — there is no wall clock behind a page somebody is
+    // looking at — and the library ranks sources for the card, where an external viewer's page with a
+    // real timestamp wins. That is the right answer for a card and the wrong one for a resume: measured
+    // on a real library, a reader who closed the book on page 5 reopened it on page 1, because the
+    // external row said 0 and nothing this reader wrote could outrank it. `progress_for_document` answers
+    // in insertion order, so the last row this reader wrote is the newest fact it has.
+    //
+    // A document this reader never showed falls back to the library's progress, so a book first read in
+    // another viewer still resumes where that viewer left it.
+    let own = store
+        .progress_for_document(id)?
+        .into_iter()
+        .filter(|progress| progress.source == ProgressSource::Native)
+        .last()
+        .map(|progress| progress.page);
+    if own.is_some() {
+        return Ok(own);
+    }
+
     Ok(store
         .library()?
         .into_iter()
@@ -2217,6 +2238,38 @@ mod tests {
             calls[0].1,
             Some(11),
             "the newest recorded position, the same one the card shows"
+        );
+    }
+
+    #[test]
+    fn the_reader_resumes_at_the_page_it_recorded_not_the_external_viewers() {
+        // Measured on a real library (L65): a document whose external viewer had recorded page 0 came
+        // back to page 0 after mirk's own reader had closed it on page 4, because the external row
+        // carries a `read_at` and nothing this reader writes does.
+        let (store, id, _file, _dir) = stored_document("reader-position-native");
+        store
+            .record_progress(
+                id,
+                &StoredProgress::new(0, None, ProgressSource::External("evince-gvfs"), Confidence::Exact),
+            )
+            .expect("record the external viewer's page");
+        assert_eq!(
+            reader_position(&store, id).expect("read the position"),
+            Some(0),
+            "with nothing of its own, the reader resumes where the other viewer left off"
+        );
+
+        store
+            .record_progress(
+                id,
+                &StoredProgress::new(4, None, ProgressSource::Native, Confidence::Exact),
+            )
+            .expect("record this reader's page");
+
+        assert_eq!(
+            reader_position(&store, id).expect("read the position"),
+            Some(4),
+            "the page this reader wrote is the newest fact it has"
         );
     }
 
