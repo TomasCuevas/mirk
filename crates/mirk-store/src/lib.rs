@@ -2209,7 +2209,8 @@ impl Store {
                      SELECT p2.id FROM progress p2 WHERE p2.doc_id = d.id \
                      ORDER BY (p2.read_at IS NULL) ASC, \
                               COALESCE(p2.read_at, p2.updated_at) DESC, \
-                              p2.id DESC LIMIT 1\
+                              CASE WHEN p2.read_at IS NULL THEN -p2.id ELSE p2.id END ASC \
+                     LIMIT 1\
                  ) \
                  ORDER BY d.path ASC, d.id ASC",
             )

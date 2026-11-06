@@ -164,6 +164,52 @@ fn the_library_shows_the_reading_that_happened_last_not_the_row_written_last() {
 }
 
 #[test]
+fn an_inherited_instant_loses_to_the_row_that_claimed_it_first() {
+    // The real shape in the owner's library: the integrated reader wrote page 35 at instant T, and the
+    // launch sweep later wrote the external viewer's page 43 stamped with that same T. Ordering the tie by
+    // id made the fabricated row win, so the card said 43 while the reader resumed at 35. A tie can only
+    // mean a row borrowed another's instant, and the borrower always writes later.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let doc_id = store
+        .upsert_document(&Document::new("/library/borrowed.pdf"))
+        .expect("insert document");
+
+    store
+        .record_progress(
+            doc_id,
+            &StoredProgress::new(35, Some(199), ProgressSource::Native, Confidence::Exact)
+                .with_read_at(Some(1_793_980_096)),
+        )
+        .expect("the reader records page 35");
+    store
+        .record_progress(
+            doc_id,
+            &StoredProgress::new(
+                43,
+                Some(199),
+                ProgressSource::External("evince-gvfs"),
+                Confidence::Exact,
+            )
+            .with_read_at(Some(1_793_980_096)),
+        )
+        .expect("the sweep records the borrowed page");
+
+    let entry = store
+        .library()
+        .expect("library")
+        .into_iter()
+        .find(|entry| entry.document.id == doc_id)
+        .expect("the document");
+    let progress = entry.progress.expect("a recorded position");
+    assert_eq!(
+        progress.page, 35,
+        "the row that observed the instant keeps it"
+    );
+    assert_eq!(progress.source, ProgressSource::Native);
+}
+
+#[test]
 fn a_reading_time_round_trips_through_library_and_per_document_reads() {
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");

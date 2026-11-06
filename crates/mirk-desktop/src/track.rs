@@ -279,8 +279,13 @@ fn sweep_with_history(
             match provider.read(&entry.document.document) {
                 Ok(None) => continue,
                 Ok(Some(candidate)) => {
-                    let candidate = with_swept_reading_time(candidate, entry, history, now);
-                    record_if_changed(store, entry, candidate, report);
+                    let known = known_reading_time(entry);
+                    let path = entry.document.document.path.clone();
+                    if let Some(candidate) =
+                        with_swept_reading_time(candidate, &path, known, history, now)
+                    {
+                        record_if_changed(store, entry, candidate, report);
+                    }
                     // One source of truth per pass: a second provider agreeing on the same page is
                     // not a second fact, and the registry order decides which one is heard.
                     break;
@@ -414,30 +419,6 @@ fn credible_reading_time(candidate: Option<i64>, now: Option<i64>) -> Option<i64
     }
 }
 
-/// The newer of two reading times, or whichever one exists (R30).
-///
-/// A reading time is a **high-water mark**: the answer to "when did you last read this" can only move
-/// forward. Without this, a later sweep finding an OLDER time — the history records the moment a document
-/// was opened, which is seconds before the tick first saw the page turn — would walk the fact backwards
-/// and make a document read today look older than the store already knew it was.
-///
-/// BOTH sides go through [`credible_reading_time`] first, because a time in the future is not a reading
-/// whichever side it arrives from. An observation the history reports from the future is ignored and the
-/// sweep keeps what the store already knew (or `None`) while still recording the position; a value a
-/// previous build already wrote into the store is dropped for the same reason, which is what heals it —
-/// the sweep runs at every launch, so a document nobody opens again does not stay stamped in the future
-/// for ever, which is the one state the stale rule could never reach. `now` is needed because a sweep
-/// without a clock has no frame for belief.
-fn newest_reading_time(known: Option<i64>, observed: Option<i64>, now: Option<i64>) -> Option<i64> {
-    match (
-        credible_reading_time(known, now),
-        credible_reading_time(observed, now),
-    ) {
-        (Some(known), Some(observed)) => Some(known.max(observed)),
-        (known, observed) => known.or(observed),
-    }
-}
-
 /// The candidate the tick records: the position the provider reported, carrying a reading time, because
 /// this is the one code path that watched the document being read.
 fn with_live_reading_time(
@@ -468,20 +449,41 @@ fn live_reading_time(known: Option<i64>, now: Option<i64>) -> Option<i64> {
     }
 }
 
-/// The candidate the sweep records: the position the provider reported, carrying the reading time the
-/// history knows unless the store already knows a newer one.
+/// The candidate the sweep records, or `None` when the sweep has nothing new to say.
+///
+/// A source may only claim the instant IT observed. An earlier version inherited the store's newest
+/// time, so an external viewer's older page was written stamped with the integrated reader's own
+/// instant; the tie was then broken by row id and the older page won. Measured in the owner's library:
+/// three of four documents showed an evince row whose `read_at` was exactly the native row's.
+///
+/// Two consequences follow, and both are the rule rather than an optimisation:
+/// - a source that cannot say *when* cannot claim *where* either, because an undated row can never
+///   answer "where is this document" and would only grow the log on every launch;
+/// - an instant that is not strictly newer than the one already stored is not news: the newer reading
+///   already supersedes it, so nothing is written and the log stops gaining a row per launch.
 fn with_swept_reading_time(
     candidate: StoredProgress,
-    entry: &LibraryEntry,
+    path: &Path,
+    stored: Option<i64>,
     history: Option<&RecentDocuments>,
     now: Option<i64>,
-) -> StoredProgress {
-    let observed = history.and_then(|documents| documents.read_at(&entry.document.document.path));
-    candidate.with_read_at(newest_reading_time(
-        known_reading_time(entry),
-        observed,
+) -> Option<StoredProgress> {
+    let observed = credible_reading_time(
+        history.and_then(|documents| documents.read_at(path)),
         now,
-    ))
+    );
+    // A stored time from the future is not a reading, so it must not block a credible one: that is the
+    // healing a previous build relied on, kept.
+    let known = credible_reading_time(stored, now);
+
+    match (observed, known) {
+        (Some(observed), Some(known)) if observed <= known => None,
+        (Some(observed), _) => Some(candidate.with_read_at(Some(observed))),
+        // No instant of its own: it may still be recorded, but only while nothing dated answers, because
+        // an undated row can never claim to be the newest reading.
+        (None, None) => Some(candidate.with_read_at(None)),
+        (None, Some(_)) => None,
+    }
 }
 
 /// The clock, in Unix seconds, or `None` when it cannot answer. A sweep that cannot say what time it is
@@ -1270,16 +1272,52 @@ mod tests {
         assert_eq!(credible_reading_time(None, None), None);
     }
 
-    /// The history's answer against what the store already knew.
+    /// A source may only claim the instant it observed (the owner's rule, L73).
+    ///
+    /// This replaces the high-water-mark test: taking the maximum of the store's time and the history's
+    /// made an external viewer's older page inherit the integrated reader's instant, tie with it, and win
+    /// on row id — measured in the owner's library on three of four documents.
     #[test]
-    fn a_reading_time_never_moves_backwards() {
+    fn a_swept_observation_keeps_only_its_own_instant() {
         let now = Some(1_700_000_000);
 
-        assert_eq!(newest_reading_time(Some(300), Some(200), now), Some(300));
-        assert_eq!(newest_reading_time(Some(200), Some(300), now), Some(300));
-        assert_eq!(newest_reading_time(Some(200), None, now), Some(200));
-        assert_eq!(newest_reading_time(None, Some(300), now), Some(300));
-        assert_eq!(newest_reading_time(None, None, now), None);
+        // Nothing the source observed: nothing to claim, so nothing is written where a dated reading
+        // already answers — and an undated row is written only when nothing dated does.
+        let path = Path::new("/lib/borrowed.pdf");
+        // The history's own instant for that path: 1970-01-01T00:05:00Z, which is 300.
+        let history = history_file(&[("/lib/borrowed.pdf", "1970-01-01T00:05:00Z")]);
+        let dated = Some(&history);
+        let undated = None::<&RecentDocuments>;
+
+        assert!(
+            with_swept_reading_time(position(12), path, Some(300), undated, now).is_none(),
+            "no instant of its own, and a dated reading already answers"
+        );
+        assert!(
+            with_swept_reading_time(position(12), path, None, undated, now).is_some(),
+            "an undated row is still written while nothing dated answers"
+        );
+
+        // An instant older than, or equal to, the one already stored is not news.
+        assert!(
+            with_swept_reading_time(position(12), path, Some(400), dated, now).is_none(),
+            "an older observation is not news"
+        );
+        assert!(
+            with_swept_reading_time(position(12), path, Some(300), dated, now).is_none(),
+            "and neither is the same instant"
+        );
+
+        // A genuinely newer observation is written with its own instant, never with the stored one.
+        let written = with_swept_reading_time(position(12), path, Some(100), dated, now)
+            .expect("a newer reading is news");
+        assert_eq!(written.read_at, Some(300));
+
+        // A stored time from the future is not a reading, so it cannot block a credible one.
+        let healed =
+            with_swept_reading_time(position(12), path, Some(1_800_000_000), dated, now)
+                .expect("the moved clock does not silence a real observation");
+        assert_eq!(healed.read_at, Some(300));
     }
 
     /// The comparison that decides whether anything is written at all.
@@ -1389,8 +1427,10 @@ mod tests {
     /// A history that dates a document in the FUTURE is not evidence about a reading, and because
     /// `read_at` is a high-water mark such a time would be kept forever: a document nobody has touched
     /// for a year would be stamped as read tomorrow, and the stale rule could never call it stale again.
-    /// The sweep still records the position it can see — that half it can believe — and leaves the
-    /// reading time alone, so a real, older time the store already knew survives the bad observation.
+    /// A source may only claim the instant it observed, so an undated position is recorded only while
+    /// nothing dated answers, and is passed over when a dated reading already does. Borrowing the
+    /// stored time instead — the old behaviour — is what let an external row tie with, and outrank,
+    /// the integrated reader's own page.
     /// A time a previous build already wrote into the store is judged by the same rule (R30).
     ///
     /// Filtering the observation stops a bad time from entering; this covers the state a build before
@@ -1490,8 +1530,8 @@ mod tests {
 
         assert_eq!(
             report.recorded.len(),
-            2,
-            "the positions are still recorded: {report:?}"
+            1,
+            "only the document nothing dated can answer is written: {report:?}"
         );
 
         let unknown_rows = store.progress_for_document(unknown_id).expect("read back");
@@ -1503,11 +1543,15 @@ mod tests {
         );
 
         let known_rows = store.progress_for_document(known_id).expect("read back");
-        assert_eq!(known_rows.last().expect("a position").page, 12);
+        assert_eq!(
+            known_rows.last().expect("a position").page,
+            11,
+            "an undated observation is not news beside a dated reading"
+        );
         assert_eq!(
             known_rows.last().expect("a position").read_at,
             Some(1_600_000_000),
-            "a real time the store already knew is what remains"
+            "and the real time the store already knew is untouched"
         );
     }
 }

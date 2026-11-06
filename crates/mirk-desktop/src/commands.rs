@@ -339,27 +339,13 @@ pub fn library_entries(store: &Store) -> Result<Vec<LibraryEntryView>, MirkError
 /// to. `None` means no source ever reported a position, which is a different answer from page zero —
 /// and the reader starts at the beginning for it.
 pub fn reader_position(store: &Store, id: i64) -> Result<Option<u32>, MirkError> {
-    // The reader resumes where its own last page was, not where the library's ranking puts the document.
+    // ONE answer for two questions. The card's percentage and the page this reader resumes at are the
+    // same fact about the same document, so they come from the same rule (`Store::library`): the newest
+    // observation, whichever source made it, with an instant only its own source may claim.
     //
-    // A page this reader wrote carries no `read_at` — there is no wall clock behind a page somebody is
-    // looking at — and the library ranks sources for the card, where an external viewer's page with a
-    // real timestamp wins. That is the right answer for a card and the wrong one for a resume: measured
-    // on a real library, a reader who closed the book on page 5 reopened it on page 1, because the
-    // external row said 0 and nothing this reader wrote could outrank it. `progress_for_document` answers
-    // in insertion order, so the last row this reader wrote is the newest fact it has.
-    //
-    // A document this reader never showed falls back to the library's progress, so a book first read in
-    // another viewer still resumes where that viewer left it.
-    let own = store
-        .progress_for_document(id)?
-        .into_iter()
-        .rev()
-        .find(|progress| progress.source == ProgressSource::Native)
-        .map(|progress| progress.page);
-    if own.is_some() {
-        return Ok(own);
-    }
-
+    // This used to prefer the last `native` row, and the two answers disagreed in the owner's library for
+    // three of four documents — the card said page 43 and the reader opened at 35, because an external
+    // row written later had inherited the reader's own reading time and won the tie by row id.
     Ok(store
         .library()?
         .into_iter()
@@ -2251,34 +2237,57 @@ mod tests {
     }
 
     #[test]
-    fn the_reader_resumes_at_the_page_it_recorded_not_the_external_viewers() {
-        // Measured on a real library (L65): a document whose external viewer had recorded page 0 came
-        // back to page 0 after mirk's own reader had closed it on page 4, because the external row
-        // carries a `read_at` and nothing this reader writes does.
-        let (store, id, _file, _dir) = stored_document("reader-position-native");
+    fn the_reader_resumes_where_the_newest_reading_is_whoever_made_it() {
+        // One rule answers "where is this document" for the card AND for the resume: the newest
+        // observation wins, whichever source made it, and a source may only claim an instant it observed.
+        // The card and the page this reader opens at can no longer disagree.
+        let (store, id, _file, _dir) = stored_document("reader-position-newest");
+
         store
             .record_progress(
                 id,
-                &StoredProgress::new(0, None, ProgressSource::External("evince-gvfs"), Confidence::Exact),
+                &StoredProgress::new(
+                    4,
+                    None,
+                    ProgressSource::External("evince-gvfs"),
+                    Confidence::Exact,
+                )
+                .with_read_at(Some(1_700_000_000)),
             )
             .expect("record the external viewer's page");
-        assert_eq!(
-            reader_position(&store, id).expect("read the position"),
-            Some(0),
-            "with nothing of its own, the reader resumes where the other viewer left off"
-        );
-
         store
             .record_progress(
                 id,
-                &StoredProgress::new(4, None, ProgressSource::Native, Confidence::Exact),
+                &StoredProgress::new(9, None, ProgressSource::Native, Confidence::Exact)
+                    .with_read_at(Some(1_700_000_500)),
             )
-            .expect("record this reader's page");
+            .expect("record this reader's page, read later");
 
         assert_eq!(
             reader_position(&store, id).expect("read the position"),
-            Some(4),
-            "the page this reader wrote is the newest fact it has"
+            Some(9),
+            "the later reading is where the document is"
+        );
+
+        // The external viewer reads again, later still: it now answers the same question, and the reader
+        // resumes there. Agreement is the point, not a preference for one source.
+        store
+            .record_progress(
+                id,
+                &StoredProgress::new(
+                    12,
+                    None,
+                    ProgressSource::External("evince-gvfs"),
+                    Confidence::Exact,
+                )
+                .with_read_at(Some(1_700_001_000)),
+            )
+            .expect("record the external viewer's later page");
+
+        assert_eq!(
+            reader_position(&store, id).expect("read the position"),
+            Some(12),
+            "whatever the source, the newest reading is the answer"
         );
     }
 
