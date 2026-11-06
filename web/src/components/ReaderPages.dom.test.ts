@@ -343,6 +343,33 @@ describe("the continuous page view", () => {
     expect(seen.at(-1)).toBeGreaterThan(0);
   });
 
+  it("turns one page at a time under Fit Page instead of scrolling through the sheet", async () => {
+    // The owner's rule: a fitted page has nowhere to scroll, so a wheel gesture is a page turn. Under the
+    // other rules the sheet is taller than the window and scrolling is the only way to read it.
+    const world = fakeDocument();
+    const seen: number[] = [];
+    const target = mountReader(world.document, { onPageChange: (page) => seen.push(page) });
+    await settle();
+
+    (component as unknown as { fitTo: (mode: "page") => void }).fitTo("page");
+    await settle();
+
+    const scroller = target.querySelector<HTMLElement>(".scroller");
+    if (scroller === null) throw new Error("no scroller");
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }));
+    await settle();
+
+    expect(pagesOnScreen(target)[0]).toBe("2");
+    expect(seen.at(-1)).toBe(1);
+
+    // The cooldown that keeps one inertial flick from turning three pages also holds for a test: wait it out.
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, bubbles: true, cancelable: true }));
+    await settle();
+
+    expect(pagesOnScreen(target)[0]).toBe("1");
+  });
+
   it("brings a page to the top of the viewport when the screen asks for it", async () => {
     // Jumping is the only way to move without scrolling, and the control that asks for it sends a
     // zero-based page here: page three is index two.

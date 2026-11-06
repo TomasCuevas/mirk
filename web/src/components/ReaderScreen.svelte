@@ -67,6 +67,9 @@
   };
   /** What the button says: the rule in force, or the percentage the reader chose. */
   const zoomLabel = $derived(pinned !== null ? `${pinned}%` : fitLabels[fitMode]);
+  /** How wide the paper is actually drawn, reported by the page view; `null` until it knows. */
+  let pageWidth = $state<number | null>(null);
+
   /** The page view's imperative handle, for the controls that belong to this bar. */
   let pages = $state<{
     zoomBy: (direction: "in" | "out") => void;
@@ -304,13 +307,14 @@
         <span class="rail"><i style:height={`${percent ?? 0}%`}></i></span>
         <span class="total">{total ?? "—"}{#if total !== null}<em>Páginas</em>{/if}</span>
       </aside>
-      <div class="stage">
+      <div class="stage" style:--page-width={pageWidth === null ? null : `${pageWidth}px`}>
         <ReaderPages
           document={source.document}
           initialPage={position ?? 0}
           bind:this={pages}
           bind:currentPage
           {jumpToPage}
+          onWidthChange={(width) => (pageWidth = width)}
           onPageChange={(page) => {
             recorder?.observe(page);
             session?.page(page);
@@ -554,7 +558,10 @@
   .frame {
     --gutter: 56px;
     display: grid;
-    grid-template-columns: var(--gutter) minmax(0, 1fr);
+    /* `max-content` on the paper column is what glues the margin to the sheet: the column takes the page's
+       width instead of stretching to the window and leaving the number floating in the gap. */
+    grid-template-columns: var(--gutter) max-content;
+    justify-content: center;
     grid-template-rows: minmax(0, 1fr);
     width: 100%;
     max-width: 1180px;
@@ -593,10 +600,13 @@
   .total em {
     display: none;
     font-style: normal;
-    font-size: 9px;
-    letter-spacing: 0.2em;
+    font-size: 8px;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--fg-subtle);
+    /* In vertical writing the inline axis runs down the page, so this is the gap between the number and
+       the word rather than a side margin. */
+    margin-inline-start: 0.5em;
   }
 
   /* The only saturated thing on the screen, because progress is the one fact the reader is here for. */
@@ -621,17 +631,22 @@
 
   /* The page column is centred and never wider than a readable measure: in a wide window the extra width
      becomes margin around the paper instead of a page stretched to the glass. */
+  /* The stage is as wide as the paper, so the margin sits against the sheet instead of at the window's
+     edge. The width comes from the page view because the fit decides it; `100%` is the answer before the
+     first layout exists. */
   .stage {
     display: flex;
     flex-direction: column;
     align-items: center;
     min-width: 0;
     min-height: 0;
+    width: 100%;
+    max-width: 1020px;
     padding: 6px 10px 6px 0;
   }
 
   .stage > :global(.reader) {
-    width: 100%;
+    width: var(--page-width, 100%);
     max-width: 1020px;
   }
 

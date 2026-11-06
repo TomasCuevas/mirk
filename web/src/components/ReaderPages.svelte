@@ -53,6 +53,7 @@
     jumpToPage = null,
     onPageChange,
     onScaleChange,
+    onWidthChange,
     pixelRatio = typeof globalThis.devicePixelRatio === "number" ? globalThis.devicePixelRatio : 1,
   }: {
     /** A document pdf.js has already loaded. The reader never loads or opens one itself. */
@@ -97,6 +98,13 @@
      */
     onScaleChange?: (scale: number) => void;
     /**
+     * The width the pages are actually drawn at, reported when the layout changes.
+     *
+     * The margin lives beside the paper, not at the window's edge, so the screen has to know how wide the
+     * paper ended up: the fit decides that, and only this component knows the result.
+     */
+    onWidthChange?: (width: number) => void;
+    /**
      * Called with the first page on screen, zero-based, whenever that page changes.
      *
      * The first page of the ones the reader can see, not of the overscan band around them: a page kept
@@ -112,6 +120,11 @@
   /** Tells the screen the level it should draw in its bar. */
   $effect(() => {
     onScaleChange?.(scale);
+  });
+
+  /** Tells the screen how wide the paper is, so the margin can sit against it. */
+  $effect(() => {
+    if (layout !== null) onWidthChange?.(layout.width);
   });
   /** The pages' sizes: measured, or `null` for a page nothing has acquired yet. */
   let sizes = $state<readonly (PageSize | null)[] | null>(null);
@@ -389,6 +402,44 @@
     };
   }
 
+  /** Turns to the neighbouring page, which is how a fitted page moves. */
+  function pageTurn(direction: 1 | -1): void {
+    if (scroller === undefined || layout === null) return;
+    const shown = plan?.visible?.[0] ?? 1;
+    const target = Math.min(Math.max(shown + direction, 1), layout.boxes.length);
+    const box = layout.boxes[target - 1];
+    if (box === undefined) return;
+    restores.invalidate();
+    scroller.scrollTop = box.top + stackOrigin();
+    scrollTop = scroller.scrollTop - stackOrigin();
+    reportFirstVisible([target]);
+  }
+
+  /**
+   * A fitted page has nowhere to scroll: every wheel gesture becomes a page turn.
+   *
+   * Under the other rules the page is taller than the window and scrolling is the only way to read it, so
+   * this handler does nothing at all there. A small cooldown keeps one flick of an inertial trackpad from
+   * turning three pages.
+   */
+  let lastTurn = 0;
+  function onWheel(event: WheelEvent): void {
+    if (fitMode !== "page" || Math.abs(event.deltaY) < 4) return;
+    event.preventDefault();
+    const now = Date.now();
+    if (now - lastTurn < 180) return;
+    lastTurn = now;
+    pageTurn(event.deltaY > 0 ? 1 : -1);
+  }
+
+  /** The keyboard equivalent of the wheel, for the same rule. */
+  function onKeydown(event: KeyboardEvent): void {
+    if (fitMode !== "page") return;
+    if (event.key !== "PageDown" && event.key !== "PageUp") return;
+    event.preventDefault();
+    pageTurn(event.key === "PageDown" ? 1 : -1);
+  }
+
   function onScroll(): void {
     if (scroller === undefined) return;
     // A reader's scroll is newer than any pending restore, so those restores are stale.
@@ -632,6 +683,7 @@
        the pages at all, because the scroller is the element with the overflow. Svelte's rule cannot see
        that the tabindex exists for scrolling rather than for a click handler. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="scroller"
     bind:this={scroller}
@@ -640,6 +692,8 @@
     aria-busy={busy}
     tabindex="0"
     onscroll={onScroll}
+    onwheel={onWheel}
+    onkeydown={onKeydown}
   >
     {#if loadFailure !== null}
       <p class="load-failure" role="alert">This document cannot be shown: {loadFailure}</p>
