@@ -319,7 +319,7 @@ const spanish: Catalogue = {
     "La interfaz se está ejecutando fuera del entorno de escritorio; no hay nada conectado.",
 
   "reader.opening": "Abriendo el documento…",
-  "reader.close": "Cerrar el lector",
+  "reader.close": "Cerrar",
   "reader.failed": "No se pudo abrir el documento: {message}",
   "reader.fallback": "Abrirlo con el visor del sistema",
 

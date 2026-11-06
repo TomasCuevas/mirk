@@ -129,6 +129,7 @@
    */
   let scrollTop = $state(0);
   let viewportHeight = $state(0);
+  let viewportWidth = $state(0);
 
   let scroller: HTMLDivElement | undefined = $state();
   let stack: HTMLDivElement | undefined = $state();
@@ -219,6 +220,29 @@
     currentPage = first - 1;
     onPageChange?.(first - 1);
   }
+
+  /**
+   * Fits the page to the column the first time the sizes and the viewport are both known.
+   *
+   * A page drawn at 100 % is its printed size: 612 pixels for an A4. In a narrow window that is wider than
+   * the space and the right edge is clipped; in a wide one it is a small sheet in the middle of nothing.
+   * The fit is what makes the window's size mean something, and it runs once: a reader who zooms has said
+   * what they want, and a fitting pass that kept overriding them would be a fight.
+   */
+  let manuallyZoomed = false;
+  $effect(() => {
+    // Re-runs when the window changes size or the window's mode changes: the fit has to follow the mode
+    // (two, three, four per row, full screen), and a size that only applied to the first layout would be a
+    // fit for a window that no longer exists.
+    if (manuallyZoomed || sizes === null || viewportWidth <= 0 || viewportHeight <= 0) return;
+    const widest = sizes.reduce((width, size) => Math.max(width, size?.width ?? 0), 0);
+    const first = sizes[initialPage] ?? sizes[0];
+    if (widest <= 0 || first === undefined || first === null) return;
+    const byWidth = viewportWidth / widest;
+    const byHeight = viewportHeight / first.height;
+    // Never tiny, never absurd: the smaller of the two axes, inside the zoom the reader can reach.
+    scale = clampScale(Math.min(byWidth, Math.max(byHeight, 0.6)));
+  });
 
   /**
    * Brings `jumpToPage` to the top of the viewport when the screen asks for it.
@@ -375,6 +399,7 @@
     restores.invalidate();
     scrollTop = scroller.scrollTop - stackOrigin();
     viewportHeight = scroller.clientHeight;
+    viewportWidth = scroller.clientWidth;
     // The window is computed here rather than read from the derived one: the derived value updates after
     // this handler, and a report that waited for it would depend on the flush that has already failed once.
     if (layout !== null) {
@@ -417,6 +442,8 @@
   }
 
   function zoom(direction: "in" | "out"): void {
+    // A reader who zooms has said what they want; the fit stops second-guessing them until a reload.
+    manuallyZoomed = true;
     applyScale(zoomScale(scale, direction));
   }
 
@@ -522,6 +549,7 @@
     const measure = (): void => {
       if (scroller === undefined) return;
       viewportHeight = scroller.clientHeight;
+    viewportWidth = scroller.clientWidth;
       scrollTop = scroller.scrollTop - stackOrigin();
     };
     measure();
@@ -677,14 +705,21 @@
     /* The stack's `offsetTop` is measured against this element, which is how the reader knows how much
        content — the estimation note — sits above the stack. */
     position: relative;
-    /* The scrollbar takes width when it appears; reserving it keeps the page column from shifting. */
-    scrollbar-gutter: stable;
     /* No vertical padding: the stack's own padding is part of the layout, so `scrollTop` and the page
        coordinates share one origin. Padding here would shift every window and zoom-anchor decision by
        that amount, enough to miss a page entering the last pixels of the viewport. */
     padding: 0;
-    background: radial-gradient(120% 60% at 50% 0%, rgba(255, 255, 255, 0.04), transparent 70%),
-      var(--canvas);
+    /* No background of its own: the paper floats on the application's canvas. The gradient that used to
+       be here painted a lighter panel around the page, which read as a frame wider than the paper and as
+       the reason a wide window looked like a page inside a box inside a window. */
+    /* The rail in the margin is the position indicator; a scrollbar inside the paper area would be a
+       second one, and it eats width the page needs. */
+    scrollbar-width: none;
+  }
+
+  .scroller::-webkit-scrollbar {
+    width: 0;
+    height: 0;
   }
 
   .scroller:focus-visible {

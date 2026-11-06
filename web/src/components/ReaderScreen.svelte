@@ -236,6 +236,7 @@
     <p class="state">{t("reader.opening")}</p>
   {:else}
     <div class="body">
+      <div class="frame">
       <!-- The margin does the bookkeeping: where you are, the rail, and how long the book is. It is
            decoration for a sighted reader — `ReaderPages` keeps the live region that announces the same
            page to assistive technology — so it is hidden from the accessibility tree on purpose. -->
@@ -258,6 +259,7 @@
             session?.interact();
           }}
         />
+      </div>
       </div>
     </div>
 
@@ -423,9 +425,21 @@
   .body {
     flex: 1;
     min-height: 0;
+    display: flex;
+    justify-content: center;
+    min-width: 0;
+  }
+
+  /* The margin and the paper are one column, centred in the window: at the window's edge the page number
+     was as far from the page as the window was wide. */
+  .frame {
+    --gutter: 56px;
     display: grid;
-    grid-template-columns: 56px minmax(0, 1fr);
+    grid-template-columns: var(--gutter) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
+    width: 100%;
+    max-width: 1180px;
+    min-height: 0;
   }
 
   /* The gutter: page number, rail, total — read top to bottom, so the rail fills the way a book runs. */
@@ -488,7 +502,7 @@
 
   .stage > :global(.reader) {
     width: 100%;
-    max-width: 780px;
+    max-width: 1020px;
   }
 
   .foot {
@@ -549,43 +563,31 @@
   /* One rule per window mode, at the widths the window actually takes (430 / 634 / 838) plus full screen.
      The margin is the first thing to give way, and the zoom level the second. */
   @media (max-width: 520px) {
-    .body {
-      grid-template-columns: 30px minmax(0, 1fr);
+    .frame {
+      --gutter: 30px;
     }
 
     .rail {
       flex-basis: 130px;
       width: 3px;
     }
-
-    .zoom output {
-      display: none;
-    }
   }
 
   @media (min-width: 521px) and (max-width: 700px) {
-    .body {
-      grid-template-columns: 48px minmax(0, 1fr);
+    .frame {
+      --gutter: 48px;
     }
   }
 
   @media (min-width: 701px) {
-    .body {
-      grid-template-columns: 56px minmax(0, 1fr);
-    }
-
     .byline {
       display: block;
     }
   }
 
   @media (min-width: 1200px) {
-    .body {
-      grid-template-columns: 88px minmax(0, 1fr);
-    }
-
-    .stage {
-      padding: 14px 88px 14px 0;
+    .frame {
+      --gutter: 88px;
     }
 
     .rail {
