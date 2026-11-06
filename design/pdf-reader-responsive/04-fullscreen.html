@@ -115,14 +115,14 @@
   /* El avance: una barra que se lee sin pensar y la cifra al lado, en el tono que sí se lee. */
   .progress { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
-  .bar {
+  .meter {
     display: block; width: 120px; height: 4px;
     border-radius: 999px; background: rgba(255, 255, 255, 0.09);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
     overflow: hidden;
   }
 
-  .bar i {
+  .meter i {
     display: block; height: 100%; width: 22%;
     border-radius: 999px;
     background: linear-gradient(to right, var(--brand), var(--brand-mid));
@@ -192,7 +192,7 @@
       <!-- El avance se dice dos veces porque son dos lecturas del mismo hecho: la barra de un vistazo, el
            número cuando importa la cifra. -->
       <div class="progress" role="img" aria-label="22 % del libro leído">
-        <span class="bar"><i></i></span>
+        <span class="meter"><i></i></span>
         <span class="pct">22 %</span>
       </div>
     </div>
