@@ -27,13 +27,27 @@
   .bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
   .cover { flex: none; width: 16px; height: 22px; border-radius: 3px; background: linear-gradient(160deg,#3a2c52,#1a1426); border: 1px solid var(--line); }
   .title { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .zoom { flex: none; display: flex; align-items: center; gap: 1px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-1); }
-  .zoom button { font: inherit; font-size: 12px; width: 20px; height: 22px; border: 0; background: none; color: var(--fg-muted); }
-  .close { flex: none; height: 24px; padding: 0 9px; border: 0; border-radius: 6px; background: #fff; color: var(--fg-on-loud); font: inherit; font-size: 11px; font-weight: 500; }
+  /* El zoom es un desplegable: un boton que dice el modo actual, como en la referencia. */
+  .zoom { position: relative; }
+  .zoom-button {
+    display: flex; align-items: center; gap: 6px;
+    height: 26px; padding: 0 8px;
+    border: 1px solid var(--line-strong); border-radius: 6px;
+    background: var(--surface-1); color: var(--fg);
+    font: inherit; font-size: 11px;
+  }
+  .zoom-button .caret { font-size: 8px; color: var(--fg-muted); }
+  .close-icon {
+    display: grid; place-items: center;
+    width: 26px; height: 26px;
+    border: 1px solid var(--line-strong); border-radius: 6px;
+    background: var(--surface-1); color: var(--fg-muted);
+    font: inherit; font-size: 12px;
+  }
   .body { flex: 1; min-height: 0; display: grid; grid-template-columns: 30px minmax(0,1fr); }
   .gutter { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
-  .page-num, .total { writing-mode: vertical-rl; color: var(--fg-subtle); font-size: 10px; letter-spacing: 0.14em; }
-  .page-num { font-family: var(--font-display); font-size: 12px; letter-spacing: 0.16em; }
+  .page-num, .total { writing-mode: vertical-rl; color: var(--fg-muted); font-size: 12px; letter-spacing: 0.14em; }
+  .page-num { font-family: var(--font-display); font-size: 14px; letter-spacing: 0.16em; color: var(--fg); }
   .rail { position: relative; flex: 0 0 150px; width: 3px; border-radius: 999px; background: rgba(255,255,255,0.09); overflow: hidden; }
   .rail i { position: absolute; inset: 0 0 auto 0; height: 22%; border-radius: 999px; background: linear-gradient(to bottom, var(--brand), var(--brand-mid)); box-shadow: inset 0 -2px 0 rgba(255,255,255,0.92); }
   .stage { min-width: 0; min-height: 0; padding: 4px 6px 4px 0; display: flex; flex-direction: column; }
@@ -51,8 +65,12 @@
     <div class="bar">
       <span class="cover" aria-hidden="true"></span>
       <span class="title">Cita con Rama</span>
-      <span class="zoom"><button aria-label="Alejar">−</button><button aria-label="Acercar">+</button></span>
-      <button class="close">Cerrar</button>
+      <div class="zoom">
+        <button class="zoom-button" aria-haspopup="listbox" aria-expanded="false">
+          Fit Page <span class="caret" aria-hidden="true">▾</span>
+        </button>
+      </div>
+      <button class="close-icon" aria-label="Cerrar el lector" title="Cerrar el lector (Esc)">✕</button>
     </div>
     <div class="body">
       <aside class="gutter" aria-hidden="true">
