@@ -18,7 +18,6 @@
   import { invoke } from "../lib/tauri";
   import { createPageRecorder } from "../lib/reader-progress";
   import { createReadingSession } from "../lib/reader-session";
-  import { MAX_SCALE, MIN_SCALE } from "../lib/reader-pages";
   import type { LibraryEntry } from "../lib/library";
   import type { Translate } from "../lib/i18n";
 
@@ -54,10 +53,41 @@
   let typed = $state("");
   /** The page the reader asked to jump to, zero-based; the page view scrolls to it and it is cleared. */
   let jumpToPage = $state<number | null>(null);
-  /** The zoom the page view is drawing at, reported by it: the controls live in this bar. */
-  let scale = $state(1);
-  /** The page view's imperative handle, for the zoom controls that belong to this bar. */
-  let pages = $state<{ zoomBy: (direction: "in" | "out") => void } | null>(null);
+  /** Whether the zoom menu is open. */
+  let zooming = $state(false);
+  /** The fit rule in force, and the percentage when the reader named one instead. */
+  let fitMode = $state<"page" | "width" | "auto">("auto");
+  let pinned = $state<number | null>(null);
+  /** The ladder the menu offers, the same one the design has. */
+  const ladder = [50, 70, 85, 100, 125, 150, 175, 200, 300, 400];
+  const fitLabels: Record<"page" | "width" | "auto", string> = {
+    page: "Fit Page",
+    width: "Fit Width",
+    auto: "Automatic",
+  };
+  /** What the button says: the rule in force, or the percentage the reader chose. */
+  const zoomLabel = $derived(pinned !== null ? `${pinned}%` : fitLabels[fitMode]);
+  /** The page view's imperative handle, for the controls that belong to this bar. */
+  let pages = $state<{
+    zoomBy: (direction: "in" | "out") => void;
+    setScale: (value: number) => void;
+    fitTo: (mode: "page" | "width" | "auto") => void;
+  } | null>(null);
+
+  /** Applies a fit rule and closes the menu. */
+  function chooseFit(mode: "page" | "width" | "auto"): void {
+    fitMode = mode;
+    pinned = null;
+    zooming = false;
+    pages?.fitTo(mode);
+  }
+
+  /** Applies a named percentage; a percentage is an instruction, not a hint. */
+  function choosePercent(value: number): void {
+    pinned = value;
+    zooming = false;
+    pages?.setScale(value / 100);
+  }
   /** The document's page count, when the library knows it. */
   const total = $derived(entry.pages ?? null);
   /**
@@ -209,22 +239,51 @@
         <p class="byline">{entry.authors.join(", ")}</p>
       {/if}
     </div>
-    <div class="zoom" role="group" aria-label="Zoom">
+    <div class="zoom">
       <button
+        class="zoom-button"
         type="button"
-        aria-label="Zoom out"
-        disabled={scale <= MIN_SCALE}
-        onclick={() => pages?.zoomBy("out")}>−</button
+        aria-haspopup="listbox"
+        aria-expanded={zooming}
+        onclick={() => (zooming = !zooming)}
       >
-      <output aria-live="polite">{Math.round(scale * 100)} %</output>
-      <button
-        type="button"
-        aria-label="Zoom in"
-        disabled={scale >= MAX_SCALE}
-        onclick={() => pages?.zoomBy("in")}>+</button
-      >
+        {zoomLabel} <span class="caret" aria-hidden="true">▾</span>
+      </button>
+      {#if zooming}
+        <div class="zoom-menu" role="listbox" aria-label="Zoom">
+          {#each ["page", "width", "auto"] as const as mode (mode)}
+            <button
+              class="opt"
+              type="button"
+              role="option"
+              aria-selected={pinned === null && fitMode === mode}
+              onclick={() => chooseFit(mode)}
+            >
+              <span>{fitLabels[mode]}</span><span class="dot"></span>
+            </button>
+          {/each}
+          <div class="sep" role="presentation"></div>
+          {#each ladder as value (value)}
+            <button
+              class="opt"
+              type="button"
+              role="option"
+              aria-selected={pinned === value}
+              onclick={() => choosePercent(value)}
+            >
+              <span>{value}%</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
     </div>
-    <button class="close" type="button" onclick={onClose}>{t("reader.close")}</button>
+    <button
+      class="close-icon"
+      type="button"
+      onclick={onClose}
+      aria-label={t("reader.close")}
+      title={t("reader.close")}>✕</button
+    >
   </header>
 
   {#if failure !== null}
@@ -243,7 +302,7 @@
       <aside class="gutter" aria-hidden="true">
         <span class="page">{currentPage + 1}</span>
         <span class="rail"><i style:height={`${percent ?? 0}%`}></i></span>
-        <span class="total">{total ?? "—"}</span>
+        <span class="total">{total ?? "—"}{#if total !== null}<em>Páginas</em>{/if}</span>
       </aside>
       <div class="stage">
         <ReaderPages
@@ -251,7 +310,6 @@
           initialPage={position ?? 0}
           bind:this={pages}
           bind:currentPage
-          onScaleChange={(value) => (scale = value)}
           {jumpToPage}
           onPageChange={(page) => {
             recorder?.observe(page);
@@ -278,10 +336,15 @@
           />
         </form>
       {:else}
-        <button class="jump" type="button" onclick={() => (asking = true)}>Ir a la página…</button>
+        <button class="jump" type="button" onclick={() => (asking = true)}
+          ><span class="jump-icon" aria-hidden="true">⇥</span>Ir a la página…</button
+        >
       {/if}
       {#if percent !== null}
-        <span class="percent">{percent} %</span>
+        <div class="progress" role="img" aria-label="{percent} % del libro leído">
+          <span class="meter"><i style:width={`${percent}%`}></i></span>
+          <span class="percent">{percent} %</span>
+        </div>
       {/if}
     </footer>
   {/if}
@@ -363,58 +426,114 @@
     text-overflow: ellipsis;
   }
 
+  /* The zoom is a menu, as in the design: one control that names the rule in force, and a list under it.
+     It replaced three controls (−, the level, +) that said less and took the same room. */
   .zoom {
+    position: relative;
     flex: none;
+  }
+
+  .zoom-button {
     display: flex;
     align-items: center;
-    border: 1px solid var(--line);
+    gap: 8px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--line-strong);
     border-radius: var(--r-sm, 6px);
     background: var(--surface-1);
-  }
-
-  .zoom button {
+    color: var(--fg);
     font: inherit;
-    font-size: var(--text-sm);
-    width: 26px;
-    height: 24px;
-    border: 0;
-    background: none;
-    color: var(--fg-muted);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
     cursor: pointer;
   }
 
-  .zoom button:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  .zoom output {
-    min-width: 44px;
-    text-align: center;
-    font-size: var(--text-xs);
+  .zoom-button .caret {
+    font-size: 9px;
     color: var(--fg-muted);
-    font-variant-numeric: tabular-nums;
   }
 
-  .close {
-    flex: none;
-    height: 28px;
-    padding: 0 12px;
+  .zoom-menu {
+    position: absolute;
+    top: 32px;
+    right: 0;
+    z-index: 5;
+    min-width: 176px;
+    padding: 6px;
+    background: #14101d;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-md, 8px);
+    box-shadow: var(--shadow-modal);
+  }
+
+  .opt {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    height: 26px;
+    padding: 0 8px;
     border: 0;
     border-radius: var(--r-sm, 6px);
-    background: #fff;
-    color: var(--fg-on-loud, #0b0714);
+    background: none;
+    color: var(--fg-muted);
     font: inherit;
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
+    font-size: var(--text-xs);
+    text-align: left;
     cursor: pointer;
   }
 
-  .close:hover {
-    background: var(--fg);
+  .opt:hover {
+    background: var(--surface-2);
+    color: var(--fg);
   }
 
-  .close:focus-visible {
+  .opt[aria-selected="true"] {
+    color: var(--fg);
+  }
+
+  .opt .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  .opt[aria-selected="true"] .dot {
+    background: var(--success);
+    box-shadow: 0 0 0 2px rgba(143, 214, 180, 0.22);
+  }
+
+  .sep {
+    height: 1px;
+    margin: 6px 8px;
+    background: var(--line);
+  }
+
+  /* Leaving is an icon: it was a white pill that competed with the book's title for the same row. */
+  .close-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm, 6px);
+    background: var(--surface-1);
+    color: var(--fg-muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
+
+  .close-icon:hover {
+    color: var(--fg);
+    background: var(--surface-2);
+  }
+
+  .close-icon:focus-visible {
     outline: 2px solid var(--line-focus);
     outline-offset: 2px;
   }
@@ -459,6 +578,7 @@
   }
 
   .page {
+    color: var(--fg);
     font-family: var(--font-display, Georgia, serif);
     font-size: var(--text-base);
     letter-spacing: 0.16em;
@@ -467,6 +587,16 @@
   .total {
     font-size: var(--text-xs);
     letter-spacing: var(--tracking-wide, 0.14em);
+  }
+
+  /* The word travels with the number and gives way first: below full width the margin has no room for it. */
+  .total em {
+    display: none;
+    font-style: normal;
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
   }
 
   /* The only saturated thing on the screen, because progress is the one fact the reader is here for. */
@@ -516,17 +646,51 @@
     color: var(--fg-subtle);
   }
 
-  .percent {
+  .progress {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .meter {
+    display: block;
+    width: 100px;
+    height: 4px;
+    border-radius: var(--r-full, 999px);
+    background: rgba(255, 255, 255, 0.09);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+    overflow: hidden;
+  }
+
+  .meter i {
+    display: block;
+    height: 100%;
+    border-radius: var(--r-full, 999px);
+    background: linear-gradient(to right, var(--brand), var(--brand-mid));
+    box-shadow: inset -2px 0 0 rgba(255, 255, 255, 0.9);
+  }
+
+  .percent {
+    font-size: var(--text-xs);
+    color: var(--fg);
     font-variant-numeric: tabular-nums;
+  }
+
+  .jump-icon {
+    font-size: 9px;
+    color: var(--fg-subtle);
   }
 
   /* The one action the footer carries: jumping is the only way to move without scrolling. */
   .jump {
-    padding: 3px 8px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm, 6px);
-    background: transparent;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px 3px 8px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-full, 999px);
+    background: var(--surface-1);
     color: var(--fg-muted);
     font: inherit;
     font-size: var(--text-xs);
@@ -588,6 +752,22 @@
   @media (min-width: 1200px) {
     .frame {
       --gutter: 88px;
+    }
+
+    .page {
+      font-size: var(--text-xl);
+    }
+
+    .total {
+      font-size: var(--text-sm);
+    }
+
+    .total em {
+      display: inline;
+    }
+
+    .meter {
+      width: 120px;
     }
 
     .rail {

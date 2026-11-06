@@ -234,14 +234,10 @@
     // Re-runs when the window changes size or the window's mode changes: the fit has to follow the mode
     // (two, three, four per row, full screen), and a size that only applied to the first layout would be a
     // fit for a window that no longer exists.
-    if (manuallyZoomed || sizes === null || viewportWidth <= 0 || viewportHeight <= 0) return;
-    const widest = sizes.reduce((width, size) => Math.max(width, size?.width ?? 0), 0);
-    const first = sizes[initialPage] ?? sizes[0];
-    if (widest <= 0 || first === undefined || first === null) return;
-    const byWidth = viewportWidth / widest;
-    const byHeight = viewportHeight / first.height;
-    // Never tiny, never absurd: the smaller of the two axes, inside the zoom the reader can reach.
-    scale = clampScale(Math.min(byWidth, Math.max(byHeight, 0.6)));
+    const key = `${viewportWidth}x${viewportHeight}x${fitMode}`;
+    if (manuallyZoomed || fittedFor === key) return;
+    fittedFor = key;
+    applyFit();
   });
 
   /**
@@ -439,6 +435,52 @@
    */
   export function zoomBy(direction: "in" | "out"): void {
     zoom(direction);
+  }
+
+  /**
+   * Sets an absolute zoom from the reader's bar, for the percentage ladder.
+   *
+   * It pins the zoom the way a manual step does: a reader who names a percentage has said what they want.
+   */
+  export function setScale(value: number): void {
+    manuallyZoomed = true;
+    scale = clampScale(value);
+  }
+
+  /**
+   * Re-applies one of the fit rules, ignoring the pin.
+   *
+   * The three rules answer three different questions: `page` keeps the whole sheet visible, `width` fills
+   * the column and lets the page be taller than the window, `auto` is the width rule with the height as a
+   * ceiling — the one that adapts to the window's mode.
+   */
+  export function fitTo(mode: "page" | "width" | "auto"): void {
+    manuallyZoomed = false;
+    fitMode = mode;
+    fittedFor = "";
+    applyFit();
+  }
+
+  /** The fit the reader last chose; a percentage pin makes it irrelevant until a rule is named again. */
+  let fitMode = $state<"page" | "width" | "auto">("auto");
+  /** What the last fit was computed for, so the same numbers are not recomputed on every scroll. */
+  let fittedFor = "";
+
+  function applyFit(): void {
+    if (sizes === null || viewportWidth <= 0 || viewportHeight <= 0) return;
+    const widest = sizes.reduce((width, size) => Math.max(width, size?.width ?? 0), 0);
+    const first = sizes[initialPage] ?? sizes[0];
+    if (widest <= 0 || first === undefined || first === null) return;
+    const byWidth = viewportWidth / widest;
+    const byHeight = viewportHeight / first.height;
+    const fit =
+      fitMode === "width"
+        ? byWidth
+        : fitMode === "page"
+          ? Math.min(byWidth, byHeight)
+          : Math.min(byWidth, Math.max(byHeight, 0.6));
+    fitMode = fitMode;
+    scale = clampScale(fit);
   }
 
   function zoom(direction: "in" | "out"): void {

@@ -114,7 +114,9 @@ describe("the reader screen", () => {
     const { target } = render();
 
     await vi.waitFor(() => expect(target.querySelector(".page")?.textContent).toBe("142"));
-    expect(target.querySelector(".total")?.textContent).toBe("436");
+    // The number and its word travel together; the word is hidden by CSS below full width, not removed.
+    expect(target.querySelector(".total")?.textContent).toContain("436");
+    expect(target.querySelector(".total em")?.textContent).toBe("Páginas");
     expect(target.querySelector(".percent")?.textContent).toBe("33 %");
     expect(target.querySelector<HTMLElement>(".rail i")?.style.height).toBe("33%");
   });
@@ -184,7 +186,7 @@ describe("the reader screen", () => {
     source.openReaderDocument.mockReturnValue(new Promise(() => {}));
     const { target, onClose } = render();
 
-    target.querySelector<HTMLButtonElement>(".close")?.click();
+    target.querySelector<HTMLButtonElement>(".close-icon")?.click();
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
