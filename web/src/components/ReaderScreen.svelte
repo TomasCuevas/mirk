@@ -224,6 +224,8 @@
           bind:currentPage
           {jumpToPage}
           onPageChange={(page) => {
+            // TEMPORARY DIAGNOSTIC: say whether the screen received the page and whether it has a recorder.
+            console.error("[mirk] screen got page", page, "recorder:", recorder !== null);
             recorder?.observe(page);
             session?.page(page);
             session?.interact();

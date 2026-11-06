@@ -195,6 +195,18 @@
    */
   let reported = -1;
   $effect(() => {
+    // TEMPORARY DIAGNOSTIC (removed once the report path is fixed): names what the effect sees on every run.
+    console.error(
+      "[mirk] position",
+      JSON.stringify({
+        first: plan?.visible?.[0] ?? null,
+        reported,
+        resumed,
+        initialPage,
+        scrollTop,
+        visible: plan?.visible?.length ?? 0,
+      }),
+    );
     // Nothing is reported until a resume has been applied, because the first page the stack shows is page
     // one for the instant before the stored page is restored — and reporting it would overwrite the very
     // position the resume is about to honour. The effect re-runs when the resume moves the stack.
@@ -203,6 +215,7 @@
     if (first === undefined || first === reported) return;
     reported = first;
     currentPage = first - 1;
+    console.error("[mirk] reporting page", first - 1);
     onPageChange?.(first - 1);
   });
 
