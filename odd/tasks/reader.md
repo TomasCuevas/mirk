@@ -250,3 +250,7 @@ The build exited non-zero **after** writing the bundle, at the updater signature
 
 Installing is the owner's step (`sudo` needs a password here) and is what makes the installed application work again: 0.2.0 opens the library at schema 13 directly, and the reader is now the product's own.
 
+L76 — The owner's correction, and it is right: the release was **premature**. The reader's chrome was implemented and iterated on the canvas, but the UI polish the owner wanted was not finished, so 0.2.0 ships a product whose interface is not yet the one they asked for. Their instruction is explicit: install 0.2.0 so they can use and test it, and plan **0.2.1** for the polished reader.
+
+That changes the delivery, not the scope: 0.2.0 stays the version that makes the installed application work again (schema 13, first-party reader), and 0.2.1 carries the interface work. The lesson for the workflow, written down so it is not repeated: an implementation handoff from a design board is not a finished interface — the owner's review of the running application is, and the release waits for it.
+
