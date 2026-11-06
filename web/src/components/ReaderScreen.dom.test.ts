@@ -56,14 +56,19 @@ afterEach(() => {
   mounted = null;
   source.openReaderDocument.mockReset();
   ipc.invoke.mockClear();
+  ipc.invoke.mockImplementation(async () => null);
 });
 
-function render(): { onClose: () => void; onFallback: () => void; target: HTMLElement } {
+function render(
+  _unused?: undefined,
+  overrides: Partial<LibraryEntry> = {},
+): { onClose: () => void; onFallback: () => void; target: HTMLElement } {
   const onClose = vi.fn();
   const onFallback = vi.fn();
   const target = document.createElement("div");
   document.body.append(target);
-  mounted = mount(ReaderScreen, { target, props: { entry, t, onClose, onFallback } }) as never;
+  const props = { entry: { ...entry, ...overrides }, t, onClose, onFallback };
+  mounted = mount(ReaderScreen, { target, props }) as never;
   flushSync();
   return { onClose, onFallback, target };
 }
@@ -100,6 +105,31 @@ describe("the reader screen", () => {
     expect(onFallback).toHaveBeenCalledTimes(1);
   });
 
+  it("draws the reading position in the margin, with the share of the book beside it", async () => {
+    // 03-margins: the page number and the rail live in the gutter, never over the paper. The number is the
+    // page the reader sees, which is the zero-based one the page view reports plus one.
+    // The page the store remembers is what the margin starts from: this is the resume path.
+    ipc.invoke.mockImplementation(async (name: string) => (name === "reader_position" ? 141 : null));
+    source.openReaderDocument.mockResolvedValue({ destroy: vi.fn(), stats: {}, document: {} });
+    const { target } = render();
+
+    await vi.waitFor(() => expect(target.querySelector(".page")?.textContent).toBe("142"));
+    expect(target.querySelector(".total")?.textContent).toBe("436");
+    expect(target.querySelector(".percent")?.textContent).toBe("33 %");
+    expect(target.querySelector<HTMLElement>(".rail i")?.style.height).toBe("33%");
+  });
+
+  it("shows no percentage for a document whose page count is unknown", async () => {
+    // A rail with no total would be a rail invented from nothing.
+    ipc.invoke.mockImplementation(async (name: string) => (name === "reader_position" ? 141 : null));
+    source.openReaderDocument.mockResolvedValue({ destroy: vi.fn(), stats: {}, document: {} });
+    const { target } = render(undefined, { pages: null });
+
+    await vi.waitFor(() => expect(target.querySelector(".page")?.textContent).toBe("142"));
+    expect(target.querySelector(".percent")).toBeNull();
+    expect(target.querySelector(".rail i")).not.toBeNull();
+  });
+
   it("writes the reading session, with the page it opened at, when the screen leaves", async () => {
     // R3b: the session is written once, on the way out, because its page visits name it. A reader that
     // opened the document and closed it again has still read for that long, and the visit says where.
@@ -111,7 +141,7 @@ describe("the reader screen", () => {
     const { target } = render();
 
     // The page view exists only once the document settled, which is when the session begins.
-    await vi.waitFor(() => expect(target.querySelector(".pages")).not.toBeNull());
+    await vi.waitFor(() => expect(target.querySelector(".stage")).not.toBeNull());
 
     unmount(mounted as never);
     mounted = null;

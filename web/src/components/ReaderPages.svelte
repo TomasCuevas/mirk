@@ -598,7 +598,9 @@
     flex: none;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    /* The zoom is the only thing left in this row: the page number lives in the margin the screen draws,
+       so the controls sit at the end of the row and the paper keeps its width. */
+    justify-content: flex-end;
     gap: var(--space-3);
     padding: var(--space-2) var(--space-3);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
@@ -641,11 +643,22 @@
   }
 
   /* Tabular digits so the percentage does not shuffle the controls sideways as it changes. */
-  .level,
-  .position {
+  .level {
     font-size: var(--text-sm);
     font-variant-numeric: tabular-nums;
     color: var(--fg-muted);
+  }
+
+  /* The page number is drawn in the margin by the screen that owns the frame. This element stays for
+     assistive technology: it is the live region that announces a page change, and hiding it visually
+     must not silence it. */
+  .position {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .level {

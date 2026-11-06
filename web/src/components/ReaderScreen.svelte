@@ -7,6 +7,11 @@
   //
   // It takes the window (S3). The window's own bar above it stays, because the window is undecorated
   // and that bar is the only way to move or close it; what goes away is the navigation and the screens.
+  //
+  // The chrome is the margin (design/pdf-reader/03-margins.html): the page number and the progress rail
+  // live in a gutter beside the paper, so nothing ever covers the document — the one thing a reader is
+  // looking at. The controls sit in the top bar and the percentage in the bottom one, both outside the
+  // page's own width.
   import { onMount } from "svelte";
   import ReaderPages from "./ReaderPages.svelte";
   import { openReaderDocument, type ReaderSource } from "../lib/reader-source";
@@ -37,6 +42,21 @@
   let failure = $state<string | null>(null);
   /** The page the store remembers for this document, zero-based; `null` when it has never heard of one. */
   let position = $state<number | null>(null);
+
+  /** The first page on screen, zero-based. The gutter's number is this one, plus one. */
+  let currentPage = $state(0);
+  /** The document's page count, when the library knows it. */
+  const total = $derived(entry.pages ?? null);
+  /**
+   * How far through the document the reader is, as a whole number.
+   *
+   * `null` when the page count is unknown: a rail with no total would be a rail invented from nothing,
+   * and a percentage nobody can compute is worse than no percentage.
+   */
+  const percent = $derived(
+    total === null ? null : Math.min(100, Math.max(0, Math.round(((currentPage + 1) / total) * 100))),
+  );
+
   /** Turns page turns into one stored fact, and holds the last one until the reader closes (S4). */
   let recorder: ReturnType<typeof createPageRecorder> | null = null;
 
@@ -93,6 +113,7 @@
           return;
         }
         position = page;
+        currentPage = page ?? 0;
         recorder = createPageRecorder((changed) =>
           invoke("reader_remember_page", { id: entry.id, page: changed }).then(() => undefined),
         );
@@ -137,7 +158,8 @@
 </script>
 
 <section class="screen" aria-label={entry.title}>
-  <header class="bar">
+  <header class="top">
+    <span class="mark" aria-hidden="true"></span>
     <p class="title">{entry.title}</p>
     <button class="close" type="button" onclick={onClose}>{t("reader.close")}</button>
   </header>
@@ -150,22 +172,39 @@
   {:else if source === null}
     <p class="state">{t("reader.opening")}</p>
   {:else}
-    <div class="pages">
-      <ReaderPages
-        document={source.document}
-        initialPage={position ?? 0}
-        onPageChange={(page) => {
-          recorder?.observe(page);
-          session?.page(page);
-          session?.interact();
-        }}
-      />
+    <div class="body">
+      <!-- The margin does the bookkeeping: where you are, the rail, and how long the book is. It is
+           decoration for a sighted reader — `ReaderPages` keeps the live region that announces the same
+           page to assistive technology — so it is hidden from the accessibility tree on purpose. -->
+      <aside class="gutter" aria-hidden="true">
+        <span class="page">{currentPage + 1}</span>
+        <span class="rail"><i style:height={`${percent ?? 0}%`}></i></span>
+        <span class="total">{total ?? "—"}</span>
+      </aside>
+      <div class="stage">
+        <ReaderPages
+          document={source.document}
+          initialPage={position ?? 0}
+          onPageChange={(page) => {
+            currentPage = page;
+            recorder?.observe(page);
+            session?.page(page);
+            session?.interact();
+          }}
+        />
+      </div>
     </div>
+
+    <footer class="foot">
+      {#if percent !== null}
+        <span class="percent">{percent} %</span>
+      {/if}
+    </footer>
   {/if}
 </section>
 
 <style>
-  /* A column that fills whatever the shell gives it: the bar is fixed height, the pages take the rest.
+  /* A column that fills whatever the shell gives it: the bars are fixed height, the pages take the rest.
      `min-height: 0` is what lets the pages shrink instead of pushing the bar out of the window. */
   .screen {
     display: flex;
@@ -175,13 +214,21 @@
     overflow: hidden;
   }
 
-  .bar {
+  .top {
     flex: none;
     display: flex;
     align-items: center;
-    gap: var(--space-2, 8px);
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--line);
+    gap: var(--space-3, 12px);
+    padding: 10px 14px;
+  }
+
+  /* The mark, not a logo: one saturated square says which application this is and nothing more. */
+  .mark {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--r-sm, 6px);
+    background: var(--brand);
   }
 
   .title {
@@ -191,31 +238,120 @@
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
     color: var(--fg);
+    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
+  /* The one loud control on this screen: leaving is the only thing here that is not reading. */
   .close {
     flex: none;
-    padding: 4px 10px;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--r-sm, 8px);
-    background: transparent;
-    color: var(--fg-muted);
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: var(--r-sm, 6px);
+    background: #fff;
+    color: var(--fg-on-loud, #0b0714);
     font: inherit;
-    font-size: var(--text-xs);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
     cursor: pointer;
   }
 
   .close:hover {
-    color: var(--fg);
-    border-color: var(--line-focus);
+    background: var(--fg);
   }
 
-  .pages {
+  .close:focus-visible {
+    outline: 2px solid var(--line-focus);
+    outline-offset: 2px;
+  }
+
+  .body {
     flex: 1;
     min-height: 0;
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  /* The gutter: page number, rail, total — read top to bottom, so the rail fills the way a book runs. */
+  .gutter {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-4, 16px);
+  }
+
+  .page,
+  .total {
+    writing-mode: vertical-rl;
+    color: var(--fg-subtle);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .page {
+    font-family: var(--font-display, Georgia, serif);
+    font-size: var(--text-base);
+    letter-spacing: 0.16em;
+  }
+
+  .total {
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wide, 0.14em);
+  }
+
+  /* The only saturated thing on the screen, because progress is the one fact the reader is here for. */
+  .rail {
+    position: relative;
+    flex: 0 0 180px;
+    width: 4px;
+    border-radius: var(--r-full, 999px);
+    background: rgba(255, 255, 255, 0.09);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+    overflow: hidden;
+  }
+
+  .rail i {
+    position: absolute;
+    inset: 0 0 auto 0;
+    border-radius: var(--r-full, 999px);
+    background: linear-gradient(to bottom, var(--brand), var(--brand-mid));
+    /* The bright edge is where the reader is: the one mark that has to be findable at a glance. */
+    box-shadow: inset 0 -2px 0 rgba(255, 255, 255, 0.92);
+  }
+
+  .stage {
+    min-width: 0;
+    min-height: 0;
+    padding-right: 8px;
+  }
+
+  .foot {
+    flex: none;
+    display: flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 14px;
+    border-top: 1px solid var(--line);
+    font-size: var(--text-xs);
+    color: var(--fg-subtle);
+  }
+
+  .percent {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* At the narrowest window the margin costs too much of the page, so it gives way first. */
+  @media (max-width: 520px) {
+    .body {
+      grid-template-columns: 40px minmax(0, 1fr);
+    }
+
+    .rail {
+      flex-basis: 132px;
+    }
   }
 
   .state {
