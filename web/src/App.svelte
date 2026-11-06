@@ -540,6 +540,12 @@
         // The named document may not be in the library at all (a file the reader has not added), and a
         // made-up id writes nowhere. Falling back to the library's first document keeps the run measuring
         // a real row: the transport and the paint were already measured on a real book.
+        // R3b/R4: the harness closes the reader the way the close button does, because the session and the
+        // last page are written by the cleanup a reader's own close runs. Without this a measurement only
+        // ever proves the open, and the facts a session contributes are never exercised in a real window.
+        setTimeout(() => {
+          if (reading !== null) closeReader();
+        }, 8000);
         reading = entries.find((entry) => entry.path === path) ?? entries[0] ?? {
           id: 0,
           path,

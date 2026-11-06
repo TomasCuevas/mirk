@@ -144,3 +144,14 @@ The write is one command at the end (`reader_record_session`), not one per page,
 
 The unit is not done until a real document says so. `reader_record_session` has never been called by a running application holding a real PDF, so the number R4 has to produce is a session row with a non-zero `active_ms` and the visits the reader actually showed (S6).
 
+L64 — R3b's facts, exercised by a running application holding a real document. The run opened the 301 KB / 90-page book from a **copy** of the owner's library (`MIRK_DATA_DIR` into `target/`, deleted after the reading; the installed application's directory was never opened), waited eight seconds, and closed the reader the way the close button does, so the cleanup a reader's own close runs is the one that wrote the facts. Measured in the copy:
+
+```
+reading_sessions  1 row   doc 38   started 1793969665  ended 1793969672  active_ms 1789
+page_visits       1 row   doc 38   session 1   page 0   visible_ms 1789
+```
+
+The seven seconds of wall clock against 1789 ms of `active_ms` is not a defect: the measurement window reported `"focused": false` (nothing was driving it from a terminal), and L4's rule counts nothing while the window is unfocused. That is the rule discriminating rather than a clock that cannot tell — the earlier run in a focused window, by contrast, reported `"focused": true`. What this proves: a real document opens, a real session row reaches the database with a non-zero active time, the visit names the session that observed it, and the close path runs the cleanup rather than being skipped by a killed process (which is what my earlier `kill` did, and why this needed its own run).
+
+What it does **not** prove, and R4 still owes: a session with more than one page in it (nothing scrolled — no keyboard, no pointer, and the harness does not scroll), the resume half (close, reopen, land on the page rather than page zero), and a release build rather than `bun run app:dev`. R4's original wording — the 136 MB / 436-page book — was already retired in L59 for memory; the acceptance document must be restated in terms of a light book and an actual scroll before it can be closed.
+
