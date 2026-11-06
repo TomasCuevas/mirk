@@ -191,3 +191,9 @@ L67 — R4 closed. The harness that proved the transport, the paint and the sess
 
 One debt is stated rather than hidden: the component half of the blank-resume fix — the `tick()` re-apply in `ReaderPages.svelte` — has no committed test. The worker proved it in a scratch mount because that component's DOM test file was outside its allowed surfaces. The right moment to pin it is the design pass, which touches the component anyway; until then the proof lives in L66 and in two real runs.
 
+L68 — Design phase, first pass. The canvas reported two design sources and both are **vendored pdf.js viewer CSS**, not mirk's system, so the sync read `web/src/styles/tokens.css` instead — the file that calls itself one source of truth — and wrote `design/system.md` and `design/system.html` from it. Every value in `system.md` is traced to that path; nothing is invented. One honest gap is stated there: artboards approximate Instrument Serif and Inter with Georgia and `system-ui`, because an artboard may not reference the project's local `woff2` files.
+
+Three directions for the reader live in `design/pdf-reader/`, all at the window's real 634 × 844: `01-quiet-page` (the page alone, one floating pill), `02-position-bar` (a permanent bar and a progress rail), `03-margins` (page number and progress in the gutter, controls never over the paper). They differ in structure, not in colour, and each names the tradeoff it makes in the manifest.
+
+What the current build actually has, for the comparison to be honest: a bar with the title and a close button, then a toolbar with `−`, the zoom level, `+` and a live page counter — all of it stacked above the scroller, all of it permanent, and the page counter duplicated by the pill the reader does not have.
+

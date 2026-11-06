@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lector — la página sola</title>
+<style>
+  :root {
+    --canvas: #0a0714;
+    --surface: rgba(255,255,255,0.035);
+    --glass: rgba(18,13,32,0.5);
+    --glass-border: rgba(255,255,255,0.1);
+    --glass-highlight: rgba(255,255,255,0.12);
+    --line: rgba(255,255,255,0.07);
+    --line-strong: rgba(255,255,255,0.13);
+    --line-focus: #a9b8f0;
+    --fg: #f2eef9;
+    --fg-muted: #a79fbb;
+    --fg-subtle: #7b7391;
+    --fg-on-loud: #0b0714;
+    --brand: #e6a3c9;
+    --brand-mid: #c47aa8;
+    --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-display: Georgia, "Times New Roman", serif;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-full: 999px;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: grid;
+    place-items: center;
+    background: #050308;
+    font-family: var(--font-sans);
+    color: var(--fg);
+  }
+  .window {
+    position: relative;
+    width: 634px;
+    height: 844px;
+    overflow: hidden;
+    background: radial-gradient(120% 80% at 20% 0%, #221534 0%, var(--canvas) 60%);
+    border-radius: 12px;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  /* The page is the screen. Everything else has to earn its pixels. */
+  .page {
+    position: absolute;
+    inset: 0;
+    padding: 64px 56px 120px;
+    background: #fbfaf7;
+    color: #1b1720;
+    font-family: var(--font-display);
+    font-size: 17px;
+    line-height: 1.62;
+    overflow: hidden;
+  }
+  .page h1 {
+    font-size: 19px;
+    font-weight: 400;
+    letter-spacing: 0.01em;
+    margin: 0 0 22px;
+    color: #2a2333;
+  }
+  .page p { margin: 0 0 14px; }
+  .page p.first::first-letter { color: #5b4a6b; }
+  .page .fade {
+    position: absolute;
+    left: 0; right: 0; bottom: 0; height: 150px;
+    background: linear-gradient(to bottom, rgba(251,250,247,0), #fbfaf7 62%);
+  }
+  /* One floating pill: where you are, and nothing you do not need. */
+  .pill {
+    position: absolute;
+    left: 50%;
+    bottom: 26px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 9px 14px;
+    border-radius: var(--r-full);
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    border-top-color: var(--glass-highlight);
+    backdrop-filter: blur(20px);
+    font-size: 13px;
+    color: var(--fg);
+    box-shadow: 0 12px 32px rgba(4,2,10,0.45);
+  }
+  .pill .count { font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+  .pill .count b { font-weight: 600; }
+  .pill .count span { color: var(--fg-muted); }
+  .rail { width: 96px; height: 3px; border-radius: var(--r-full); background: rgba(255,255,255,0.16); overflow: hidden; }
+  .rail i { display: block; height: 100%; width: 33%; background: var(--brand-mid); }
+  .pill .glyph {
+    width: 24px; height: 24px; display: grid; place-items: center;
+    border-radius: var(--r-sm); color: var(--fg-muted); font-size: 13px;
+  }
+  .pill .glyph.loud { background: #fff; color: var(--fg-on-loud); }
+  .pill .divider { width: 1px; height: 16px; background: var(--line-strong); }
+  /* The one piece of chrome that must always be reachable: leaving. */
+  .leave {
+    position: absolute; top: 18px; right: 18px;
+    width: 30px; height: 30px; display: grid; place-items: center;
+    border-radius: var(--r-md);
+    background: rgba(10,7,20,0.55); color: var(--fg-muted);
+    border: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .hint {
+    position: absolute; top: 18px; left: 18px;
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--fg-subtle);
+  }
+  :focus-visible { outline: 2px solid var(--line-focus); outline-offset: 2px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .pill { transition: opacity 120ms cubic-bezier(0.2,0.8,0.2,1); }
+  }
+</style>
+</head>
+<body>
+  <main class="window" aria-label="Lector de mirk">
+    <span class="hint">Learning Patterns</span>
+    <a class="leave" href="#" aria-label="Cerrar el lector">✕</a>
+
+    <article class="page">
+      <h1>Sobre el hábito</h1>
+      <p class="first">Leer de corrido no es una virtud: es una comodidad que se paga. El que nunca vuelve sobre una página cree haber entendido lo que solo recorrió, y descubre el malentendido la primera vez que intenta explicarlo en voz alta.</p>
+      <p>Conviene, entonces, leer como quien camina por una casa ajena: despacio, tocando los marcos, abriendo las puertas que no estaban previstas. La comprensión no llega al final del capítulo, llega en el momento exacto en que una frase nos obliga a detenernos.</p>
+      <p>Hay lectores que subrayan y lectores que no. Los primeros olvidan que el subrayado es una promesa de relectura; si nunca se cumple, la marca se vuelve decoración. Los segundos confían en la memoria, que es más generosa de lo que parece mientras el libro está cerca.</p>
+      <p>La página que sigue no importa todavía. Importa esta, la que está delante, y la única manera honesta de terminarla es no haber pensado en la siguiente mientras se leía esta.</p>
+      <div class="fade"></div>
+    </article>
+
+    <nav class="pill" aria-label="Posición y controles del lector">
+      <span class="count"><b>142</b><span> / 436</span></span>
+      <span class="rail" aria-label="33 por ciento leído"><i></i></span>
+      <span class="divider" aria-hidden="true"></span>
+      <span class="glyph" role="button" tabindex="0" aria-label="Alejar">−</span>
+      <span class="glyph" role="button" tabindex="0" aria-label="Acercar">+</span>
+      <span class="glyph loud" role="button" tabindex="0" aria-label="Ver índice">☰</span>
+    </nav>
+  </main>
+</body>
+</html>

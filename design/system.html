@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mirk — design system</title>
+<style>
+  :root {
+    --canvas: #0a0714;
+    --surface: rgba(255, 255, 255, 0.035);
+    --surface-1: rgba(255, 255, 255, 0.05);
+    --surface-2: rgba(255, 255, 255, 0.075);
+    --surface-3: rgba(255, 255, 255, 0.11);
+    --glass: rgba(18, 13, 32, 0.5);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-highlight: rgba(255, 255, 255, 0.12);
+    --line: rgba(255, 255, 255, 0.07);
+    --line-strong: rgba(255, 255, 255, 0.13);
+    --line-focus: #a9b8f0;
+    --fg: #f2eef9;
+    --fg-muted: #a79fbb;
+    --fg-subtle: #7b7391;
+    --fg-on-loud: #0b0714;
+    --brand: #e6a3c9;
+    --brand-mid: #c47aa8;
+    --brand-mid-soft: rgba(196, 122, 168, 0.22);
+    --danger: #e58a95;
+    --success: #8fd6b4;
+    --warning: #e0b78d;
+    --info: #a9b8f0;
+    --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-display: Georgia, "Times New Roman", serif;
+    --r-xs: 4px; --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-full: 999px;
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px;
+    --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --fast: 120ms;
+    --shadow-modal: 0 30px 80px rgba(4, 2, 10, 0.55), 0 0 0 1px var(--glass-border);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(120% 90% at 15% 0%, #241633 0%, var(--canvas) 58%);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    padding: 40px 48px 56px;
+  }
+  h1 { font-family: var(--font-display); font-size: 30px; font-weight: 400; letter-spacing: -0.012em; margin: 0 0 4px; }
+  h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-subtle); margin: 40px 0 12px; }
+  p.lead { color: var(--fg-muted); margin: 0 0 8px; max-width: 70ch; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .swatch { width: 132px; }
+  .chip { height: 56px; border-radius: var(--r-md); border: 1px solid var(--line); }
+  .swatch b { display: block; font-size: 13px; font-weight: 500; margin-top: 6px; }
+  .swatch span { display: block; font-size: 11px; color: var(--fg-subtle); font-variant-numeric: tabular-nums; }
+  .type div { display: flex; align-items: baseline; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .type code { color: var(--fg-subtle); font-size: 11px; min-width: 92px; }
+  .metrics div { display: flex; align-items: center; gap: 16px; padding: 6px 0; }
+  .bar { height: 10px; background: var(--surface-2); border-radius: var(--r-xs); }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px; }
+  .card { width: 148px; }
+  .cover { aspect-ratio: 3 / 4; border-radius: var(--r-md); background: linear-gradient(160deg, #2c2140, #15101f); border: 1px solid var(--line); }
+  .card p { margin: 8px 0 6px; font-size: 13px; }
+  .card small { color: var(--fg-subtle); font-size: 11px; }
+  .ramp { display: flex; height: 6px; border-radius: var(--r-full); overflow: hidden; background: var(--surface-2); margin-top: 8px; }
+  .ramp i { background: var(--brand-mid); }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button { font: inherit; font-size: 13px; border-radius: var(--r-sm); padding: 7px 12px; border: 1px solid var(--line-strong); background: var(--surface-1); color: var(--fg); }
+  button.loud { background: #fff; color: var(--fg-on-loud); border-color: transparent; font-weight: 500; }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--line-focus); outline-offset: 2px; }
+  .glass { background: var(--glass); border: 1px solid var(--glass-border); border-top-color: var(--glass-highlight); border-radius: var(--r-lg); padding: 12px 16px; backdrop-filter: blur(20px); }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: var(--r-full); border: 1px solid var(--line-strong); color: var(--fg-muted); }
+  .badge.native { border-color: var(--brand-mid); color: var(--brand); }
+</style>
+</head>
+<body>
+  <h1>mirk — design system</h1>
+  <p class="lead">One file, one source of truth: <code>web/src/styles/tokens.css</code>. The chrome is achromatic; colour states a fact about a document, and the progress ramp is the only saturated thing on a screen.</p>
+
+  <h2>Color — field, surfaces, glass</h2>
+  <div class="row">
+    <div class="swatch"><div class="chip" style="background:var(--canvas)"></div><b>canvas</b><span>#0a0714</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--surface)"></div><b>surface</b><span>white 3.5%</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--surface-1)"></div><b>surface-1</b><span>white 5%</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--surface-2)"></div><b>surface-2</b><span>white 7.5%</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--surface-3)"></div><b>surface-3</b><span>white 11%</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--glass);backdrop-filter:blur(20px)"></div><b>glass</b><span>floating panes</span></div>
+  </div>
+
+  <h2>Color — text and facts</h2>
+  <div class="row">
+    <div class="swatch"><div class="chip" style="background:var(--fg)"></div><b>fg</b><span>#f2eef9</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--fg-muted)"></div><b>fg-muted</b><span>#a79fbb</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--fg-subtle)"></div><b>fg-subtle</b><span>#7b7391 · 4.0:1</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--brand)"></div><b>brand</b><span>the mark only</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--brand-mid)"></div><b>brand-mid</b><span>#c47aa8</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--success)"></div><b>success</b><span>#8fd6b4</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--danger)"></div><b>danger</b><span>#e58a95</span></div>
+    <div class="swatch"><div class="chip" style="background:var(--warning)"></div><b>warning</b><span>#e0b78d</span></div>
+  </div>
+
+  <h2>Typography — two faces, three weights</h2>
+  <div class="type panel">
+    <div><code>display</code><span style="font-family:var(--font-display);font-size:30px">Learning Patterns</span></div>
+    <div><code>text-xl</code><span style="font-size:18px">Your library</span></div>
+    <div><code>text-lg</code><span style="font-size:16px">Read in another viewer</span></div>
+    <div><code>text-base</code><span style="font-size:14px">Page 142 of 436 — recorded by mirk</span></div>
+    <div><code>text-sm</code><span style="font-size:13px">Lydia Hallie · 2018</span></div>
+    <div><code>text-xs</code><span style="font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-subtle)">Native</span></div>
+  </div>
+
+  <h2>Geometry — radii and spacing</h2>
+  <div class="metrics row">
+    <div><div style="width:56px;height:36px;background:var(--surface-2);border-radius:var(--r-xs)"></div><span>r-xs 4</span></div>
+    <div><div style="width:56px;height:36px;background:var(--surface-2);border-radius:var(--r-sm)"></div><span>r-sm 6</span></div>
+    <div><div style="width:56px;height:36px;background:var(--surface-2);border-radius:var(--r-md)"></div><span>r-md 8</span></div>
+    <div><div style="width:56px;height:36px;background:var(--surface-2);border-radius:var(--r-lg)"></div><span>r-lg 12</span></div>
+    <div><div style="width:56px;height:36px;background:var(--surface-2);border-radius:var(--r-xl)"></div><span>r-xl 16</span></div>
+    <div><div style="width:56px;height:36px;background:var(--surface-2);border-radius:var(--r-full)"></div><span>full</span></div>
+  </div>
+
+  <h2>Components — a card with its progress</h2>
+  <div class="row">
+    <article class="card panel" style="padding:12px">
+      <div class="cover"></div>
+      <p>Learning Patterns</p>
+      <small>Lydia Hallie</small>
+      <div class="ramp" aria-label="Progress: page 142 of 436"><i style="width:33%"></i></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+        <small>33%</small><span class="badge native">native</span>
+      </div>
+    </article>
+    <article class="card panel" style="padding:12px">
+      <div class="cover"></div>
+      <p>Ficciones</p>
+      <small>Jorge Luis Borges</small>
+      <div class="ramp" aria-label="Progress: page 41 of 174"><i style="width:24%;background:var(--fg-subtle)"></i></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+        <small>24%</small><span class="badge">evince</span>
+      </div>
+    </article>
+  </div>
+
+  <h2>Components — controls, one loud thing</h2>
+  <div class="controls">
+    <button class="loud">Open</button>
+    <button>Read in viewer</button>
+    <button aria-pressed="true" style="border-color:var(--brand-mid);background:var(--brand-mid-soft)">Ajustes</button>
+    <span class="badge">page 142</span>
+  </div>
+
+  <h2>Components — a floating pane</h2>
+  <div class="glass" style="max-width:420px">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <strong style="font-weight:500">A floating pane</strong>
+      <span class="badge">closes on Esc</span>
+    </div>
+    <p class="lead" style="margin:8px 0 0;font-size:13px">Non-essential marks use <code>--fg-subtle</code>; anything a reader needs is <code>--fg-muted</code> or brighter.</p>
+  </div>
+</body>
+</html>

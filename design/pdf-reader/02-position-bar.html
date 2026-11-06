@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lector — barra que dice dónde estás</title>
+<style>
+  :root {
+    --canvas: #0a0714;
+    --surface: rgba(255,255,255,0.035);
+    --surface-1: rgba(255,255,255,0.05);
+    --surface-2: rgba(255,255,255,0.075);
+    --glass: rgba(18,13,32,0.5);
+    --glass-border: rgba(255,255,255,0.1);
+    --glass-highlight: rgba(255,255,255,0.12);
+    --line: rgba(255,255,255,0.07);
+    --line-strong: rgba(255,255,255,0.13);
+    --line-focus: #a9b8f0;
+    --fg: #f2eef9;
+    --fg-muted: #a79fbb;
+    --fg-subtle: #7b7391;
+    --fg-on-loud: #0b0714;
+    --brand: #e6a3c9;
+    --brand-mid: #c47aa8;
+    --brand-mid-soft: rgba(196,122,168,0.22);
+    --success: #8fd6b4;
+    --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-display: Georgia, "Times New Roman", serif;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-full: 999px;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; display: grid; place-items: center; background: #050308;
+    font-family: var(--font-sans); color: var(--fg);
+  }
+  .window {
+    position: relative; width: 634px; height: 844px; overflow: hidden;
+    background: radial-gradient(120% 80% at 20% 0%, #221534 0%, var(--canvas) 60%);
+    border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  /* A bar that is always there: reading position is the product, so it never hides. */
+  header.bar {
+    position: relative; z-index: 3;
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 14px;
+    background: var(--glass);
+    border-bottom: 1px solid var(--glass-border);
+    backdrop-filter: blur(20px);
+  }
+  .title { min-width: 0; flex: 1; }
+  .title b { display: block; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .title span { display: block; font-size: 11px; color: var(--fg-subtle); margin-top: 1px; }
+  .zoom { display: flex; align-items: center; gap: 2px; background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 2px; }
+  .zoom button { font: inherit; font-size: 13px; color: var(--fg-muted); background: none; border: 0; width: 24px; height: 22px; border-radius: 4px; display: grid; place-items: center; }
+  .zoom output { font-size: 11px; color: var(--fg-muted); min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
+  .close { font: inherit; font-size: 13px; width: 28px; height: 28px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--surface-1); color: var(--fg-muted); display: grid; place-items: center; }
+
+  /* The rail: the only saturated thing, because it is the only thing that states a fact. */
+  .rail {
+    position: absolute; top: 64px; right: 0; bottom: 0; width: 10px; z-index: 2;
+    background: rgba(10,7,20,0.6);
+  }
+  .rail i { position: absolute; left: 3px; width: 4px; border-radius: var(--r-full); background: var(--brand-mid); top: 8px; height: 33%; }
+  .rail b { position: absolute; left: 1px; width: 8px; height: 8px; border-radius: 50%; background: #fff; top: calc(8px + 33%); }
+
+  .stack { position: absolute; inset: 64px 10px 0 0; overflow: hidden; }
+  .sheet {
+    margin: 18px 20px 0; padding: 44px 40px;
+    background: #fbfaf7; color: #1b1720;
+    font-family: var(--font-display); font-size: 16px; line-height: 1.6;
+    border-radius: 2px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+  .sheet h2 { font-size: 17px; font-weight: 400; margin: 0 0 18px; color: #2a2333; }
+  .sheet p { margin: 0 0 13px; }
+  .sheet .next { margin-top: 22px; color: #8d8497; font-size: 15px; }
+  .foot {
+    position: absolute; left: 20px; right: 30px; bottom: 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; color: var(--fg-subtle);
+  }
+  .provenance { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--brand-mid); }
+  .provenance em { font-style: normal; color: var(--fg-muted); }
+  :focus-visible { outline: 2px solid var(--line-focus); outline-offset: 2px; }
+</style>
+</head>
+<body>
+  <main class="window" aria-label="Lector de mirk">
+    <header class="bar">
+      <div class="title">
+        <b>Learning Patterns</b>
+        <span>Lydia Hallie · 436 páginas</span>
+      </div>
+      <div class="zoom" role="group" aria-label="Zoom">
+        <button aria-label="Alejar">−</button>
+        <output>100 %</output>
+        <button aria-label="Acercar">+</button>
+      </div>
+      <button class="close" aria-label="Cerrar el lector">✕</button>
+    </header>
+
+    <div class="rail" aria-label="33 por ciento del libro"><i></i><b></b></div>
+
+    <div class="stack">
+      <article class="sheet">
+        <h2>Sobre el hábito</h2>
+        <p>Leer de corrido no es una virtud: es una comodidad que se paga. El que nunca vuelve sobre una página cree haber entendido lo que solo recorrió, y descubre el malentendido la primera vez que intenta explicarlo en voz alta.</p>
+        <p>Conviene, entonces, leer como quien camina por una casa ajena: despacio, tocando los marcos, abriendo las puertas que no estaban previstas.</p>
+        <p>La comprensión no llega al final del capítulo, llega en el momento exacto en que una frase nos obliga a detenernos.</p>
+        <p class="next">Hay lectores que subrayan y lectores que no.</p>
+      </article>
+    </div>
+
+    <footer class="foot">
+      <span class="provenance"><i class="dot"></i><em>mirk</em> · página 142 de 436</span>
+      <span>33 %</span>
+    </footer>
+  </main>
+</body>
+</html>

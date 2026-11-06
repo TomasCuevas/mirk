@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lector — márgenes que trabajan</title>
+<style>
+  :root {
+    --canvas: #0a0714;
+    --surface-1: rgba(255,255,255,0.05);
+    --glass: rgba(18,13,32,0.5);
+    --glass-border: rgba(255,255,255,0.1);
+    --line: rgba(255,255,255,0.07);
+    --line-strong: rgba(255,255,255,0.13);
+    --line-focus: #a9b8f0;
+    --fg: #f2eef9;
+    --fg-muted: #a79fbb;
+    --fg-subtle: #7b7391;
+    --fg-on-loud: #0b0714;
+    --brand: #e6a3c9;
+    --brand-mid: #c47aa8;
+    --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-display: Georgia, "Times New Roman", serif;
+    --r-sm: 6px; --r-md: 8px; --r-full: 999px;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; display: grid; place-items: center; background: #050308;
+    font-family: var(--font-sans); color: var(--fg);
+  }
+  .window {
+    position: relative; width: 634px; height: 844px; overflow: hidden;
+    background: radial-gradient(120% 80% at 20% 0%, #221534 0%, var(--canvas) 60%);
+    border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    grid-template-rows: 56px 1fr 44px;
+  }
+  /* Controls live in the margins, over the canvas — never on top of the page. */
+  .top { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 0 16px 0 14px; }
+  .top .mark { width: 22px; height: 22px; border-radius: 6px; background: var(--brand); opacity: 0.9; }
+  .top .name { font-size: 13px; color: var(--fg-muted); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .top button { font: inherit; font-size: 13px; height: 26px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--surface-1); color: var(--fg-muted); }
+  .top button.loud { background: #fff; color: var(--fg-on-loud); border-color: transparent; font-weight: 500; }
+
+  /* The gutter: the page number, set vertically, the way a printed book puts it in the margin. */
+  .gutter {
+    position: relative;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  }
+  .gutter .num {
+    writing-mode: vertical-rl;
+    font-family: var(--font-display);
+    font-size: 15px;
+    letter-spacing: 0.16em;
+    color: var(--fg-subtle);
+  }
+  .gutter .rail { position: relative; width: 3px; flex: 0 0 220px; border-radius: var(--r-full); background: rgba(255,255,255,0.12); overflow: hidden; }
+  .gutter .rail i { position: absolute; inset: auto 0 0 0; height: 33%; background: var(--brand-mid); }
+  .gutter .total { writing-mode: vertical-rl; font-size: 11px; letter-spacing: 0.14em; color: var(--fg-subtle); }
+
+  .stage { padding: 0 22px 0 6px; overflow: hidden; }
+  .sheet {
+    height: 100%; padding: 52px 44px;
+    background: #fbfaf7; color: #1b1720;
+    font-family: var(--font-display); font-size: 16px; line-height: 1.62;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+  .sheet h2 { font-size: 17px; font-weight: 400; margin: 0 0 20px; color: #2a2333; }
+  .sheet p { margin: 0 0 13px; }
+
+  .bottom {
+    grid-column: 1 / -1; display: flex; align-items: center; gap: 14px;
+    padding: 0 18px; font-size: 11px; color: var(--fg-subtle);
+    border-top: 1px solid var(--line);
+  }
+  .bottom .spacer { flex: 1; }
+  .bottom .glyph { width: 24px; height: 24px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--fg-muted); border: 1px solid var(--line); }
+  :focus-visible { outline: 2px solid var(--line-focus); outline-offset: 2px; }
+</style>
+</head>
+<body>
+  <main class="window" aria-label="Lector de mirk">
+    <div class="top">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="name">Learning Patterns — Lydia Hallie</span>
+      <button aria-label="Alejar">−</button>
+      <button aria-label="Acercar">+</button>
+      <button class="loud" aria-label="Cerrar el lector">Cerrar</button>
+    </div>
+
+    <div class="gutter" aria-hidden="true">
+      <span class="num">142</span>
+      <span class="rail"><i></i></span>
+      <span class="total">436</span>
+    </div>
+
+    <div class="stage">
+      <article class="sheet">
+        <h2>Sobre el hábito</h2>
+        <p>Leer de corrido no es una virtud: es una comodidad que se paga. El que nunca vuelve sobre una página cree haber entendido lo que solo recorrió, y descubre el malentendido la primera vez que intenta explicarlo en voz alta.</p>
+        <p>Conviene, entonces, leer como quien camina por una casa ajena: despacio, tocando los marcos, abriendo las puertas que no estaban previstas. La comprensión no llega al final del capítulo, llega en el momento exacto en que una frase nos obliga a detenernos.</p>
+        <p>Hay lectores que subrayan y lectores que no. Los primeros olvidan que el subrayado es una promesa de relectura; si nunca se cumple, la marca se vuelve decoración.</p>
+      </article>
+    </div>
+
+    <div class="bottom">
+      <span>mirk · lectura registrada</span>
+      <span class="spacer"></span>
+      <span>33 %</span>
+      <span class="glyph" aria-hidden="true">☰</span>
+    </div>
+  </main>
+</body>
+</html>
