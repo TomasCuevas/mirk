@@ -235,3 +235,12 @@ Tests: `a_reading_time_never_moves_backwards` became `a_swept_observation_keeps_
 
 Not done, and out of 0.2.0: making the external viewer *open* at mirk's page. mirk now agrees with itself; a viewer agreeing with mirk is platform work with its own verification.
 
+L74 — Release 0.2.0, built to be installed over 0.1.0. What the version carries, in the order a reader meets it: a first-party reader that opens a real PDF from the library and scrolls it; the page remembered with its provenance — a page `mirk`'s own reader counted is `native`, never confused with one typed by hand or read back from another viewer — and a resume that lands on the page the reader recorded; reading sessions that count time only while the window is visible and focused and pause after twenty minutes without interaction; page visits attributed to the session that observed them; the margin's chrome (page number, progress rail, percentage) with no controls over the paper; the cover beside the title; and "Ir a la página".
+
+Two facts the owner has to know before installing, stated here rather than discovered later:
+
+- **The database is at schema 13.** 0.1.0 knows 11 and will refuse it, so the installed copy must be replaced rather than kept alongside. The migration from 11 runs in one transaction on the first open of 0.2.0, and the owner's own library is already at 13.
+- **A development build can no longer touch the installed application's library.** Different data directory, different webview identity, no updater. That is why this release is the only way the installed application works again.
+
+The bundle is built with `bun run tauri build --bundles deb`; installing it needs the owner's password and is their decision, so the command is handed over rather than run.
+
