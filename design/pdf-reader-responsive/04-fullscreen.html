@@ -29,10 +29,41 @@
   .meta b { font-size: 14px; font-weight: 500; white-space: nowrap; }
   .meta span { font-size: 12px; color: var(--fg-subtle); white-space: nowrap; }
   .spacer { flex: 1; }
-  .zoom { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-1); }
-  .zoom button { font: inherit; font-size: 14px; width: 30px; height: 28px; border: 0; background: none; color: var(--fg-muted); }
-  .zoom output { font-size: 12px; color: var(--fg-muted); min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; }
-  .close { height: 30px; padding: 0 14px; border: 0; border-radius: 6px; background: #fff; color: var(--fg-on-loud); font: inherit; font-size: 13px; font-weight: 500; }
+  /* El zoom es un desplegable, como en la referencia: un botón que dice el modo actual y, debajo, los
+     modos de ajuste y la escalera de porcentajes. Un solo control en lugar de − / + / nivel. */
+  .zoom { position: relative; }
+  .zoom-button {
+    display: flex; align-items: center; gap: 8px;
+    height: 30px; padding: 0 10px;
+    border: 1px solid var(--line-strong); border-radius: 6px;
+    background: var(--surface-1); color: var(--fg);
+    font: inherit; font-size: 13px; font-variant-numeric: tabular-nums;
+  }
+  .zoom-button .caret { font-size: 9px; color: var(--fg-muted); }
+  .zoom-menu {
+    position: absolute; top: 36px; right: 0; z-index: 5;
+    min-width: 176px; padding: 6px;
+    background: #14101d;
+    border: 1px solid var(--line-strong); border-radius: 10px;
+    box-shadow: 0 18px 48px rgba(4, 2, 10, 0.6);
+  }
+  .opt {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    height: 28px; padding: 0 8px; border-radius: 6px;
+    font-size: 13px; color: var(--fg-muted);
+  }
+  .opt.selected { color: var(--fg); }
+  .opt .dot { width: 13px; height: 13px; border-radius: 50%; background: rgba(255,255,255,0.16); }
+  .opt.selected .dot { background: #7ac76a; box-shadow: 0 0 0 2px rgba(122,199,106,0.25); }
+  .sep { height: 1px; margin: 6px 8px; background: var(--line); }
+  /* Cerrar: un icono, no una píldora blanca que competía con el título. */
+  .close-icon {
+    display: grid; place-items: center;
+    width: 30px; height: 30px;
+    border: 1px solid var(--line-strong); border-radius: 6px;
+    background: var(--surface-1); color: var(--fg-muted);
+    font: inherit; font-size: 13px;
+  }
   /* El cuerpo centra UNA columna de lectura: el margen va pegado al papel, no al borde de la pantalla. */
   .body { flex: 1; min-height: 0; display: flex; justify-content: center; min-width: 0; }
   .frame { display: grid; grid-template-columns: 88px auto; min-height: 0; }
@@ -82,8 +113,29 @@
       <span class="cover" aria-hidden="true"></span>
       <span class="meta"><b>Cita con Rama</b><span>Arthur C. Clarke · 199 páginas</span></span>
       <span class="spacer"></span>
-      <span class="zoom"><button aria-label="Alejar">−</button><output>100 %</output><button aria-label="Acercar">+</button></span>
-      <button class="close">Cerrar</button>
+      <div class="zoom">
+        <button class="zoom-button" aria-haspopup="listbox" aria-expanded="true">
+          Fit Page <span class="caret" aria-hidden="true">▾</span>
+        </button>
+        <!-- El menú abierto, que es lo que hay que diseñar: tres modos de ajuste y la escalera de porcentajes. -->
+        <div class="zoom-menu" role="listbox" aria-label="Zoom">
+          <div class="opt selected" role="option" aria-selected="true"><span>Fit Page</span><span class="dot"></span></div>
+          <div class="opt" role="option" aria-selected="false"><span>Fit Width</span><span class="dot"></span></div>
+          <div class="opt" role="option" aria-selected="false"><span>Automatic</span><span class="dot"></span></div>
+          <div class="sep" role="presentation"></div>
+          <div class="opt" role="option"><span>50%</span></div>
+          <div class="opt" role="option"><span>70%</span></div>
+          <div class="opt" role="option"><span>85%</span></div>
+          <div class="opt" role="option"><span>100%</span></div>
+          <div class="opt" role="option"><span>125%</span></div>
+          <div class="opt" role="option"><span>150%</span></div>
+          <div class="opt" role="option"><span>175%</span></div>
+          <div class="opt" role="option"><span>200%</span></div>
+          <div class="opt" role="option"><span>300%</span></div>
+          <div class="opt" role="option"><span>400%</span></div>
+        </div>
+      </div>
+      <button class="close-icon" aria-label="Cerrar el lector" title="Cerrar el lector (Esc)">✕</button>
     </div>
 
     <div class="body">

@@ -30,9 +30,21 @@
       "excerpt": "44 199 PÁGINAS",
       "comment": "Los numeros deben ser un poco más grandes y la palabra \"PÁGINAS\" debe tener un color diferente a los numeros",
       "createdAt": "2026-11-06T17:44:31.939Z",
-      "status": "open",
+      "status": "resolved",
       "sentAt": "2026-11-06T17:44:31.971Z",
-      "resolvedAt": null
+      "resolvedAt": "2026-11-06T17:44:52.391Z"
+    },
+    {
+      "id": "d4l3cgq7",
+      "file": "04-fullscreen.html",
+      "selector": "body > main > div:nth-of-type(2)",
+      "excerpt": "Cita con Rama Arthur C. Clarke · 199 páginas − 100 % + Cerrar",
+      "comment": "Debes mejorar el boton para cerrar el lector. Tambien, la opcion de zoom debe ser similar la imagen anexada.",
+      "createdAt": "2026-11-06T17:47:03.727Z",
+      "status": "open",
+      "sentAt": "2026-11-06T17:47:03.757Z",
+      "resolvedAt": null,
+      "screenshot": ".screenshots/d4l3cgq7.png"
     }
   ]
 }
