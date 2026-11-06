@@ -244,3 +244,9 @@ Two facts the owner has to know before installing, stated here rather than disco
 
 The bundle is built with `bun run tauri build --bundles deb`; installing it needs the owner's password and is their decision, so the command is handed over rather than run.
 
+L75 — The bundle exists and is complete: `target/release/bundle/deb/Mirk_0.2.0_amd64.deb`, 11,414,264 bytes, `Package: mirk`, `Version: 0.2.0`, amd64, depending on `libwebkit2gtk-4.1-0`, `libgtk-3-0` and `libayatana-appindicator3-1`. It carries pdfium (two entries under the app's resource directory), the archive reads end to end, and the embedded frontend was rebuilt during the build (`web/dist/index.html`, 13:31 — the stale one from 4 November was deleted first, which is what made "is this even the new code" a question nobody could answer).
+
+The build exited non-zero **after** writing the bundle, at the updater signature: `createUpdaterArtifacts` is on and no `TAURI_SIGNING_PRIVATE_KEY` was set. That is a publishing concern, not an installation one — the `.deb` installs without it. Signing the release remains the owner's decision and needs their key, which is a secret this session must not read.
+
+Installing is the owner's step (`sudo` needs a password here) and is what makes the installed application work again: 0.2.0 opens the library at schema 13 directly, and the reader is now the product's own.
+
