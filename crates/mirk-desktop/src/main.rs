@@ -210,6 +210,20 @@ fn reader_remember_page(id: i64, page: u32) -> Result<(), String> {
     commands::reader_remember_page(&store, id, page).map_err(error_message)
 }
 
+/// Records the reading session the reader just finished, and the pages it showed (S4, R3b).
+///
+/// One call at the end rather than one per page: a visit names the session it happened in, so the
+/// session is the fact that has to exist first. It answers the session's id, which is what a caller
+/// diagnosing a missing visit needs.
+#[tauri::command]
+fn reader_record_session(
+    id: i64,
+    facts: commands::ReaderSessionFacts,
+) -> Result<i64, String> {
+    let store = open_store()?;
+    commands::reader_record_session(&store, id, facts).map_err(error_message)
+}
+
 /// Saves the reader's naming of the document with `id` in ONE write (R31, R37, R42/S5).
 ///
 /// The editor's Save decides the reader's title and the reader's authors in one action, so this is one
@@ -1388,6 +1402,7 @@ fn main() {
             reader_measured,
             reader_position,
             reader_remember_page,
+            reader_record_session,
             minimize_window,
             hide_window,
             close_app,

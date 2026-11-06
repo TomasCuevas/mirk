@@ -19,6 +19,7 @@
   } from "../lib/reader-measure";
   import { invoke, runningInTauri } from "../lib/tauri";
   import { createPageRecorder } from "../lib/reader-progress";
+  import { createReadingSession } from "../lib/reader-session";
   import type { LibraryEntry } from "../lib/library";
   import type { Translate } from "../lib/i18n";
 
@@ -54,6 +55,15 @@
   let position = $state<number | null>(null);
   /** Turns page turns into one stored fact, and holds the last one until the reader closes (S4). */
   let recorder: ReturnType<typeof createPageRecorder> | null = null;
+
+  /**
+   * The reading session: what the window says about being on screen, and what the reader does with it.
+   *
+   * It starts when the document actually opens — a document that failed to open is not reading time —
+   * and its facts are written once, on the way out, because a page visit names the session it happened
+   * in and the session therefore has to exist first (R3b).
+   */
+  let session: ReturnType<typeof createReadingSession> | null = null;
   /** The webview's own errors, collected only by a measurement run: pdf.js reports failures that way. */
   let collected: { entries: string[]; stop: () => void } | null = null;
 
@@ -108,6 +118,34 @@
     const started = performance.now();
     if (measure) collected = collectErrors();
 
+    /**
+     * Recomputes whether time should be counted at all.
+     *
+     * Both halves of L4's rule are read from the window itself rather than assumed: a hidden window is
+     * not being read, and neither is an unfocused one, even while its pages are still on screen.
+     */
+    function syncActivity(): void {
+      session?.setActive(
+        document.visibilityState === "visible" && document.hasFocus(),
+      );
+    }
+
+    // Any of these is the reader doing something, which is what lifts an idle pause.
+    const onInteraction = (): void => {
+      session?.interact();
+    };
+    const onFocus = (): void => {
+      session?.interact();
+      syncActivity();
+    };
+
+    document.addEventListener("visibilitychange", syncActivity);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", syncActivity);
+    window.addEventListener("wheel", onInteraction, { passive: true });
+    window.addEventListener("keydown", onInteraction);
+    window.addEventListener("pointerdown", onInteraction);
+
     // The page and the document are asked for at the same time: the reader must not open at page one and
     // then jump, and the store's answer is needed before the page view exists.
     const remembered = invoke<number | null>("reader_position", { id: entry.id }).catch(() => null);
@@ -123,6 +161,10 @@
         recorder = createPageRecorder((changed) =>
           invoke("reader_remember_page", { id: entry.id, page: changed }).then(() => undefined),
         );
+        session = createReadingSession({ now: () => Date.now() });
+        // The page the reader opened at is on screen before any scroll can report it.
+        session.page(position ?? 0);
+        syncActivity();
         source = opened;
         void report({ ms, stats: opened.stats, document: opened.document });
       },
@@ -133,11 +175,27 @@
 
     return () => {
       live = false;
+      document.removeEventListener("visibilitychange", syncActivity);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", syncActivity);
+      window.removeEventListener("wheel", onInteraction);
+      window.removeEventListener("keydown", onInteraction);
+      window.removeEventListener("pointerdown", onInteraction);
       // The last page of a session is the one a resume needs, so it is written before the recorder goes
       // away rather than lost with the quiet period it was waiting out.
       void recorder?.flush();
       recorder?.stop();
       recorder = null;
+      // The session is written once, at the end, because its visits name it. A write that fails is
+      // swallowed for the same reason a page write is: a reader closing a book must not be interrupted
+      // by bookkeeping, and there is no retry queue to feed.
+      const facts = session?.finish();
+      session = null;
+      if (facts) {
+        // Called exactly as `reader_remember_page` is: outside Tauri the call rejects and is swallowed,
+        // which is the same stance as a page write that could not be stored.
+        void invoke("reader_record_session", { id: entry.id, facts }).catch(() => {});
+      }
       collected?.stop();
       collected = null;
       source?.destroy();
@@ -164,7 +222,11 @@
       <ReaderPages
         document={source.document}
         initialPage={position ?? 0}
-        onPageChange={(page) => recorder?.observe(page)}
+        onPageChange={(page) => {
+          recorder?.observe(page);
+          session?.page(page);
+          session?.interact();
+        }}
       />
     </div>
   {/if}

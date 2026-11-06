@@ -17,6 +17,15 @@ import type { LibraryEntry } from "../lib/library";
 
 vi.mock("./ReaderPages.svelte", () => ({ default: () => {} }));
 
+/** The IPC surface, so a test can read what the screen asked the application to record. */
+const ipc = vi.hoisted(() => ({
+  invoke: vi.fn(async (_name: string, _args?: unknown) => null as unknown),
+}));
+vi.mock("../lib/tauri", () => ({
+  invoke: ipc.invoke,
+  runningInTauri: () => false,
+}));
+
 const source = vi.hoisted(() => ({
   openReaderDocument: vi.fn(),
 }));
@@ -46,6 +55,7 @@ afterEach(() => {
   if (mounted !== null) unmount(mounted);
   mounted = null;
   source.openReaderDocument.mockReset();
+  ipc.invoke.mockClear();
 });
 
 function render(): { onClose: () => void; onFallback: () => void; target: HTMLElement } {
@@ -88,6 +98,32 @@ describe("the reader screen", () => {
     expect(fallback?.textContent).toBe("reader.fallback");
     fallback?.click();
     expect(onFallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes the reading session, with the page it opened at, when the screen leaves", async () => {
+    // R3b: the session is written once, on the way out, because its page visits name it. A reader that
+    // opened the document and closed it again has still read for that long, and the visit says where.
+    source.openReaderDocument.mockResolvedValue({
+      destroy: vi.fn(),
+      stats: {},
+      document: {},
+    });
+    const { target } = render();
+
+    // The page view exists only once the document settled, which is when the session begins.
+    await vi.waitFor(() => expect(target.querySelector(".pages")).not.toBeNull());
+
+    unmount(mounted as never);
+    mounted = null;
+    await vi.waitFor(() =>
+      expect(ipc.invoke.mock.calls.some(([name]) => name === "reader_record_session")).toBe(true),
+    );
+
+    const call = ipc.invoke.mock.calls.find(([name]) => name === "reader_record_session");
+    const args = call?.[1] as { id: number; facts: { activeMs: number; visits: { page: number }[] } };
+    expect(args.id).toBe(7);
+    expect(args.facts.activeMs).toBeGreaterThanOrEqual(0);
+    expect(args.facts.visits.map((visit) => visit.page)).toEqual([0]);
   });
 
   it("closes on its own button", () => {

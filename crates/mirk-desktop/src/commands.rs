@@ -22,8 +22,8 @@ use mirk_core::{
 };
 use mirk_scan::{cover_for, CoverOutcome, ScanReport, Scanner};
 use mirk_store::{
-    covering_folder, AuthorEdit, DocumentRecord, FolderRemoval, LibraryEntry, Store, Suggestion,
-    SuggestionDecision, WatchedFolder,
+    covering_folder, AuthorEdit, DocumentRecord, FolderRemoval, LibraryEntry, PageVisit,
+    ReadingSession, Store, Suggestion, SuggestionDecision, WatchedFolder,
 };
 use serde::Serialize;
 
@@ -373,6 +373,91 @@ pub fn reader_remember_page(store: &Store, id: i64, page: u32) -> Result<(), Mir
     );
     store.record_progress(id, &progress)?;
     Ok(())
+}
+
+/// The facts one reading session contributes, as the reader hands them over (R3b, S4).
+///
+/// The reader counts them; this type only carries them. Every instant is Unix seconds and every duration
+/// milliseconds, which is what `reading_sessions` and `page_visits` store.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReaderSessionFacts {
+    /// Unix seconds. The clock can be corrected backwards, so `ended_at` may be earlier.
+    pub started_at: i64,
+    pub ended_at: i64,
+    /// Visible-and-focused milliseconds; the reader's own accounting, never negative.
+    pub active_ms: i64,
+    /// Every page the session showed, in the order it showed them.
+    pub visits: Vec<ReaderSessionVisit>,
+}
+
+/// One page a session showed, with the time it spent on screen while the clock was running.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReaderSessionVisit {
+    /// Zero-based, exactly as `progress.page` is.
+    pub page: u32,
+    pub observed_at: i64,
+    pub visible_ms: i64,
+}
+
+/// Records one finished reading session and the pages it showed (S4, R3b).
+///
+/// The session is written first because every visit names it through `(session_id, doc_id)`: a visit
+/// cannot exist before the session it happened in. That order is also why every fact is checked before
+/// anything is written — a session whose third visit is impossible would otherwise leave a session and
+/// two visits behind, which is a half-truth no reader asked for. Checked facts are refused as
+/// [`MirkError::InvalidInput`] and store nothing.
+///
+/// A session with no visits is a real thing and is recorded: a reader who sat with the window open and
+/// never turned a page did spend that time reading.
+pub fn reader_record_session(
+    store: &Store,
+    id: i64,
+    facts: ReaderSessionFacts,
+) -> Result<i64, MirkError> {
+    if facts.active_ms < 0 {
+        return Err(MirkError::InvalidInput {
+            field: "activeMs",
+            value: facts.active_ms.to_string(),
+            expected: "a non-negative duration in milliseconds".to_string(),
+        });
+    }
+    for visit in &facts.visits {
+        if visit.observed_at < 0 {
+            return Err(MirkError::InvalidInput {
+                field: "observedAt",
+                value: visit.observed_at.to_string(),
+                expected: "Unix seconds at or after the epoch".to_string(),
+            });
+        }
+        if visit.visible_ms < 0 {
+            return Err(MirkError::InvalidInput {
+                field: "visibleMs",
+                value: visit.visible_ms.to_string(),
+                expected: "a non-negative duration in milliseconds".to_string(),
+            });
+        }
+    }
+
+    let session_id = store.record_reading_session(&ReadingSession {
+        doc_id: id,
+        started_at: facts.started_at,
+        ended_at: facts.ended_at,
+        active_ms: facts.active_ms,
+    })?;
+
+    for visit in facts.visits {
+        store.record_page_visit(&PageVisit {
+            doc_id: id,
+            session_id,
+            page: visit.page,
+            observed_at: visit.observed_at,
+            visible_ms: visit.visible_ms,
+        })?;
+    }
+
+    Ok(session_id)
 }
 
 /// Saves the reader's naming of one document in ONE write (R31, R37).
@@ -2132,6 +2217,127 @@ mod tests {
             calls[0].1,
             Some(11),
             "the newest recorded position, the same one the card shows"
+        );
+    }
+
+    #[test]
+    fn a_reading_session_is_recorded_with_the_pages_it_showed() {
+        let (store, id, _file, _dir) = stored_document("reader-session");
+
+        let session_id = reader_record_session(
+            &store,
+            id,
+            ReaderSessionFacts {
+                started_at: 1_700_000_000,
+                ended_at: 1_700_000_120,
+                active_ms: 96_000,
+                visits: vec![
+                    ReaderSessionVisit {
+                        page: 4,
+                        observed_at: 1_700_000_010,
+                        visible_ms: 12_000,
+                    },
+                    ReaderSessionVisit {
+                        page: 5,
+                        observed_at: 1_700_000_030,
+                        visible_ms: 40_000,
+                    },
+                ],
+            },
+        )
+        .expect("record the session");
+
+        let sessions = store
+            .reading_sessions_for_document(id)
+            .expect("read the sessions");
+        assert_eq!(sessions.len(), 1, "one session was recorded");
+        assert_eq!(sessions[0].id, session_id);
+        assert_eq!(sessions[0].session.active_ms, 96_000);
+        assert_eq!(sessions[0].session.doc_id, id);
+
+        let visits = store.page_visits_for_document(id).expect("read the visits");
+        assert_eq!(
+            visits
+                .iter()
+                .map(|stored| stored.visit.page)
+                .collect::<Vec<_>>(),
+            vec![4, 5],
+            "the pages in the order the session showed them"
+        );
+        assert!(
+            visits
+                .iter()
+                .all(|stored| stored.visit.session_id == session_id),
+            "every visit names the session it happened in"
+        );
+    }
+
+    #[test]
+    fn a_session_with_an_impossible_visit_stores_neither_the_session_nor_the_visits() {
+        let (store, id, _file, _dir) = stored_document("reader-session-refused");
+
+        let error = reader_record_session(
+            &store,
+            id,
+            ReaderSessionFacts {
+                started_at: 1_700_000_000,
+                ended_at: 1_700_000_120,
+                active_ms: 96_000,
+                visits: vec![ReaderSessionVisit {
+                    page: 4,
+                    observed_at: 1_700_000_010,
+                    visible_ms: -1,
+                }],
+            },
+        )
+        .expect_err("a negative duration is not a fact");
+
+        assert!(
+            matches!(error, MirkError::InvalidInput { .. }),
+            "the refusal names the input, not the storage: {error:?}"
+        );
+        assert!(
+            store
+                .reading_sessions_for_document(id)
+                .expect("read the sessions")
+                .is_empty(),
+            "a refused session stores nothing"
+        );
+        assert!(
+            store
+                .page_visits_for_document(id)
+                .expect("read the visits")
+                .is_empty(),
+            "and neither do its visits"
+        );
+    }
+
+    #[test]
+    fn a_session_that_never_turned_a_page_is_still_recorded() {
+        let (store, id, _file, _dir) = stored_document("reader-session-quiet");
+
+        reader_record_session(
+            &store,
+            id,
+            ReaderSessionFacts {
+                started_at: 1_700_000_000,
+                ended_at: 1_700_000_060,
+                active_ms: 60_000,
+                visits: Vec::new(),
+            },
+        )
+        .expect("a session with no page turns is still reading");
+
+        let sessions = store
+            .reading_sessions_for_document(id)
+            .expect("read the sessions");
+        assert_eq!(sessions.len(), 1);
+        assert!(
+            store
+                .page_visits_for_document(id)
+                .expect("read the visits")
+                .is_empty(),
+            "no page was shown, so no visit is invented"
         );
     }
 
