@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lector · 3 por fila (634)</title>
+<style>
+  :root {
+    --canvas: #0a0714; --surface: rgba(255,255,255,0.035); --surface-1: rgba(255,255,255,0.05);
+    --line: rgba(255,255,255,0.07); --line-strong: rgba(255,255,255,0.13); --fg: #f2eef9;
+    --fg-muted: #a79fbb; --fg-subtle: #7b7391; --fg-on-loud: #0b0714; --brand: #e6a3c9; --brand-mid: #c47aa8;
+    --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif; --font-display: Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; display: grid; place-items: center; background: #050308; font-family: var(--font-sans); color: var(--fg); }
+  .window {
+    position: relative; width: 634px; height: 844px; overflow: hidden; border-radius: 12px;
+    background: radial-gradient(120% 80% at 20% 0%, #221534 0%, var(--canvas) 60%);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6); display: flex; flex-direction: column;
+  }
+  .wbar { flex: none; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 11px; color: var(--fg-subtle); }
+  .wbar .dots { margin-left: auto; display: flex; gap: 7px; }
+  .wbar .dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--line-strong); }
+  /* Una barra: tapa, título, nivel de zoom y cerrar. */
+  .bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
+  .cover { flex: none; width: 18px; height: 25px; border-radius: 3px; background: linear-gradient(160deg,#3a2c52,#1a1426); border: 1px solid var(--line); }
+  .title { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .zoom { flex: none; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-1); }
+  .zoom button { font: inherit; font-size: 13px; width: 24px; height: 24px; border: 0; background: none; color: var(--fg-muted); }
+  .zoom output { font-size: 11px; color: var(--fg-muted); min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
+  .close { flex: none; height: 26px; padding: 0 11px; border: 0; border-radius: 6px; background: #fff; color: var(--fg-on-loud); font: inherit; font-size: 12px; font-weight: 500; }
+  .body { flex: 1; min-height: 0; display: grid; grid-template-columns: 48px minmax(0,1fr); }
+  .gutter { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
+  .page-num, .total { writing-mode: vertical-rl; color: var(--fg-subtle); font-size: 11px; letter-spacing: 0.14em; }
+  .page-num { font-family: var(--font-display); font-size: 14px; letter-spacing: 0.16em; }
+  .rail { position: relative; flex: 0 0 170px; width: 4px; border-radius: 999px; background: rgba(255,255,255,0.09); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05); overflow: hidden; }
+  .rail i { position: absolute; inset: 0 0 auto 0; height: 22%; border-radius: 999px; background: linear-gradient(to bottom, var(--brand), var(--brand-mid)); box-shadow: inset 0 -2px 0 rgba(255,255,255,0.92); }
+  .stage { min-width: 0; min-height: 0; padding: 6px 8px 6px 0; display: flex; flex-direction: column; }
+  .sheet { flex: 1; min-height: 0; overflow: hidden; background: #fbfaf7; color: #1b1720; padding: 34px 30px; font-family: var(--font-display); font-size: 14px; line-height: 1.6; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
+  .sheet h2 { font-size: 15px; font-weight: 400; margin: 0 0 14px; color: #2a2333; }
+  .sheet p { margin: 0 0 11px; }
+  .foot { flex: none; height: 30px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-top: 1px solid var(--line); font-size: 11px; color: var(--fg-subtle); }
+  .jump { padding: 3px 9px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg-muted); font: inherit; font-size: 11px; }
+  .pct { margin-left: auto; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <main class="window">
+    <div class="wbar">mirk<span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+    <div class="bar">
+      <span class="cover" aria-hidden="true"></span>
+      <span class="title">Cita con Rama — Arthur C. Clarke</span>
+      <span class="zoom"><button aria-label="Alejar">−</button><output>100 %</output><button aria-label="Acercar">+</button></span>
+      <button class="close">Cerrar</button>
+    </div>
+    <div class="body">
+      <aside class="gutter" aria-hidden="true">
+        <span class="page-num">44</span>
+        <span class="rail"><i></i></span>
+        <span class="total">199</span>
+      </aside>
+      <div class="stage">
+        <article class="sheet">
+          <h2>Hombres, mujeres y monos</h2>
+          <p>A algunas mujeres, había decidido el comandante Norton tiempo atrás, no debía serles permitido viajar en las naves espaciales; la ingravidez hacía cosas a sus senos que resultaban demasiado perturbadoras. Bastante malo era cuando permanecían inmóviles; pero cuando comenzaban a moverse y se establecían vibraciones afines, el resultado era más de lo que podía exigirse que soportara un simple hombre con sangre en las venas.</p>
+          <p>En una ocasión mencionó esta teoría a la comandante médico Laura Ernst, sin revelarle quién le había inspirado esta clase de pensamientos. En realidad, tampoco hacía falta: ambos se conocían demasiado bien.</p>
+          <p>—Bill —empezó Laura Ernst—, he examinado a nuestros expedicionarios y éste es mi veredicto: Karl y Joe están en excelentes condiciones físicas y psíquicas; todas las indicaciones son normales teniendo en cuenta el trabajo realizado.</p>
+        </article>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="jump">Ir a la página…</button>
+      <span class="pct">22 %</span>
+    </div>
+  </main>
+</body>
+</html>

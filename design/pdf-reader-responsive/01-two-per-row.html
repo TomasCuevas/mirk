@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lector · 2 por fila (430)</title>
+<style>
+  :root {
+    --canvas: #0a0714; --surface: rgba(255,255,255,0.035); --surface-1: rgba(255,255,255,0.05);
+    --glass: rgba(18,13,32,0.5); --glass-border: rgba(255,255,255,0.1); --line: rgba(255,255,255,0.07);
+    --line-strong: rgba(255,255,255,0.13); --line-focus: #a9b8f0; --fg: #f2eef9; --fg-muted: #a79fbb;
+    --fg-subtle: #7b7391; --fg-on-loud: #0b0714; --brand: #e6a3c9; --brand-mid: #c47aa8;
+    --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif; --font-display: Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; display: grid; place-items: center; background: #050308; font-family: var(--font-sans); color: var(--fg); }
+  .window {
+    position: relative; width: 430px; height: 844px; overflow: hidden; border-radius: 12px;
+    background: radial-gradient(120% 80% at 20% 0%, #221534 0%, var(--canvas) 60%);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6); display: flex; flex-direction: column;
+  }
+  /* La barra de la ventana, la única que no es del lector. */
+  .wbar { flex: none; height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 10px; font-size: 11px; color: var(--fg-subtle); }
+  .wbar .dots { margin-left: auto; display: flex; gap: 6px; }
+  .wbar .dot { width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--line-strong); }
+  /* UNA sola barra de lector: tapa, título, zoom y cerrar. Nada más antes del papel. */
+  .bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
+  .cover { flex: none; width: 16px; height: 22px; border-radius: 3px; background: linear-gradient(160deg,#3a2c52,#1a1426); border: 1px solid var(--line); }
+  .title { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .zoom { flex: none; display: flex; align-items: center; gap: 1px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-1); }
+  .zoom button { font: inherit; font-size: 12px; width: 20px; height: 22px; border: 0; background: none; color: var(--fg-muted); }
+  .close { flex: none; height: 24px; padding: 0 9px; border: 0; border-radius: 6px; background: #fff; color: var(--fg-on-loud); font: inherit; font-size: 11px; font-weight: 500; }
+  .body { flex: 1; min-height: 0; display: grid; grid-template-columns: 30px minmax(0,1fr); }
+  .gutter { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+  .page-num, .total { writing-mode: vertical-rl; color: var(--fg-subtle); font-size: 10px; letter-spacing: 0.14em; }
+  .page-num { font-family: var(--font-display); font-size: 12px; letter-spacing: 0.16em; }
+  .rail { position: relative; flex: 0 0 150px; width: 3px; border-radius: 999px; background: rgba(255,255,255,0.09); overflow: hidden; }
+  .rail i { position: absolute; inset: 0 0 auto 0; height: 22%; border-radius: 999px; background: linear-gradient(to bottom, var(--brand), var(--brand-mid)); box-shadow: inset 0 -2px 0 rgba(255,255,255,0.92); }
+  .stage { min-width: 0; min-height: 0; padding: 4px 6px 4px 0; display: flex; flex-direction: column; }
+  .sheet { flex: 1; min-height: 0; overflow: hidden; background: #fbfaf7; color: #1b1720; padding: 22px 18px; font-family: var(--font-display); font-size: 11px; line-height: 1.55; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
+  .sheet h2 { font-size: 12px; font-weight: 400; margin: 0 0 10px; color: #2a2333; }
+  .sheet p { margin: 0 0 8px; }
+  .foot { flex: none; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-top: 1px solid var(--line); font-size: 10px; color: var(--fg-subtle); }
+  .jump { padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px; background: none; color: var(--fg-muted); font: inherit; font-size: 10px; }
+  .pct { margin-left: auto; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <main class="window">
+    <div class="wbar">mirk<span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+    <div class="bar">
+      <span class="cover" aria-hidden="true"></span>
+      <span class="title">Cita con Rama</span>
+      <span class="zoom"><button aria-label="Alejar">−</button><button aria-label="Acercar">+</button></span>
+      <button class="close">Cerrar</button>
+    </div>
+    <div class="body">
+      <aside class="gutter" aria-hidden="true">
+        <span class="page-num">44</span>
+        <span class="rail"><i></i></span>
+        <span class="total">199</span>
+      </aside>
+      <div class="stage">
+        <article class="sheet">
+          <h2>Hombres, mujeres y monos</h2>
+          <p>A algunas mujeres, había decidido el comandante Norton tiempo atrás, no debía serles permitido viajar en las naves espaciales; la ingravidez hacía cosas a sus senos que resultaban demasiado perturbadoras.</p>
+          <p>Bastante malo era cuando permanecían inmóviles; pero cuando comenzaban a moverse y se establecían vibraciones afines, el resultado era más de lo que podía exigirse que soportara un simple hombre con sangre en las venas.</p>
+          <p>En una ocasión mencionó esta teoría a la comandante médico Laura Ernst, sin revelarle quién le había inspirado.</p>
+          <p>—Bill —empezó Laura Ernst—, he examinado a nuestros expedicionarios y éste es mi veredicto: Karl y Joe están en excelentes condiciones físicas y psíquicas.</p>
+        </article>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="jump">Ir a la página…</button>
+      <span class="pct">22 %</span>
+    </div>
+  </main>
+</body>
+</html>

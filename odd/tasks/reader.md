@@ -254,3 +254,13 @@ L76 — The owner's correction, and it is right: the release was **premature**. 
 
 That changes the delivery, not the scope: 0.2.0 stays the version that makes the installed application work again (schema 13, first-party reader), and 0.2.1 carries the interface work. The lesson for the workflow, written down so it is not repeated: an implementation handoff from a design board is not a finished interface — the owner's review of the running application is, and the release waits for it.
 
+L77 — The owner's screenshot, and what it shows: in full screen the reader was a **narrow strip on the left** with **three stacked chrome rows** above the paper — the window bar, the reader's own bar, and the zoom row — while the rest of a 1920-pixel window sat empty. Diagnosed as layout, not styling: the reader kept the column it was built for at 430 px, and each piece of chrome had been added as its own row rather than fitted into one.
+
+Four boards in `design/pdf-reader-responsive/`, one per window mode at its real viewport — 430 (two per row), 634 (three), 838 (four) and 1920 × 1080 (full screen). The decisions they carry:
+
+- **One reader bar**, always: cover, title (author beneath it once there is room), zoom with its level, and the one loud control. The window's own bar stays because it is the only way to move the window; nothing else is stacked.
+- **The paper grows with the window.** Full screen draws a 744-pixel page with the full height available and 88-pixel gutters — the extra width goes to the page and its margins, not to empty space beside a strip.
+- **The gutter is the first thing to give way** when the window is narrow (30 px at 430), and the zoom level is the second.
+
+The owner iterates on the canvas and then names the boards to implement. Recorded because it is the workflow the release note L76 promised: the interface waits for their review of the running application.
+

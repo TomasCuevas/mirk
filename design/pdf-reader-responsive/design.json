@@ -1,0 +1,35 @@
+{
+  "title": "Lector en todas las dimensiones",
+  "brief": "El lector en cada modo de ventana (2, 3 y 4 por fila, y pantalla completa), sin las tres franjas de cromo apiladas y con el papel creciendo con la ventana",
+  "feature": "odd/tasks/reader.md",
+  "artboards": [
+    {
+      "file": "01-two-per-row.html",
+      "title": "2 por fila — 430 px",
+      "tradeoff": "Una sola barra y margen de 30 px: el título se corta y el nivel de zoom se esconde, pero el papel gana todo el alto. En este ancho no cabe nada más.",
+      "width": 430,
+      "height": 844
+    },
+    {
+      "file": "02-three-per-row.html",
+      "title": "3 por fila — 634 px",
+      "tradeoff": "La ventana que ya existe: barra única con zoom y nivel, margen de 48 px y página centrada. Es el punto de equilibrio entre cromo y papel.",
+      "width": 634,
+      "height": 844
+    },
+    {
+      "file": "03-four-per-row.html",
+      "title": "4 por fila — 838 px",
+      "tradeoff": "El título recupera el autor debajo y el margen crece a 56 px. Más aire alrededor del papel, mismo cromo que 634.",
+      "width": 838,
+      "height": 844
+    },
+    {
+      "file": "04-fullscreen.html",
+      "title": "Pantalla completa — 1920 px",
+      "tradeoff": "El papel manda: 744 px de ancho, todo el alto disponible, márgenes de 88 px. El ancho extra va a los márgenes y a la página, no a una tira a la izquierda. 46 px de barra en vez de tres franjas.",
+      "width": 1920,
+      "height": 1080
+    }
+  ]
+}
