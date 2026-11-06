@@ -353,8 +353,8 @@ pub fn reader_position(store: &Store, id: i64) -> Result<Option<u32>, MirkError>
     let own = store
         .progress_for_document(id)?
         .into_iter()
-        .filter(|progress| progress.source == ProgressSource::Native)
-        .last()
+        .rev()
+        .find(|progress| progress.source == ProgressSource::Native)
         .map(|progress| progress.page);
     if own.is_some() {
         return Ok(own);
