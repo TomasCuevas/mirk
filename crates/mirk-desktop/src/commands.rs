@@ -386,12 +386,21 @@ pub fn reader_remember_page(store: &Store, id: i64, page: u32) -> Result<(), Mir
         return Ok(());
     };
 
+    // The page this reader just had on screen is a reading that happened *now*: a row without a `read_at`
+    // says "somebody read this" and refuses to say when, and the sections that decide what is being read
+    // treat an unknown instant as not being read at all — measured on a real library, recording a page
+    // from the reader removed the book from "En curso" and left it only in the library.
+    let read_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .ok();
     let progress = StoredProgress::new(
         page,
         entry.document.document.pages,
         ProgressSource::Native,
         Confidence::Exact,
-    );
+    )
+    .with_read_at(read_at);
     store.record_progress(id, &progress)?;
     Ok(())
 }
@@ -2270,6 +2279,26 @@ mod tests {
             reader_position(&store, id).expect("read the position"),
             Some(4),
             "the page this reader wrote is the newest fact it has"
+        );
+    }
+
+    #[test]
+    fn the_page_the_reader_records_says_when_it_was_read() {
+        // A row without `read_at` says "somebody read this" and refuses to say when. The home carousels
+        // order by that instant and treat an unknown one as the oldest, so recording a page from the
+        // reader removed the book from "En curso" instead of moving it to the front.
+        let (store, id, _file, _dir) = stored_document("reader-read-at");
+
+        reader_remember_page(&store, id, 3).expect("record the page");
+
+        let rows = store.progress_for_document(id).expect("read the progress");
+        let native = rows
+            .iter()
+            .find(|row| matches!(row.source, ProgressSource::Native))
+            .expect("a native row");
+        assert!(
+            native.read_at.is_some(),
+            "the reader says when it read the page, or the book leaves the sections that are being read"
         );
     }
 

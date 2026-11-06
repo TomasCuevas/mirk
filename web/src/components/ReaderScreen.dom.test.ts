@@ -156,6 +156,30 @@ describe("the reader screen", () => {
     expect(args.facts.visits.map((visit) => visit.page)).toEqual([0]);
   });
 
+  it("asks for a page and survives the number the input hands back", async () => {
+    // `bind:value` on `<input type="number">` gives back a NUMBER. Parsing it as a string threw inside the
+    // submit handler, so the control did nothing at all — a silent failure with no error on screen.
+    source.openReaderDocument.mockResolvedValue({ destroy: vi.fn(), stats: {}, document: {} });
+    const { target } = render();
+
+    await vi.waitFor(() => expect(target.querySelector(".jump")).not.toBeNull());
+    target.querySelector<HTMLButtonElement>(".jump")?.click();
+
+    await vi.waitFor(() => expect(target.querySelector(".ask-input")).not.toBeNull());
+    const input = target.querySelector<HTMLInputElement>(".ask-input");
+    if (input === null) throw new Error("the ask field did not open");
+    input.value = "21";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    target
+      .querySelector("form.ask")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+    // The form closes only if the handler ran to the end; a throw leaves it open.
+    await vi.waitFor(() => expect(target.querySelector(".ask-input")).toBeNull());
+    expect(target.querySelector(".jump")).not.toBeNull();
+  });
+
   it("closes on its own button", () => {
     source.openReaderDocument.mockReturnValue(new Promise(() => {}));
     const { target, onClose } = render();

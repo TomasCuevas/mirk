@@ -85,7 +85,9 @@
    * its own ends rather than refused: the reader meant a page, and the nearest real one is the answer.
    */
   function jump(): void {
-    const asked = Number.parseInt(typed.trim(), 10);
+    // `bind:value` on a number input hands back a NUMBER, so the field is stringified before it is parsed:
+    // calling `.trim()` on it threw inside the handler and the button did nothing at all.
+    const asked = Number.parseInt(String(typed).trim(), 10);
     asking = false;
     typed = "";
     if (!Number.isFinite(asked)) return;
@@ -224,8 +226,6 @@
           bind:currentPage
           {jumpToPage}
           onPageChange={(page) => {
-            // TEMPORARY DIAGNOSTIC: say whether the screen received the page and whether it has a recorder.
-            console.error("[mirk] screen got page", page, "recorder:", recorder !== null);
             recorder?.observe(page);
             session?.page(page);
             session?.interact();
