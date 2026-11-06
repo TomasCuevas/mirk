@@ -190,21 +190,24 @@
   /**
    * Reports the first page on screen, zero based, when it changes.
    *
-   * `reported` is deliberately not `$state`: it is bookkeeping for this effect, and making it reactive
-   * would make the effect depend on its own write.
+   * It is called from the scroll event and from nowhere else. That is deliberate and it is the fix for a
+   * bug that appeared and disappeared between launches: a `$effect` that reacts to the plan and writes
+   * state the parent owns is a flush-phase hazard. When Svelte refuses that write, the page reaches
+   * neither the margin nor the store — while a test that drives the scroll handler directly still passes,
+   * because an event handler is exactly where the write is allowed.
+   *
+   * Nothing is reported before the reader scrolls: the screen already knows the page it opened at, from
+   * the store, and reporting it again would only echo it back.
    */
   let reported = -1;
-  $effect(() => {
-    // Nothing is reported until a resume has been applied, because the first page the stack shows is page
-    // one for the instant before the stored page is restored — and reporting it would overwrite the very
-    // position the resume is about to honour. The effect re-runs when the resume moves the stack.
-    if (initialPage > 0 && !resumed) return;
-    const first = plan?.visible?.[0];
+
+  function reportFirstVisible(onScreen: readonly number[] | undefined): void {
+    const first = onScreen?.[0];
     if (first === undefined || first === reported) return;
     reported = first;
     currentPage = first - 1;
     onPageChange?.(first - 1);
-  });
+  }
 
   /**
    * Brings `jumpToPage` to the top of the viewport when the screen asks for it.
@@ -361,6 +364,17 @@
     restores.invalidate();
     scrollTop = scroller.scrollTop - stackOrigin();
     viewportHeight = scroller.clientHeight;
+    // The window is computed here rather than read from the derived one: the derived value updates after
+    // this handler, and a report that waited for it would depend on the flush that has already failed once.
+    if (layout !== null) {
+      const window = pageWindow(layout, {
+        scrollTop,
+        viewportHeight,
+        overscan,
+        maxPages: maxWindowPages,
+      });
+      reportFirstVisible(window.visible);
+    }
   }
 
   function failureFor(pageNumber: number): string | null {

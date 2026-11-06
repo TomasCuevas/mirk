@@ -321,7 +321,8 @@ describe("the continuous page view", () => {
     const target = mountReader(world.document, { onPageChange: (page) => seen.push(page) });
     await settle();
 
-    expect(seen).toEqual([0]);
+    // Nothing is reported before the reader scrolls: the screen already knows the page it opened at.
+    expect(seen).toEqual([]);
 
     scrollTo(target, 460, 400);
     await settle();
