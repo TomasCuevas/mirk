@@ -53,8 +53,6 @@
   let typed = $state("");
   /** The page the reader asked to jump to, zero-based; the page view scrolls to it and it is cleared. */
   let jumpToPage = $state<number | null>(null);
-  /** TEMPORARY DIAGNOSTIC: what the page view sees, printed where the reader is already looking. */
-  let diagnostic = $state("");
   /** The document's page count, when the library knows it. */
   const total = $derived(entry.pages ?? null);
   /**
@@ -227,7 +225,6 @@
           initialPage={position ?? 0}
           bind:currentPage
           {jumpToPage}
-          onDiagnostic={(text) => (diagnostic = text)}
           onPageChange={(page) => {
             recorder?.observe(page);
             session?.page(page);
@@ -257,7 +254,6 @@
       {#if percent !== null}
         <span class="percent">{percent} %</span>
       {/if}
-      <span class="diag">{diagnostic}</span>
     </footer>
   {/if}
 </section>
@@ -417,17 +413,6 @@
     border-top: 1px solid var(--line);
     font-size: var(--text-xs);
     color: var(--fg-subtle);
-  }
-
-  .diag {
-    margin-left: 8px;
-    font-family: ui-monospace, monospace;
-    font-size: 9px;
-    color: var(--fg-subtle);
-    max-width: 330px;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
   }
 
   .percent {

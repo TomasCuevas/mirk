@@ -54,7 +54,6 @@
     currentPage = $bindable(0),
     jumpToPage = null,
     onPageChange,
-    onDiagnostic,
     pixelRatio = typeof globalThis.devicePixelRatio === "number" ? globalThis.devicePixelRatio : 1,
   }: {
     /** A document pdf.js has already loaded. The reader never loads or opens one itself. */
@@ -91,8 +90,6 @@
     currentPage?: number;
     /** A page to bring to the top of the viewport, zero-based; `null` when nothing was asked. */
     jumpToPage?: number | null;
-    /** TEMPORARY DIAGNOSTIC: what this component sees on every position report. */
-    onDiagnostic?: (text: string) => void;
     /**
      * Called with the first page on screen, zero-based, whenever that page changes.
      *
@@ -198,16 +195,6 @@
    */
   let reported = -1;
   $effect(() => {
-    onDiagnostic?.(
-      JSON.stringify({
-        first: plan?.visible?.[0] ?? null,
-        reported,
-        resumed,
-        initialPage,
-        scrollTop: Math.round(scrollTop),
-        visible: plan?.visible?.length ?? 0,
-      }),
-    );
     // Nothing is reported until a resume has been applied, because the first page the stack shows is page
     // one for the instant before the stored page is restored — and reporting it would overwrite the very
     // position the resume is about to honour. The effect re-runs when the resume moves the stack.

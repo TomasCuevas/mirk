@@ -5,6 +5,10 @@ import { defineConfig } from "vitest/config";
 // working directory. The output has to land where `crates/mirk-desktop/tauri.conf.json` says the
 // frontend dist is, since Tauri embeds it at compile time.
 export default defineConfig({
+  // Stamped at every build and every dev start, so the running application can say which frontend it is.
+  // Three failed fixes were chased on a machine running an older bundle; this line makes that question
+  // answerable instead of arguable.
+  define: { __BUILD_STAMP__: JSON.stringify(new Date().toISOString()) },
   root: "web",
   plugins: [svelte()],
   build: {

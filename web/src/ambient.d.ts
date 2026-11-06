@@ -32,3 +32,7 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/** The frontend's build stamp, injected by Vite (`define` in `web/vite.config.ts`). */
+declare const __BUILD_STAMP__: string;
+

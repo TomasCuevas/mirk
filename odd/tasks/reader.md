@@ -213,3 +213,9 @@ The jump: `ReaderPages` had **no jump path at all** (the offset was applied once
 
 The frame: the page view carried its own `--surface` panel with a border and a radius, so the bar drawn by the screen sat outside it. The frame moved to the screen, and the page view lost its box: the bar, the pages and the footer are one surface now, which is what the board drew.
 
+L71 — The intermittency was not a race: it was a **stale build**. The owner's report alternated — working after a rebuild, broken after restarting the application — and three of my fixes were written against the working code while an older bundle was answering. The tell that settled it: with the on-screen diagnostic removed and a restart that rebuilt nothing, it kept working, so the defect never lived in the current source.
+
+What that costs, and what it taught: three blind fixes, each "confirmed" against a build that was not the one being tested. The lesson is not "be careful" — it is that the application must answer *which build am I* without an argument. `web/src/main.ts` now prints `[mirk] frontend <stamp>` before anything else, and the stamp is injected by `define` at every build and every dev start. The next "it broke" begins with that line, not with a hypothesis.
+
+Two things stay from the episode because they are improvements, not scaffolding: a page write that fails prints its reason instead of vanishing, and the reader's page carries the instant it was read (`read_at`), which is what the home sections order by.
+
