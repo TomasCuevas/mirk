@@ -2207,7 +2207,9 @@ impl Store {
                  FROM documents d \
                  LEFT JOIN progress p ON p.id = (\
                      SELECT p2.id FROM progress p2 WHERE p2.doc_id = d.id \
-                     ORDER BY p2.id DESC LIMIT 1\
+                     ORDER BY (p2.read_at IS NULL) ASC, \
+                              COALESCE(p2.read_at, p2.updated_at) DESC, \
+                              p2.id DESC LIMIT 1\
                  ) \
                  ORDER BY d.path ASC, d.id ASC",
             )

@@ -118,6 +118,52 @@ fn progress_keeps_source_and_confidence_distinct_after_a_round_trip() {
 }
 
 #[test]
+fn the_library_shows_the_reading_that_happened_last_not_the_row_written_last() {
+    // Measured in the owner's own library: the integrated reader recorded page 20, and the launch sweep then
+    // re-recorded what the external viewer had last done — an older fact, written later. Ordering by row id
+    // made the card fall back to the old page while the reader resumed from the new one, so the percentage
+    // said one thing and the document opened at another.
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).expect("open");
+    let doc_id = store
+        .upsert_document(&Document::new("/library/collision.pdf"))
+        .expect("insert document");
+
+    store
+        .record_progress(
+            doc_id,
+            &StoredProgress::new(20, Some(80), ProgressSource::Native, Confidence::Exact)
+                .with_read_at(Some(2_000)),
+        )
+        .expect("the reader records page 20");
+    store
+        .record_progress(
+            doc_id,
+            &StoredProgress::new(
+                3,
+                Some(80),
+                ProgressSource::External("evince-gvfs"),
+                Confidence::Exact,
+            )
+            .with_read_at(Some(1_000)),
+        )
+        .expect("the sweep re-records the older external page");
+
+    let entry = store
+        .library()
+        .expect("library")
+        .into_iter()
+        .find(|entry| entry.document.id == doc_id)
+        .expect("the document");
+    let progress = entry.progress.expect("a recorded position");
+    assert_eq!(
+        progress.page, 20,
+        "the card shows the newest READING, not the newest ROW"
+    );
+    assert_eq!(progress.source, ProgressSource::Native);
+}
+
+#[test]
 fn a_reading_time_round_trips_through_library_and_per_document_reads() {
     let (_dir, path) = temp_db();
     let store = Store::open(&path).expect("open");
