@@ -23,8 +23,6 @@
   import {
     DEFAULT_OVERSCAN,
     DEFAULT_WINDOW_PAGES,
-    MAX_SCALE,
-    MIN_SCALE,
     MeasurementStopped,
     PAGE_GAP,
     PAGE_STACK_PADDING,
@@ -54,6 +52,7 @@
     currentPage = $bindable(0),
     jumpToPage = null,
     onPageChange,
+    onScaleChange,
     pixelRatio = typeof globalThis.devicePixelRatio === "number" ? globalThis.devicePixelRatio : 1,
   }: {
     /** A document pdf.js has already loaded. The reader never loads or opens one itself. */
@@ -91,6 +90,13 @@
     /** A page to bring to the top of the viewport, zero-based; `null` when nothing was asked. */
     jumpToPage?: number | null;
     /**
+     * The zoom this page view is drawing at, reported whenever it changes.
+     *
+     * The controls live in the reader's one bar (`ReaderScreen`), so the level has to travel to it; the
+     * scale itself stays here, because the layout is derived from it.
+     */
+    onScaleChange?: (scale: number) => void;
+    /**
      * Called with the first page on screen, zero-based, whenever that page changes.
      *
      * The first page of the ones the reader can see, not of the overscan band around them: a page kept
@@ -102,6 +108,11 @@
 
   /** The zoom, clamped so a bad initial value cannot produce a zero-height stack. */
   let scale = $state(untrack(() => clampScale(initialScale)));
+
+  /** Tells the screen the level it should draw in its bar. */
+  $effect(() => {
+    onScaleChange?.(scale);
+  });
   /** The pages' sizes: measured, or `null` for a page nothing has acquired yet. */
   let sizes = $state<readonly (PageSize | null)[] | null>(null);
   /** How many leading pages the measurement pass read; fewer than the document has means the rest are unknown. */
@@ -395,6 +406,16 @@
     return snapshot.drawing.includes(pageNumber);
   }
 
+  /**
+   * Zooms the page view from outside, for the controls that live in the reader's bar.
+   *
+   * Exported rather than lifted: the scale belongs to this component because the layout is derived from
+   * it, and a copy in the parent would be a second source of truth for the same number.
+   */
+  export function zoomBy(direction: "in" | "out"): void {
+    zoom(direction);
+  }
+
   function zoom(direction: "in" | "out"): void {
     applyScale(zoomScale(scale, direction));
   }
@@ -531,26 +552,11 @@
   rectangle that looks like a blank page of the document.
 -->
 <section class="reader" aria-label="Document pages">
-  <header class="toolbar">
-    <div class="zoom">
-      <button
-        type="button"
-        class="control"
-        aria-label="Zoom out"
-        disabled={scale <= MIN_SCALE}
-        onclick={() => zoom("out")}>−</button>
-      <output class="level" aria-label="Zoom level" aria-live="polite"
-        >{Math.round(scale * 100)}%</output
-      >
-      <button
-        type="button"
-        class="control"
-        aria-label="Zoom in"
-        disabled={scale >= MAX_SCALE}
-        onclick={() => zoom("in")}>+</button>
-    </div>
-    <p class="position" aria-live="polite">{position}</p>
-  </header>
+
+  <!-- The page number, announced rather than drawn: the margin is decoration for a sighted reader, and
+       hiding this element visually must not silence it. It lived inside the toolbar until that row was
+       folded into the reader's one bar. -->
+  <p class="position" aria-live="polite">{position}</p>
 
   <!-- The scroller is a region a keyboard can enter: without a focus stop, a keyboard user cannot scroll
        the pages at all, because the scroller is the element with the overflow. Svelte's rule cannot see
@@ -641,62 +647,11 @@
     overflow: hidden;
   }
 
-  /* The one floating control surface: a glass strip, like the top bar's, so the pages underneath read as
-     content and the chrome reads as something laid over it. */
-  .toolbar {
-    flex: none;
-    display: flex;
-    align-items: center;
-    /* The zoom is the only thing left in this row: the page number lives in the margin the screen draws,
-       so the controls sit at the end of the row and the paper keeps its width. */
-    justify-content: flex-end;
-    gap: var(--space-3);
-    padding: var(--space-2) var(--space-3);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
-      var(--glass);
-    border-bottom: 1px solid var(--line);
-    backdrop-filter: blur(var(--glass-blur)) saturate(1.1);
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.1);
-  }
 
-  .zoom {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-  }
 
-  .control {
-    width: 1.75rem;
-    height: 1.75rem;
-    display: grid;
-    place-items: center;
-    padding: 0;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--r-sm);
-    background: var(--surface-1);
-    color: var(--fg);
-    font-size: var(--text-lg);
-    line-height: 1;
-    cursor: pointer;
-    transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
-  }
 
-  .control:hover:not(:disabled) {
-    background: var(--surface-2);
-    border-color: var(--line-strong);
-  }
 
-  .control:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
 
-  /* Tabular digits so the percentage does not shuffle the controls sideways as it changes. */
-  .level {
-    font-size: var(--text-sm);
-    font-variant-numeric: tabular-nums;
-    color: var(--fg-muted);
-  }
 
   /* The page number is drawn in the margin by the screen that owns the frame. This element stays for
      assistive technology: it is the live region that announces a page change, and hiding it visually
@@ -710,10 +665,6 @@
     white-space: nowrap;
   }
 
-  .level {
-    min-width: 3.6ch;
-    text-align: center;
-  }
 
   .position {
     margin: 0;

@@ -18,6 +18,7 @@
   import { invoke } from "../lib/tauri";
   import { createPageRecorder } from "../lib/reader-progress";
   import { createReadingSession } from "../lib/reader-session";
+  import { MAX_SCALE, MIN_SCALE } from "../lib/reader-pages";
   import type { LibraryEntry } from "../lib/library";
   import type { Translate } from "../lib/i18n";
 
@@ -53,6 +54,10 @@
   let typed = $state("");
   /** The page the reader asked to jump to, zero-based; the page view scrolls to it and it is cleared. */
   let jumpToPage = $state<number | null>(null);
+  /** The zoom the page view is drawing at, reported by it: the controls live in this bar. */
+  let scale = $state(1);
+  /** The page view's imperative handle, for the zoom controls that belong to this bar. */
+  let pages = $state<{ zoomBy: (direction: "in" | "out") => void } | null>(null);
   /** The document's page count, when the library knows it. */
   const total = $derived(entry.pages ?? null);
   /**
@@ -198,7 +203,27 @@
     {:else}
       <span class="mark" aria-hidden="true"></span>
     {/if}
-    <p class="title">{entry.title}</p>
+    <div class="meta">
+      <p class="title">{entry.title}</p>
+      {#if entry.authors.length > 0}
+        <p class="byline">{entry.authors.join(", ")}</p>
+      {/if}
+    </div>
+    <div class="zoom" role="group" aria-label="Zoom">
+      <button
+        type="button"
+        aria-label="Zoom out"
+        disabled={scale <= MIN_SCALE}
+        onclick={() => pages?.zoomBy("out")}>−</button
+      >
+      <output aria-live="polite">{Math.round(scale * 100)} %</output>
+      <button
+        type="button"
+        aria-label="Zoom in"
+        disabled={scale >= MAX_SCALE}
+        onclick={() => pages?.zoomBy("in")}>+</button
+      >
+    </div>
     <button class="close" type="button" onclick={onClose}>{t("reader.close")}</button>
   </header>
 
@@ -223,7 +248,9 @@
         <ReaderPages
           document={source.document}
           initialPage={position ?? 0}
+          bind:this={pages}
           bind:currentPage
+          onScaleChange={(value) => (scale = value)}
           {jumpToPage}
           onPageChange={(page) => {
             recorder?.observe(page);
@@ -264,6 +291,11 @@
   /* Bar, pages and footer live inside ONE surface: the reader is a sheet of paper in a frame, not a panel
      inside another panel. */
   .screen {
+    /* It FILLS the pane it is given. Without the growth it sized itself to its content, which in a wide
+       window was a 430-pixel strip on the left and empty space everywhere else. */
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -302,9 +334,12 @@
     background: var(--surface-1);
   }
 
-  .title {
+  .meta {
     flex: 1;
     min-width: 0;
+  }
+
+  .title {
     margin: 0;
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
@@ -315,6 +350,50 @@
   }
 
   /* The one loud control on this screen: leaving is the only thing here that is not reading. */
+  /* Author under the title once the window has the room for it; nothing else changes with width. */
+  .byline {
+    display: none;
+    margin: 1px 0 0;
+    font-size: var(--text-xs);
+    color: var(--fg-subtle);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .zoom {
+    flex: none;
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm, 6px);
+    background: var(--surface-1);
+  }
+
+  .zoom button {
+    font: inherit;
+    font-size: var(--text-sm);
+    width: 26px;
+    height: 24px;
+    border: 0;
+    background: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .zoom button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .zoom output {
+    min-width: 44px;
+    text-align: center;
+    font-size: var(--text-xs);
+    color: var(--fg-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
   .close {
     flex: none;
     height: 28px;
@@ -396,12 +475,20 @@
     box-shadow: inset 0 -2px 0 rgba(255, 255, 255, 0.92);
   }
 
+  /* The page column is centred and never wider than a readable measure: in a wide window the extra width
+     becomes margin around the paper instead of a page stretched to the glass. */
   .stage {
     display: flex;
     flex-direction: column;
+    align-items: center;
     min-width: 0;
     min-height: 0;
-    padding-right: 8px;
+    padding: 6px 10px 6px 0;
+  }
+
+  .stage > :global(.reader) {
+    width: 100%;
+    max-width: 780px;
   }
 
   .foot {
@@ -459,14 +546,51 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* At the narrowest window the margin costs too much of the page, so it gives way first. */
+  /* One rule per window mode, at the widths the window actually takes (430 / 634 / 838) plus full screen.
+     The margin is the first thing to give way, and the zoom level the second. */
   @media (max-width: 520px) {
     .body {
-      grid-template-columns: 40px minmax(0, 1fr);
+      grid-template-columns: 30px minmax(0, 1fr);
     }
 
     .rail {
-      flex-basis: 132px;
+      flex-basis: 130px;
+      width: 3px;
+    }
+
+    .zoom output {
+      display: none;
+    }
+  }
+
+  @media (min-width: 521px) and (max-width: 700px) {
+    .body {
+      grid-template-columns: 48px minmax(0, 1fr);
+    }
+  }
+
+  @media (min-width: 701px) {
+    .body {
+      grid-template-columns: 56px minmax(0, 1fr);
+    }
+
+    .byline {
+      display: block;
+    }
+  }
+
+  @media (min-width: 1200px) {
+    .body {
+      grid-template-columns: 88px minmax(0, 1fr);
+    }
+
+    .stage {
+      padding: 14px 88px 14px 0;
+    }
+
+    .rail {
+      flex-basis: 300px;
+      width: 5px;
     }
   }
 

@@ -209,6 +209,15 @@ afterEach(() => {
  * Mounts the reader with a one-device-pixel ratio and no overscan, so the arithmetic in the assertions is
  * the arithmetic of the test and not of the machine it runs on.
  */
+/** Every zoom level the page view reported, newest last. The controls live in the reader's bar. */
+let zooms: number[] = [];
+
+/** Zooms through the component's own handle, which is what the reader's bar calls. */
+function zoom(direction: "in" | "out"): void {
+  (component as unknown as { zoomBy: (d: "in" | "out") => void }).zoomBy(direction);
+  flushSync();
+}
+
 function mountReader(
   document: ReaderDocument,
   props: {
@@ -218,6 +227,7 @@ function mountReader(
     jumpToPage?: number | null;
   } = {},
 ): HTMLElement {
+  zooms = [];
   const target = window.document.createElement("div");
   window.document.body.appendChild(target);
   component = mount(ReaderPages, {
@@ -229,6 +239,7 @@ function mountReader(
       maxWindowPages: props.maxWindowPages ?? 2,
       onPageChange: props.onPageChange,
       jumpToPage: props.jumpToPage ?? null,
+      onScaleChange: (value: number) => zooms.push(value),
       },
   });
   flushSync();
@@ -410,11 +421,11 @@ describe("the continuous page view", () => {
   it("does not reuse a page's canvas while its previous render is still settling", async () => {
     const world = fakeDocument({ pending: true });
 
-    const target = mountReader(world.document);
+    mountReader(world.document);
     await settle();
     expect(world.renders).toHaveLength(1);
 
-    button(target, "Zoom in").click();
+    zoom("in");
     await settle();
 
     // The old render is cancelled but still running: the same canvas must not be drawn into again yet.
@@ -452,13 +463,11 @@ describe("the continuous page view", () => {
   it("zooms with accessible controls and redraws the pages at the new scale", async () => {
     const world = fakeDocument();
 
-    const target = mountReader(world.document);
+    mountReader(world.document);
     await settle();
-    expect(button(target, "Zoom in").disabled).toBe(false);
-    expect(button(target, "Zoom out").disabled).toBe(false);
-    expect(target.querySelector('[aria-label="Zoom level"]')?.textContent?.trim()).toBe("100%");
+    expect(zooms.at(-1)).toBe(1);
 
-    button(target, "Zoom in").click();
+    zoom("in");
     await settle();
 
     expect(world.renders.map((call) => [call.page, call.scale])).toEqual([
@@ -466,34 +475,40 @@ describe("the continuous page view", () => {
       [1, 1.25],
     ]);
     expect(world.renders[1].canvasWidth).toBe(375);
-    expect(target.querySelector('[aria-label="Zoom level"]')?.textContent?.trim()).toBe("125%");
+    expect(zooms.at(-1)).toBe(1.25);
 
-    button(target, "Zoom out").click();
-    button(target, "Zoom out").click();
+    zoom("out");
+    zoom("out");
     await settle();
 
     // 125% back to 100%, then one more step out: 80%.
     expect(world.renders.at(-1)).toMatchObject({ page: 1, scale: 0.8, canvasWidth: 240 });
-    expect(target.querySelector('[aria-label="Zoom level"]')?.textContent?.trim()).toBe("80%");
+    expect(zooms.at(-1)).toBeCloseTo(0.8);
   });
 
   it("stops at the zoom bounds instead of offering a press that does nothing", async () => {
     const world = fakeDocument();
 
-    const target = mountReader(world.document);
+    mountReader(world.document);
     await settle();
 
-    for (let press = 0; press < 12; press += 1) button(target, "Zoom out").click();
+    for (let press = 0; press < 12; press += 1) zoom("out");
     await settle();
 
-    expect(target.querySelector('[aria-label="Zoom level"]')?.textContent?.trim()).toBe("50%");
-    expect(button(target, "Zoom out").disabled).toBe(true);
+    expect(zooms.at(-1)).toBeCloseTo(0.5);
+    const atFloor = zooms.length;
+    zoom("out");
+    await settle();
+    expect(zooms.length, "a press at the floor does nothing").toBe(atFloor);
 
-    for (let press = 0; press < 20; press += 1) button(target, "Zoom in").click();
+    for (let press = 0; press < 20; press += 1) zoom("in");
     await settle();
 
-    expect(target.querySelector('[aria-label="Zoom level"]')?.textContent?.trim()).toBe("400%");
-    expect(button(target, "Zoom in").disabled).toBe(true);
+    expect(zooms.at(-1)).toBeCloseTo(4);
+    const atCeiling = zooms.length;
+    zoom("in");
+    await settle();
+    expect(zooms.length, "a press at the ceiling does nothing").toBe(atCeiling);
   });
 
   it("keeps the reading position when the zoom changes", async () => {
@@ -504,7 +519,7 @@ describe("the continuous page view", () => {
     const scroller = scrollTo(target, 624, 400);
     await settle();
 
-    button(target, "Zoom in").click();
+    zoom("in");
     await settle();
 
     // The stack's 20 px padding is part of the layout, so page 2 runs 444–844 at 100% and 624 is 45% down
@@ -691,7 +706,7 @@ describe("the continuous page view", () => {
     const scroller = scrollTo(target, 624, 400);
     await settle();
 
-    button(target, "Zoom in").click();
+    zoom("in");
     // The reader scrolls before the deferred DOM write runs; their position is the one that must win.
     scrollTo(target, 900, 400);
     await settle();
@@ -707,14 +722,14 @@ describe("the continuous page view", () => {
     const scroller = scrollTo(target, 624, 400);
     await settle();
 
-    button(target, "Zoom in").click();
-    button(target, "Zoom in").click();
+    zoom("in");
+    zoom("in");
     await settle();
 
     // 100% → 125% → 156.25%, each anchored on page 2 at the same 45% of it. At 156.25% page 2 starts at
     // 669 and is 625 tall, so the position is 669 + 0.45 × 625 = 950.25 — not the first zoom's 769.
     expect(scroller.scrollTop).toBeCloseTo(950.25, 6);
-    expect(target.querySelector('[aria-label="Zoom level"]')?.textContent?.trim()).toBe("156%");
+    expect(zooms.at(-1)).toBeCloseTo(1.5625);
   });
 
   it("stops measuring after the reader leaves and releases the pages it acquired", async () => {
