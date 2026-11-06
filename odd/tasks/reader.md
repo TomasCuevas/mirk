@@ -203,3 +203,13 @@ Two honest deviations, both recorded rather than quietly rendered: **(1)** the z
 
 The page number stayed available to assistive technology: `ReaderPages`' `.position` live region is now visually hidden with `clip-path` instead of being deleted, because the gutter is decoration for a sighted reader and must not silence an announcement. Two DOM tests pin the margin: the resume page rendered as 142 of 436 with 33 % and a 33 % rail, and a document whose page count is unknown showing no percentage at all.
 
+L70 — The owner opened the reader and used it, which found four things no test had: **the page number never moved on scroll**, **no cover beside the title**, **no way to jump to a page**, and **the chrome sitting outside the app's own frame** (a bar above a panel, instead of one surface). Each had a different cause.
+
+The number: the screen learned the page through a callback it stored in `$state` and rendered in its margin, and the margin never followed. The page view's own reporting is now pinned by a DOM test that scrolls and asserts the reported page equals the first page on screen — that test **passed before this fix**, which is the important part of the record: the report was always arriving, so the fault was on the receiving side. The page is now a **binding** (`$bindable` in the page view, `bind:currentPage` in the screen) instead of a callback the screen had to re-render from, and the number is drawn from that binding.
+
+The cover: `document_cover` was already the command that answers a document's cover URL; the screen simply never asked. It asks now, and the pink mark stands in when there is no cover — the same fallback a card uses.
+
+The jump: `ReaderPages` had **no jump path at all** (the offset was applied once, from `initialPage`), so the button in L69's board had nothing to call. It now takes a `jumpToPage` request and scrolls that page's box to the top of the viewport, guarded by the last request served so a re-render does not fight the reader's own scrolling. The footer control takes a **one-based** number, clamps it to the document, and hands the page view a **zero-based** one — the conversion happens in one place.
+
+The frame: the page view carried its own `--surface` panel with a border and a radius, so the bar drawn by the screen sat outside it. The frame moved to the screen, and the page view lost its box: the bar, the pages and the footer are one surface now, which is what the board drew.
+

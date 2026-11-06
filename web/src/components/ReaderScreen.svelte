@@ -43,8 +43,16 @@
   /** The page the store remembers for this document, zero-based; `null` when it has never heard of one. */
   let position = $state<number | null>(null);
 
-  /** The first page on screen, zero-based. The gutter's number is this one, plus one. */
+  /** The first page on screen, zero-based, bound from the page view. The gutter's number is this plus one. */
   let currentPage = $state(0);
+  /** The document's own cover, as a URL the webview can load, or `null` while it is unknown. */
+  let cover = $state<string | null>(null);
+  /** Whether the footer is asking for a page number. */
+  let asking = $state(false);
+  /** What the reader typed in the footer. */
+  let typed = $state("");
+  /** The page the reader asked to jump to, zero-based; the page view scrolls to it and it is cleared. */
+  let jumpToPage = $state<number | null>(null);
   /** The document's page count, when the library knows it. */
   const total = $derived(entry.pages ?? null);
   /**
@@ -68,6 +76,23 @@
    * in and the session therefore has to exist first (R3b).
    */
   let session: ReturnType<typeof createReadingSession> | null = null;
+
+  /**
+   * Sends the typed page to the page view.
+   *
+   * The number the reader types is one-based, like every page number they see; the view speaks zero-based
+   * offsets, so the conversion happens here and nowhere else. A number outside the document is clamped to
+   * its own ends rather than refused: the reader meant a page, and the nearest real one is the answer.
+   */
+  function jump(): void {
+    const asked = Number.parseInt(typed.trim(), 10);
+    asking = false;
+    typed = "";
+    if (!Number.isFinite(asked)) return;
+    const last = total === null ? asked : total;
+    const page = Math.min(Math.max(asked, 1), Math.max(last, 1));
+    jumpToPage = page - 1;
+  }
 
   onMount(() => {
     // A screen that is replaced before the document settles must not keep it: the loader owns a worker
@@ -105,6 +130,13 @@
     // The page and the document are asked for at the same time: the reader must not open at page one and
     // then jump, and the store's answer is needed before the page view exists.
     const remembered = invoke<number | null>("reader_position", { id: entry.id }).catch(() => null);
+    // The cover names the book beside its title; without one the mark stands in, which is what a document
+    // whose cover could not be rendered looks like everywhere else in the application.
+    void invoke<string | null>("document_cover", { id: entry.id })
+      .then((source) => {
+        if (live) cover = source;
+      })
+      .catch(() => {});
 
     void Promise.all([openReaderDocument(entry.path), remembered]).then(
       ([opened, page]) => {
@@ -159,7 +191,11 @@
 
 <section class="screen" aria-label={entry.title}>
   <header class="top">
-    <span class="mark" aria-hidden="true"></span>
+    {#if cover !== null}
+      <img class="cover" src={cover} alt="" aria-hidden="true" />
+    {:else}
+      <span class="mark" aria-hidden="true"></span>
+    {/if}
     <p class="title">{entry.title}</p>
     <button class="close" type="button" onclick={onClose}>{t("reader.close")}</button>
   </header>
@@ -185,8 +221,9 @@
         <ReaderPages
           document={source.document}
           initialPage={position ?? 0}
+          bind:currentPage
+          {jumpToPage}
           onPageChange={(page) => {
-            currentPage = page;
             recorder?.observe(page);
             session?.page(page);
             session?.interact();
@@ -196,6 +233,22 @@
     </div>
 
     <footer class="foot">
+      {#if asking}
+        <form class="ask" onsubmit={(event) => { event.preventDefault(); jump(); }}>
+          <label class="ask-label" for="reader-jump">Ir a la página</label>
+          <input
+            id="reader-jump"
+            class="ask-input"
+            type="number"
+            min="1"
+            max={total ?? undefined}
+            bind:value={typed}
+            onblur={() => { asking = false; typed = ""; }}
+          />
+        </form>
+      {:else}
+        <button class="jump" type="button" onclick={() => (asking = true)}>Ir a la página…</button>
+      {/if}
       {#if percent !== null}
         <span class="percent">{percent} %</span>
       {/if}
@@ -206,12 +259,17 @@
 <style>
   /* A column that fills whatever the shell gives it: the bars are fixed height, the pages take the rest.
      `min-height: 0` is what lets the pages shrink instead of pushing the bar out of the window. */
+  /* Bar, pages and footer live inside ONE surface: the reader is a sheet of paper in a frame, not a panel
+     inside another panel. */
   .screen {
     display: flex;
     flex-direction: column;
     height: 100%;
     min-height: 0;
     overflow: hidden;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
   }
 
   .top {
@@ -222,13 +280,24 @@
     padding: 10px 14px;
   }
 
-  /* The mark, not a logo: one saturated square says which application this is and nothing more. */
+  /* The mark, not a logo: it stands in for a cover that could not be rendered. */
   .mark {
     flex: none;
-    width: 18px;
-    height: 18px;
-    border-radius: var(--r-sm, 6px);
+    width: 20px;
+    height: 26px;
+    border-radius: var(--r-xs, 4px);
     background: var(--brand);
+  }
+
+  /* The book's own cover, at the size of a spine label: enough to recognise the title next to it. */
+  .cover {
+    flex: none;
+    width: 20px;
+    height: 26px;
+    object-fit: cover;
+    border-radius: var(--r-xs, 4px);
+    border: 1px solid var(--line);
+    background: var(--surface-1);
   }
 
   .title {
@@ -340,6 +409,45 @@
 
   .percent {
     margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The one action the footer carries: jumping is the only way to move without scrolling. */
+  .jump {
+    padding: 3px 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm, 6px);
+    background: transparent;
+    color: var(--fg-muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
+
+  .jump:hover {
+    border-color: var(--line-strong);
+    color: var(--fg);
+  }
+
+  .ask {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .ask-label {
+    color: var(--fg-subtle);
+  }
+
+  .ask-input {
+    width: 56px;
+    padding: 2px 6px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-xs, 4px);
+    background: var(--surface-1);
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--text-xs);
     font-variant-numeric: tabular-nums;
   }
 

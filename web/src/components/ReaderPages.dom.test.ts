@@ -211,7 +211,12 @@ afterEach(() => {
  */
 function mountReader(
   document: ReaderDocument,
-  props: { maxWindowPages?: number; overscan?: number } = {},
+  props: {
+    maxWindowPages?: number;
+    overscan?: number;
+    onPageChange?: (page: number) => void;
+    jumpToPage?: number | null;
+  } = {},
 ): HTMLElement {
   const target = window.document.createElement("div");
   window.document.body.appendChild(target);
@@ -222,6 +227,8 @@ function mountReader(
       pixelRatio: 1,
       overscan: props.overscan ?? 0,
       maxWindowPages: props.maxWindowPages ?? 2,
+      onPageChange: props.onPageChange,
+      jumpToPage: props.jumpToPage ?? null,
       },
   });
   flushSync();
@@ -304,6 +311,34 @@ describe("the continuous page view", () => {
     expect(target.querySelectorAll("canvas")).toHaveLength(1);
     expect(pagesOnScreen(target)).toEqual(["1"]);
     expect(world.renders[0]).toMatchObject({ page: 1, scale: 1, canvasWidth: 300, canvasHeight: 400 });
+  });
+
+  it("reports the first page on screen as the reader scrolls, so the margin can follow", async () => {
+    // The margin's number is this report. If it stopped arriving at a scroll, the reader would be told they
+    // are on page one for the whole book — which is what a number that never changes looked like.
+    const world = fakeDocument();
+    const seen: number[] = [];
+    const target = mountReader(world.document, { onPageChange: (page) => seen.push(page) });
+    await settle();
+
+    expect(seen).toEqual([0]);
+
+    scrollTo(target, 460, 400);
+    await settle();
+
+    const first = Number(pagesOnScreen(target)[0]);
+    expect(seen.at(-1)).toBe(first - 1);
+    expect(seen.at(-1)).toBeGreaterThan(0);
+  });
+
+  it("brings a page to the top of the viewport when the screen asks for it", async () => {
+    // Jumping is the only way to move without scrolling, and the control that asks for it sends a
+    // zero-based page here: page three is index two.
+    const world = fakeDocument();
+    const target = mountReader(world.document, { jumpToPage: 2 });
+    await settle();
+
+    expect(pagesOnScreen(target)[0]).toBe("3");
   });
 
   it("names the reader region and every page for assistive technology", async () => {

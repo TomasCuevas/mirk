@@ -51,6 +51,8 @@
     overscan = DEFAULT_OVERSCAN,
     maxWindowPages = DEFAULT_WINDOW_PAGES,
     initialPage = 0,
+    currentPage = $bindable(0),
+    jumpToPage = null,
     onPageChange,
     pixelRatio = typeof globalThis.devicePixelRatio === "number" ? globalThis.devicePixelRatio : 1,
   }: {
@@ -79,6 +81,15 @@
      * sizes as it acquires them, exactly as it does while scrolling.
      */
     initialPage?: number;
+    /**
+     * The first page on screen, zero-based, bound both ways.
+     *
+     * The screen draws this number in its margin, and a binding tells it directly instead of through a
+     * callback it might not re-render from.
+     */
+    currentPage?: number;
+    /** A page to bring to the top of the viewport, zero-based; `null` when nothing was asked. */
+    jumpToPage?: number | null;
     /**
      * Called with the first page on screen, zero-based, whenever that page changes.
      *
@@ -191,7 +202,29 @@
     const first = plan?.visible?.[0];
     if (first === undefined || first === reported) return;
     reported = first;
+    currentPage = first - 1;
     onPageChange?.(first - 1);
+  });
+
+  /**
+   * Brings `jumpToPage` to the top of the viewport when the screen asks for it.
+   *
+   * `lastJump` remembers the request already served, so a re-render does not scroll again and fight the
+   * reader's own scrolling. Asking twice for the same page means clearing the request in between.
+   */
+  let lastJump: number | null = null;
+  $effect(() => {
+    const target = jumpToPage;
+    if (target === null || target === undefined) return;
+    if (layout === null || target === lastJump) return;
+    const box = layout.boxes[target];
+    if (box === undefined) return;
+    lastJump = target;
+    void tick().then(() => {
+      if (!scroller) return;
+      scroller.scrollTop = box.top + stackOrigin();
+      scrollTop = scroller.scrollTop - stackOrigin();
+    });
   });
 
   const estimateNote = $derived.by(() => {
@@ -581,15 +614,14 @@
   /* The reader is one pane inside whatever window it is given: it fills the height it is handed and
      scrolls the stack inside itself. `min-height: 0` is what lets a flex child shrink instead of pushing
      the toolbar out of the window. */
+  /* The frame belongs to the screen that owns the window, so the bar, the pages and the footer sit inside
+     ONE surface. This section only stacks the zoom row and the scroller. */
   .reader {
     display: flex;
     flex-direction: column;
     height: 100%;
     min-height: 0;
     overflow: hidden;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--r-lg);
   }
 
   /* The one floating control surface: a glass strip, like the top bar's, so the pages underneath read as
