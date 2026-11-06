@@ -45,6 +45,17 @@
       "sentAt": "2026-11-06T17:47:03.757Z",
       "resolvedAt": "2026-11-06T17:47:32.403Z",
       "screenshot": ".screenshots/d4l3cgq7.png"
+    },
+    {
+      "id": "fcso5i51",
+      "file": "04-fullscreen.html",
+      "selector": "body > main > div:nth-of-type(4)",
+      "excerpt": "Ir a la página… 22 %",
+      "comment": "Hay que mejorar el diseño de esta seccion. El boton se ve aburrido al igual que el porcentaje",
+      "createdAt": "2026-11-06T17:51:06.335Z",
+      "status": "open",
+      "sentAt": "2026-11-06T17:51:06.360Z",
+      "resolvedAt": null
     }
   ]
 }
