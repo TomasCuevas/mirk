@@ -2647,7 +2647,59 @@ impl Store {
 /// `XDG_DATA_HOME` is unset), on Windows `%APPDATA%\mirk\mirk.sqlite3`, and on macOS
 /// `~/Library/Application Support/mirk/mirk.sqlite3`. It is never the repository and never the
 /// current working directory.
+/// The environment variable that names the data directory explicitly.
+///
+/// It exists for the workflows that must choose a library on purpose — a measurement run against a
+/// copy, a portable installation — and it is the only way a development build may look outside its own
+/// directory, never into the installed application's.
+pub const DATA_DIR_ENV: &str = "MIRK_DATA_DIR";
+
+/// The suffix a development build's directory carries beside the installed application's.
+pub const DEVELOPMENT_DIR_SUFFIX: &str = "-dev";
+
+/// Which data directory a build writes to.
+///
+/// A development build must never open the library the installed application uses. Sharing one
+/// directory means a debugging run migrates, rewrites or refuses the reader's real library — which is
+/// exactly what happened before this distinction existed (L61): `tauri dev` and the installed
+/// application resolved the same file, so the first one to write decided the shape for both.
+///
+/// The profile is a property of the *build*, not of a habit, a script or an environment variable, so no
+/// forgotten flag can point a development binary at production data. A release build is the installed
+/// application and resolves the real library; a debug build resolves its own directory beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataProfile {
+    /// The installed application: the reader's real library.
+    Production,
+    /// A development build: a directory of its own, so the real library is out of reach.
+    Development,
+}
+
+impl DataProfile {
+    /// The profile this build was compiled as.
+    pub fn current() -> Self {
+        if cfg!(debug_assertions) {
+            Self::Development
+        } else {
+            Self::Production
+        }
+    }
+
+    /// The directory name this profile uses inside the platform's data base.
+    fn directory_name(self) -> String {
+        match self {
+            Self::Production => APP_DIR.to_string(),
+            Self::Development => format!("{APP_DIR}{DEVELOPMENT_DIR_SUFFIX}"),
+        }
+    }
+}
+
 pub fn database_path() -> Result<PathBuf, MirkError> {
+    database_path_for(DataProfile::current())
+}
+
+/// The database path a given profile resolves, reading the platform and the explicit override.
+pub fn database_path_for(profile: DataProfile) -> Result<PathBuf, MirkError> {
     let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
@@ -2658,10 +2710,45 @@ pub fn database_path() -> Result<PathBuf, MirkError> {
         home.as_deref(),
         appdata.as_deref(),
     )?;
-    // The directory this build writes to, unless a `oct` directory from before the rename is the only
-    // one that exists — in which case it is adopted rather than orphaned.
-    let directory = adopt_legacy_data_dir(&base).unwrap_or_else(|| base.join(APP_DIR));
+    let explicit = std::env::var_os(DATA_DIR_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let directory = resolve_data_directory(profile, &base, explicit)?;
     Ok(database_file_in(&directory))
+}
+
+/// The data directory a profile resolves, from the platform base and an optional explicit override.
+///
+/// Pure in its inputs so the rule can be tested without touching a process environment: a development
+/// build gets its own directory, a production build gets the real one, and an explicit directory is
+/// honoured by either — except that a development build refuses the production directory by name rather
+/// than opening the reader's real library.
+fn resolve_data_directory(
+    profile: DataProfile,
+    base: &Path,
+    explicit: Option<PathBuf>,
+) -> Result<PathBuf, MirkError> {
+    // The directory this build writes to, unless an `oct` directory from before the rename is the only
+    // one that exists — in which case it is adopted rather than orphaned. Adoption is a production
+    // concern: a development build has no history to adopt.
+    let production = adopt_legacy_data_dir(base).unwrap_or_else(|| base.join(APP_DIR));
+
+    let Some(explicit) = explicit else {
+        return Ok(match profile {
+            DataProfile::Production => production,
+            DataProfile::Development => base.join(profile.directory_name()),
+        });
+    };
+
+    if profile == DataProfile::Development && explicit == production {
+        return Err(MirkError::Storage(format!(
+            "a development build will not open the installed application's library at {}: the two would share one database, and a debugging run would migrate, rewrite or refuse the reader's real library. Set {DATA_DIR_ENV} to a directory of its own, or leave it unset to use {}.",
+            explicit.display(),
+            base.join(profile.directory_name()).display()
+        )));
+    }
+
+    Ok(explicit)
 }
 
 /// The database file to open inside an already-chosen data directory.
@@ -5655,6 +5742,58 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM reading_sessions", [], |row| row.get(0))
             .expect("count the sessions");
         assert_eq!(sessions, 1);
+    }
+
+    #[test]
+    fn a_development_build_writes_its_own_directory_never_the_production_one() {
+        let base = Path::new("/xdg");
+
+        let production = resolve_data_directory(DataProfile::Production, base, None)
+            .expect("a production build resolves the installed application's directory");
+        let development = resolve_data_directory(DataProfile::Development, base, None)
+            .expect("a development build resolves a directory of its own");
+
+        assert_eq!(production, base.join(APP_DIR));
+        assert_eq!(development, base.join("mirk-dev"));
+        assert_ne!(
+            production, development,
+            "the two builds must never share one library"
+        );
+    }
+
+    #[test]
+    fn a_development_build_refuses_to_open_the_production_library() {
+        let base = Path::new("/xdg");
+        let production =
+            resolve_data_directory(DataProfile::Production, base, None).expect("resolves");
+
+        let error = resolve_data_directory(DataProfile::Development, base, Some(production.clone()))
+            .expect_err("a development build must not open the installed application's library");
+
+        match error {
+            MirkError::Storage(message) => {
+                assert!(
+                    message.contains(&production.display().to_string()),
+                    "the refusal must name the directory it will not open: {message}"
+                );
+                assert!(
+                    message.contains(DATA_DIR_ENV) && message.contains("mirk-dev"),
+                    "the refusal must say how to point the build elsewhere and where it writes by default: {message}"
+                );
+            }
+            other => panic!("a development refusal must be a storage error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_explicit_directory_is_honoured_by_a_production_build() {
+        let base = Path::new("/xdg");
+        let portable = PathBuf::from("/media/usb/mirk");
+
+        let resolved = resolve_data_directory(DataProfile::Production, base, Some(portable.clone()))
+            .expect("a portable installation names its own directory");
+
+        assert_eq!(resolved, portable);
     }
 
     #[test]

@@ -1287,17 +1287,25 @@ fn main() {
         // from Rust through `DialogExt` (R11). It is a plugin of this process, not of the interface.
         .plugin(tauri_plugin_dialog::init());
     {
-        builder = builder
-            // S7: the update channel. For every ordinary launch the plugin is registered here, without a
-            // condition the reader can reach, and reads its endpoints and the public key from
-            // `plugins.updater` in `tauri.conf.json`; with no configuration yet it answers every check with
-            // an error, which the interface reports as "could not check" instead of pretending the version
-            // is current. Silence here would be the exact defect the check exists to avoid — an installed
-            // copy that quietly never updates.
-            .plugin(tauri_plugin_updater::Builder::new().build())
-            // S7: and this is what turns an installed update into a running one. Kept beside the updater
-            // because they are one story: install writes the new bundle, relaunch enters it.
-            .plugin(tauri_plugin_process::init());
+        // L61: a development build must not reach the installed application's files, its configuration
+        // or its build. The update channel is the third of those: a check made from `tauri dev` reads
+        // the same endpoint the installed copy does, and an install it was allowed to perform would
+        // replace the reader's application with a bundle they never asked for. The plugin is therefore
+        // registered only by a production build, and a development build answers every check with the
+        // "could not check" the interface already reports honestly.
+        if mirk_store::DataProfile::current() == mirk_store::DataProfile::Production {
+            builder = builder
+                // S7: the update channel. For every ordinary launch the plugin is registered here, without
+                // a condition the reader can reach, and reads its endpoints and the public key from
+                // `plugins.updater` in `tauri.conf.json`; with no configuration yet it answers every check
+                // with an error, which the interface reports as "could not check" instead of pretending the
+                // version is current. Silence here would be the exact defect the check exists to avoid — an
+                // installed copy that quietly never updates.
+                .plugin(tauri_plugin_updater::Builder::new().build())
+                // S7: and this is what turns an installed update into a running one. Kept beside the updater
+                // because they are one story: install writes the new bundle, relaunch enters it.
+                .plugin(tauri_plugin_process::init());
+        }
     }
 
     let context = tauri::generate_context!();

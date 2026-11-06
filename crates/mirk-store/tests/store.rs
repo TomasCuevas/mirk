@@ -632,6 +632,11 @@ fn database_path_is_under_the_xdg_data_home_and_never_the_working_directory() {
         return;
     }
 
+    // An explicit directory overrides the platform resolution, and this test is about the default one.
+    if std::env::var_os(mirk_store::DATA_DIR_ENV).is_some() {
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("temp dir");
     let previous = std::env::var_os("XDG_DATA_HOME");
     std::env::set_var("XDG_DATA_HOME", dir.path());
@@ -646,7 +651,17 @@ fn database_path_is_under_the_xdg_data_home_and_never_the_working_directory() {
         resolved.starts_with(dir.path()),
         "database path {resolved:?} is not under the XDG data home {dir:?}"
     );
-    assert!(resolved.ends_with("mirk/mirk.sqlite3"), "{resolved:?}");
+    // The directory is the profile's: a development build keeps its own library beside the real one, so
+    // a debugging run cannot migrate, rewrite or refuse the installed application's database.
+    let profile = mirk_store::DataProfile::current();
+    let expected = match profile {
+        mirk_store::DataProfile::Production => "mirk/mirk.sqlite3",
+        mirk_store::DataProfile::Development => "mirk-dev/mirk.sqlite3",
+    };
+    assert!(
+        resolved.ends_with(expected),
+        "a {profile:?} build must resolve {expected}, got {resolved:?}"
+    );
 
     let cwd = std::env::current_dir().expect("current dir");
     assert!(
