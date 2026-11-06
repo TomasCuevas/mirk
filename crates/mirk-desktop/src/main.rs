@@ -1264,32 +1264,6 @@ fn report_tracking(report: &track::TrackReport) {
     }
 }
 
-/// The document a measurement run opens by itself, or `None` for a normal launch.
-///
-/// `MIRK_READER_MEASURE=/path/to/document.pdf` makes the interface open that document in the reader as
-/// soon as the shell mounts. It exists because the measurement R1 asks for — a real document, a real
-/// window, a real number — cannot be triggered by a click a harness cannot make. The value is read from
-/// the environment once and never stored, so a normal launch is unaffected.
-#[tauri::command]
-fn reader_measure_target() -> Option<String> {
-    std::env::var("MIRK_READER_MEASURE")
-        .ok()
-        .filter(|path| !path.is_empty())
-}
-
-/// Prints one reader measurement to the terminal that started the application.
-///
-/// The webview's own console is not visible from `tauri dev`, and the numbers 0.2.0 turns on — how long
-/// a real document takes to become readable, and what its ranges cost — have to be readable from there.
-/// Debug builds only; the command stays registered so the call site needs no second code path.
-#[tauri::command]
-fn reader_measured(line: String) {
-    #[cfg(debug_assertions)]
-    println!("[reader] {line}");
-    #[cfg(not(debug_assertions))]
-    drop(line);
-}
-
 fn main() {
     // DEBUG-ONLY (T1): whether this process was started as the embedded-fixture proof.
     //
@@ -1398,8 +1372,6 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            reader_measure_target,
-            reader_measured,
             reader_position,
             reader_remember_page,
             reader_record_session,

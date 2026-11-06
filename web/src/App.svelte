@@ -518,48 +518,6 @@
     reading = null;
   }
 
-  // Whether the reader on screen was opened by a measurement run, which is the only thing that makes it
-  // report what ended up on the canvases.
-  let measuring = $state(false);
-
-  // A measurement run, and nothing else: `MIRK_READER_MEASURE=<path>` — read by the desktop process —
-  // makes the shell open that document in the reader by itself, because the number R1 asks for (a real
-  // document, in a real window) cannot be triggered by a click a harness cannot make. Without the
-  // variable this asks, receives `null`, and does nothing at all.
-  onMount(() => {
-    void invoke<string | null>("reader_measure_target")
-      .then(async (path) => {
-        if (path === null) return;
-        measuring = true;
-        // The measured document is opened the way any document is, so it needs the library's own entry:
-        // with a made-up id, progress has nothing to be written to, and a measurement of persistence
-        // would silently measure nothing. The wait is because the library is read after the shell mounts.
-        for (let attempt = 0; attempt < 40 && entries.length === 0; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-        // The named document may not be in the library at all (a file the reader has not added), and a
-        // made-up id writes nowhere. Falling back to the library's first document keeps the run measuring
-        // a real row: the transport and the paint were already measured on a real book.
-        // R3b/R4: the harness closes the reader the way the close button does, because the session and the
-        // last page are written by the cleanup a reader's own close runs. Without this a measurement only
-        // ever proves the open, and the facts a session contributes are never exercised in a real window.
-        setTimeout(() => {
-          if (reading !== null) closeReader();
-        }, 8000);
-        reading = entries.find((entry) => entry.path === path) ?? entries[0] ?? {
-          id: 0,
-          path,
-          title: path.split("/").pop() ?? path,
-          userTitle: null,
-          authors: [],
-          readerAuthors: [],
-          pages: null,
-          progress: null,
-        };
-      })
-      .catch(() => {});
-  });
-
   // The card's open action (S1, S3): the document opens in mirk's own reader, which takes the window.
   // It no longer hands the file to the system's application — that reader is what 0.2.0 is — but the
   // handoff survives as the fallback a failed open offers, because a document this reader cannot lay
@@ -999,7 +957,6 @@
       <ReaderScreen
         entry={reading}
         {t}
-        measure={measuring}
         onClose={closeReader}
         onFallback={() => void openWithSystemViewer(reading)}
       />
