@@ -431,10 +431,23 @@
   // The window is the view: whenever the scroll, the zoom or the sizes say the visible pages changed, the
   // current session's render set is told. It is an effect so the canvases the new window needs already
   // exist when the set asks to draw them.
+  //
+  // …but they do not always exist yet, which is why the same view is applied a second time after the DOM
+  // has caught up. A resume writes the scroll offset from inside an effect, so the slots for the page it
+  // lands on are created one flush AFTER the window that names them, and the first application of that
+  // window finds no canvas for any of its pages — a resumed document that drew nothing at all. Applying
+  // the same view again once the slots exist draws them: the set retries the pages whose only failure was
+  // a missing canvas, and a page that failed for its own sake is not drawn twice.
   $effect(() => {
     const current = session;
     if (current === null || layout === null || plan === null) return;
     current.renders.setView(plan.pages, scale);
+    untrack(() => {
+      void tick().then(() => {
+        if (!live || session !== current || plan === null) return;
+        current.renders.setView(plan.pages, scale);
+      });
+    });
   });
 
   onMount(() => {

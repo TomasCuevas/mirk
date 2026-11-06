@@ -660,6 +660,26 @@ function reasonOf(error: unknown): string {
 }
 
 /**
+ * A draw that has no canvas to draw into: the interface has not created that page's slot yet.
+ *
+ * It is a distinct error, not just a message, because it is the one draw failure that says nothing about
+ * the page: the page may draw perfectly well as soon as the slot exists, which is one flush later for the
+ * window a resumed document opens at. Nothing else may be mistaken for it — a port that throws its own
+ * error, even about a canvas, is a real failure and is not retried by a later view.
+ */
+class MissingCanvas extends Error {
+  constructor(page: number) {
+    super(`page ${page} has no canvas to draw into`);
+    this.name = "MissingCanvas";
+  }
+}
+
+/** Whether that draw failure was only the absence of a canvas. */
+function isMissingCanvas(error: unknown): boolean {
+  return error instanceof MissingCanvas;
+}
+
+/**
  * The render set: what to draw, what to stop drawing, and what to let go of.
  *
  * `setView` is the whole input. It is idempotent — the same window at the same scale draws nothing twice
@@ -681,6 +701,17 @@ function reasonOf(error: unknown): string {
  * failure is, and it is released too — a failed render leaves nothing worth keeping — and is retried only
  * when asked (`retry`) or when the scale changes, never on every scroll event.
  *
+ * # A page with no canvas is not a broken page
+ *
+ * One failure is not about the page at all: the interface had no canvas for it yet. That is not a defect
+ * in the drawing, it is the interface saying the slot does not exist — which is exactly what a resumed
+ * document looks like for one flush, because the resume moves the scroll offset from inside an effect, so
+ * the slots for the page it lands on are created AFTER the window that names them. It is reported like
+ * any other failure (a page that cannot be drawn has to be visible as such, never as a blank page), but
+ * it is remembered as what it was: the next view of that page — the interface saying the window's
+ * canvases exist now — tries it again. A failure that came from pdf.js is NOT retried that way, so a
+ * broken page cannot be redrawn on every scroll event.
+ *
  * `dispose()` stops all future work and releases every drawn canvas immediately, but the jobs it cancels
  * stay in `#settling`: their canvases and page resources are released when they really stop, even though
  * the set reports no state and starts nothing after disposal. That is what keeps disposal from leaking
@@ -697,8 +728,14 @@ export class PageRenderSet {
   #jobs = new Map<number, RenderJob>();
   /** page → the render that was cancelled and has not settled yet: it still occupies its page and slot. */
   #settling = new Map<number, RenderJob>();
-  /** page → why it failed, and the scale it failed at: a zoom is a new size, so a new attempt. */
-  #failures = new Map<number, { readonly reason: string; readonly scale: number }>();
+  /**
+   * page → why it failed, the scale it failed at (a zoom is a new size, so a new attempt), and whether the
+   * failure was only the absence of a canvas — the one failure a later view retries by itself.
+   */
+  #failures = new Map<
+    number,
+    { readonly reason: string; readonly scale: number; readonly needsCanvas: boolean }
+  >();
   #disposed = false;
 
   constructor(ports: PageRenderPorts, options: { readonly maxConcurrent?: number } = {}) {
@@ -736,7 +773,11 @@ export class PageRenderSet {
       }
     }
     for (const [page, failure] of [...this.#failures]) {
-      if (failure.scale !== scale || !wantedSet.has(page)) this.#failures.delete(page);
+      // A page that had no canvas did not fail to draw: the view is the interface saying the window's
+      // canvases exist now, so that failure is dropped and the page is tried again below.
+      if (failure.needsCanvas || failure.scale !== scale || !wantedSet.has(page)) {
+        this.#failures.delete(page);
+      }
     }
 
     this.#scale = scale;
@@ -857,7 +898,7 @@ export class PageRenderSet {
     try {
       handle = this.#ports.draw(page, scale);
     } catch (error) {
-      this.#failures.set(page, { reason: reasonOf(error), scale });
+      this.#failures.set(page, { reason: reasonOf(error), scale, needsCanvas: isMissingCanvas(error) });
       // There is no handle to release: a draw that throws before returning one never gave the set anything
       // to hand back, so the port is responsible for whatever it took before failing.
       return;
@@ -889,7 +930,8 @@ export class PageRenderSet {
     this.#jobs.delete(job.page);
 
     if (error !== null) {
-      this.#failures.set(job.page, { reason: reasonOf(error), scale: job.scale });
+      // A render that got as far as pdf.js failed for the page's own sake, never for a missing canvas.
+      this.#failures.set(job.page, { reason: reasonOf(error), scale: job.scale, needsCanvas: false });
       // A failed render leaves nothing worth keeping on its canvas or in the page's resources.
       this.#releaseHandle(job.handle);
     } else {
@@ -1220,9 +1262,7 @@ export class PageSession {
       throw new ReaderPagesError(`page ${pageNumber} belongs to a document that has been replaced`);
     }
     const canvas = this.#canvas(pageNumber);
-    if (canvas === undefined) {
-      throw new Error(`page ${pageNumber} has no canvas to draw into`);
-    }
+    if (canvas === undefined) throw new MissingCanvas(pageNumber);
 
     this.#ownedPages.add(pageNumber);
     let cancelled = false;

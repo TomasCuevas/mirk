@@ -40,6 +40,12 @@ Kept as a record, not as work. Detail for every one of these is in the Log below
   `document.hidden === true`; WebKit suspends `requestAnimationFrame`, and pdf.js paints pages in slices
   scheduled on it. The reader therefore parsed every page, laid out every page, and drew none — with no
   error in the console and none in the webview's error events. Fixed in `407f56d`; measured in L54.
+- **A window applied before its canvases exist is remembered as a terminal failure.** Resuming wrote the
+  scroll offset from inside one Svelte effect, and the window effect later in the **same** flush applied
+  the resumed window before the `{#each}` slots — and their canvases — existed in the next one. `#draw`
+  threw "page N has no canvas to draw into", `PageRenderSet` stored that as a failure nothing retried,
+  and pages 3 to 6 stayed blank forever while page 1 drew because its canvases already existed. The
+  resume was right and the page was empty, which no first-open measurement can catch.
 - **A self-reported render is not a render.** The earlier effort's proof was a log line saying a page had
   rendered. What settled it here was reading the page view's own per-page state and the canvas's pixels,
   which is why `reader-measure` exists as a temporary harness rather than a permanent claim.
@@ -169,4 +175,15 @@ The visits summing exactly to `active_ms` is the rule holding in a real window: 
 Run three also surfaced the next defect, which is why a proof is not a formality: the reader landed on the right page and **drew nothing**. Every slot reported `"Page N could not be drawn: page N has no canvas to draw into"` for pages 3 to 6, while opening at page 1 drew normally. The resume was correct and the resume was blank — a defect that only a run which reopens can find, and that neither the transport measurement (L54) nor the first-open sessions could.
 
 What R4 has **not** proven: a release build (delivery step), the 136 MB book (retired), and a scroll driven by a hand rather than the harness (no input device drives the window in these runs; the harness moves the scroller, which fires the same scroll event a trackpad does).
+
+L66 — The blank resume, fixed and proven. Cause, verified rather than guessed: the resume wrote the scroll offset from inside a Svelte `$effect`, so the window effect later in the **same** flush applied the resumed window *before* the `{#each}` slots and their canvases existed in the next one. `#draw` threw "page N has no canvas to draw into"; the render set remembered each as a terminal failure and no later view retried them, so pages 3 to 6 stayed blank forever — page 1 drew only because its canvases already existed. The fix distinguishes the one failure a view can cure: a draw that found no canvas is remembered with `needsCanvas`, and `setView` (the interface saying the window's canvases exist) drops and retries exactly those, while a pdf.js failure or a port's own throw stays terminal. `ReaderPages.svelte` re-applies the same view once after `tick()`, guarded by `live` and the session identity and reading the current plan.
+
+Second proof run, same copy, reopening on the page mirk recorded:
+
+```
+at: 3   ms: 477   errors: []   canvases: 4
+page 3 drawn ink 0.1497   page 4 drawn ink 0.1561   page 5 drawn ink 0.1604   page 6 drawing
+```
+
+R4's acceptance is now met on its restated terms: a light book opens (477 ms), scrolls into a session of four pages whose visits sum exactly to `active_ms`, closes through the close button's own cleanup, and reopens on the recorded page **and draws it**. Still owed, and stated rather than implied: the release-build half belongs to the delivery step, and the component-side retry has no committed DOM test — the worker proved it in a scratch mount because the file was outside its surfaces, so that test belongs to the design pass, which touches the component anyway.
 

@@ -1431,6 +1431,50 @@ describe("one document's session", () => {
     expect(world.asked).toEqual([]);
   });
 
+  it("draws the page a document is opened at, whose canvas the interface registers one flush later", async () => {
+    // A resume applies the window the layout names at the stored page BEFORE the interface has created
+    // that window's slots, so the first view of a resumed document names pages no canvas exists for yet.
+    // That is what opening at page four looked like: every slot reported a page that could not be drawn,
+    // and the pages stayed undrawn even once their canvases existed.
+    const sizes: PageSize[] = [
+      { width: 300, height: 400 },
+      { width: 300, height: 400 },
+      { width: 300, height: 400 },
+      { width: 300, height: 400 },
+      { width: 300, height: 400 },
+    ];
+    const layout = pageLayout(sizes, { scale: 1, gap: GAP });
+    const stored: ScrollAnchor = { page: 4, ratio: 0 };
+    const resumed = pageWindow(layout, {
+      scrollTop: offsetForAnchor(layout, stored) ?? 0,
+      viewportHeight: 400,
+      overscan: 0,
+      maxPages: 2,
+    });
+    expect(resumed.pages).toEqual([4]);
+
+    const world = fakeDocumentInstance({ 4: { width: 300, height: 400 } });
+    const canvases = new Map<number, HTMLCanvasElement>();
+    const session = sessionFor(world, 1, { canvas: (page) => canvases.get(page) });
+
+    // The window is applied as soon as the layout exists: no slot, and so no canvas, has been created.
+    session.renders.setView(resumed.pages, 1);
+    await settle();
+    expect(session.renders.snapshot().failed).toEqual([
+      { page: 4, reason: "page 4 has no canvas to draw into" },
+    ]);
+
+    // The component creates the slot's canvas and applies the same view again.
+    canvases.set(4, fakeCanvas());
+    session.renders.setView(resumed.pages, 1);
+    await settle();
+
+    expect(session.renders.snapshot().failed).toEqual([]);
+    expect(session.renders.snapshot().drawn).toEqual([4]);
+    expect(world.renderCalls).toHaveLength(1);
+    expect(world.renderCalls[0].canvas).toBe(canvases.get(4));
+  });
+
   it("reports the page's own size when it is acquired, not the zoomed one", async () => {
     const world = fakeDocumentInstance({ 1: { width: 300, height: 400 } });
     const seen: Array<[number, PageSize]> = [];
