@@ -68,3 +68,8 @@ spike/parser/target/
 *.key.pub
 *.pem
 *.p12
+
+# The project's own agent definitions (`.pi/agents/`, `.pi/subagents.json`) are local to a session's
+# harness, not to the product: they name tool inventories that differ per machine. Ignoring them keeps
+# a reviewer's scope honest — an untracked local file must never make a committed range unassessable.
+.pi/
