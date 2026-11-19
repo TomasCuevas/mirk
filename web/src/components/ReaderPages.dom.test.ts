@@ -225,6 +225,7 @@ function mountReader(
     overscan?: number;
     onPageChange?: (page: number) => void;
     jumpToPage?: number | null;
+    initialPage?: number;
   } = {},
 ): HTMLElement {
   zooms = [];
@@ -239,6 +240,7 @@ function mountReader(
       maxWindowPages: props.maxWindowPages ?? 2,
       onPageChange: props.onPageChange,
       jumpToPage: props.jumpToPage ?? null,
+      initialPage: props.initialPage ?? 0,
       onScaleChange: (value: number) => zooms.push(value),
       },
   });
@@ -322,6 +324,29 @@ describe("the continuous page view", () => {
     expect(target.querySelectorAll("canvas")).toHaveLength(1);
     expect(pagesOnScreen(target)).toEqual(["1"]);
     expect(world.renders[0]).toMatchObject({ page: 1, scale: 1, canvasWidth: 300, canvasHeight: 400 });
+  });
+
+  it("draws the page a resume lands on, whose canvas exists only after the window that names it", async () => {
+    // A resume writes its scroll offset from inside an effect, so the slots for the page it lands on are
+    // created in the flush AFTER the window that names them. The window is then applied once with no
+    // canvas for any of its pages, and the same view is applied a second time once the slots exist.
+    // Without that second application the reader resumed on exactly the right page and drew nothing:
+    // the page view had asked to draw into a canvas that did not exist yet and remembered it as a
+    // failure nothing retried, which no first-open measurement can catch.
+    const world = fakeDocument({ pages: 12, pending: true });
+
+    const target = mountReader(world.document, { initialPage: 9 });
+    await settle();
+
+    // The resumed page is in the window...
+    expect(pagesOnScreen(target)).toContain("10");
+    expect(slotOf(target, 10)?.querySelector("canvas")).not.toBeNull();
+
+    // ...and it was asked to draw into a real canvas. A call carrying no canvas is the failure the
+    // second application exists to cure, and the page it belongs to would stay blank forever.
+    const resumed = world.renders.filter((call) => call.page === 10);
+    expect(resumed.length).toBeGreaterThan(0);
+    expect(resumed.filter((call) => call.client === null || call.client === undefined)).toEqual([]);
   });
 
   it("reports the first page on screen as the reader scrolls, so the margin can follow", async () => {
